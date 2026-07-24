@@ -37,11 +37,13 @@ const {
   refineByDistanceFunctionWithReport,
   refineByBoxWithReport,
   defaultRefinementPlanner,
+  meshToLsdynaKeyword,
   replayHexRefineCommandScript,
   parseMeshText,
   refineHexTo13Hex,
   refineHexTo27Hex,
   refineHexTo5Hex,
+  refineHexTo8Hex,
   redoRefinementSession,
   regularizeHexSessionSelection,
   regularizeHexSelection,
@@ -97,6 +99,8 @@ test("Hex local templates match notebook element counts", () => {
 
   assert.equal(refineHexTo27Hex(hex).nodes.length, 64);
   assert.equal(refineHexTo27Hex(hex).elements.length, 27);
+  assert.equal(refineHexTo8Hex(hex).nodes.length, 27);
+  assert.equal(refineHexTo8Hex(hex).elements.length, 8);
   assert.equal(refineHexTo5Hex(hex).nodes.length, 16);
   assert.equal(refineHexTo5Hex(hex).elements.length, 5);
   const h13 = refineHexTo13Hex(hex);
@@ -104,6 +108,27 @@ test("Hex local templates match notebook element counts", () => {
   assert.equal(h13.elements.length, 13);
   assert.equal(checkNoHangingNodes(refineHexTo5Hex(hex)).ok, true);
   assert.equal(checkNoHangingNodes(h13).ok, true);
+});
+
+test("LS-DYNA export writes a mesh-only fixed-field keyword deck", () => {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  const keyword = meshToLsdynaKeyword(mesh, { partId: 7 });
+  const keywordLines = keyword
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("*"));
+
+  assert.deepEqual(keywordLines, [
+    "*KEYWORD",
+    "*NODE",
+    "*ELEMENT_SOLID",
+    "*END"
+  ]);
+  assert.equal(keyword.includes("*PART"), false);
+  assert.equal(keyword.includes("*SECTION"), false);
+
+  const parsed = parseMeshText(keyword, "mesh.k");
+  assert.deepEqual(parsed.nodes, mesh.nodes);
+  assert.deepEqual(parsed.elements, mesh.elements);
 });
 
 test("Hex local template coordinates match notebook parameter positions", () => {
@@ -2029,6 +2054,44 @@ test("Hex corner transition layer has no hanging nodes", () => {
   assert.equal(report.ok, true);
 });
 
+test("Hex 2:1 refinement builds a level-closed full-section transition", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const selected = idsInIndexBlock(2, 2, 5, [0, 0, 2], [1, 1, 2]);
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+  const templateCounts = countBy(result.cellData.map((cell) => cell.templateCode));
+
+  assert.equal(result.mesh.elements.length, 96);
+  assert.equal(result.summary.selectedElementCount, 4);
+  assert.equal(result.summary.faceTransitionElementCount, 8);
+  assert.equal(result.summary.edgeTransitionElementCount, 0);
+  assert.equal(result.summary.cornerTransitionElementCount, 0);
+  assert.equal(templateCounts.get(8), 32);
+  assert.equal(templateCounts.get(7), 56);
+  assert.equal(templateCounts.get(0), 8);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+});
+
+test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () => {
+  const mesh = createButterflyOgridBar(6);
+  const selected = Array.from({ length: 24 }, (_, index) => 25 + index);
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+  const templateCounts = countBy(result.cellData.map((cell) => cell.templateCode));
+
+  assert.equal(result.mesh.elements.length, 384);
+  assert.equal(result.summary.selectedElementCount, 24);
+  assert.equal(result.summary.faceTransitionElementCount, 24);
+  assert.equal(templateCounts.get(8), 192);
+  assert.equal(templateCounts.get(7), 168);
+  assert.equal(templateCounts.get(0), 24);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+});
+
 test("Hex refinement report identifies automatic transition templates", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 2);
   const result = refineByElementIdsWithReport(mesh, [1]);
@@ -2278,4 +2341,55 @@ function createDeformedHexBlock(nx, ny, nz) {
       z + 0.09 * x * y
     ])
   };
+}
+
+function createButterflyOgridBar(layers) {
+  const ringTheta = Array.from(
+    { length: 8 },
+    (_, step) => Math.PI * (0.25 + 0.25 * step)
+  );
+  const centerRing = [
+    [0.5, 0.5],
+    [0, 0.5],
+    [-0.5, 0.5],
+    [-0.5, 0],
+    [-0.5, -0.5],
+    [0, -0.5],
+    [0.5, -0.5],
+    [0.5, 0]
+  ];
+  const sectionPoints = [
+    [0, 0],
+    ...centerRing,
+    ...ringTheta.map((theta) => [Math.cos(theta), Math.sin(theta)])
+  ];
+  const quads = [
+    [0, 8, 1, 2],
+    [0, 2, 3, 4],
+    [0, 4, 5, 6],
+    [0, 6, 7, 8],
+    ...Array.from({ length: 8 }, (_, side) => [
+      1 + ((side + 1) % 8),
+      1 + side,
+      9 + side,
+      9 + ((side + 1) % 8)
+    ])
+  ];
+  const nodes = [];
+  for (let layer = 0; layer <= layers; layer += 1) {
+    for (const [x, y] of sectionPoints) {
+      nodes.push([x, y, layer]);
+    }
+  }
+  const stride = sectionPoints.length;
+  const elements = [];
+  for (let layer = 0; layer < layers; layer += 1) {
+    for (const quad of quads) {
+      elements.push([
+        ...quad.map((node) => layer * stride + node + 1),
+        ...quad.map((node) => (layer + 1) * stride + node + 1)
+      ]);
+    }
+  }
+  return { kind: "H1", nodes, elements };
 }

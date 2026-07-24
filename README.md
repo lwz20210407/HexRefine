@@ -33,10 +33,20 @@ customize for research, engineering experiments, and selected project work:
 - WebGL surface/edge cache for million-cell visualization experiments.
 - Spatial indexes for large GUI selection and stream-based offline VTK/INP
   writing to reduce interactive and export memory pressure.
+- Selectable Hex refinement ratios: the established `3:1` transition and an
+  experimental `2:1` (`4:2`) full-section transition based on a uniform
+  `1 -> 8` core and TrueGrid-derived `1 -> 7` transition columns.
+- Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide
 large cases, but for production-size exports the recommended path is GUI first,
 then offline replay.
+
+The experimental `2:1` path currently supports one-direction, level-closed
+transition sections on structured or mapped Hex meshes, including even O-grid
+sections with trivalent lines. Intersecting transition shells, arbitrary
+multi-direction edge/corner closure, multi-level `2:1` refinement, and automatic
+odd-section topology completion are not yet part of the TypeScript runtime.
 
 ## Copyright And Version
 
@@ -134,7 +144,8 @@ import {
 const mesh = createHexUnitCubeMesh(10, 10, 10);
 const result = refineByBoxWithReport(mesh, {
   min: [0.25, 0.25, 0.25],
-  max: [0.75, 0.75, 0.75]
+  max: [0.75, 0.75, 0.75],
+  hexRefinementRatio: 2
 });
 
 console.log(result.summary);
@@ -219,4 +230,5 @@ tested outside the workspace it was originally split from.
   and set remapping.
 - Transition templates are inserted around selected elements so adjacent
   coarse/fine regions do not create hanging nodes.
-- Export helpers write legacy VTK and Abaqus-style INP text.
+- Export helpers write legacy VTK, Abaqus-style INP, and mesh-only LS-DYNA
+  keyword text.

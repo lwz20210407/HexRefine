@@ -360,6 +360,7 @@ function replayRefinePatch(
   const commandOptions = readObject(payload.options);
   const includeTransitions = readBoolean(commandOptions.includeTransitions, true);
   const regularizeHexSelection = readBoolean(commandOptions.regularizeHexSelection, false);
+  const hexRefinementRatio = readHexRefinementRatio(commandOptions.hexRefinementRatio);
   const mergeTolerance = readOptionalNumber(commandOptions.mergeTolerance) ?? state.mergeTolerance;
   const active = buildActiveMeshWithMap(session, {
     ...activeBuildOptions(state),
@@ -392,6 +393,7 @@ function replayRefinePatch(
   }
   refineSessionPatch(session, selectedCellIds, {
     includeTransitions,
+    hexRefinementRatio,
     transitionSupportCellIds,
     activeBuild: active,
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
@@ -1982,6 +1984,17 @@ function normalizeSelectionCombinationMode(value: unknown, additiveFallback = fa
 
 function readOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readHexRefinementRatio(value: unknown): 2 | 3 {
+  if (value === undefined) {
+    return 3;
+  }
+  const ratio = typeof value === "number" ? value : Number(value);
+  if (ratio === 2 || ratio === 3) {
+    return ratio;
+  }
+  throw new Error("hexRefinementRatio must be 2 or 3");
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {

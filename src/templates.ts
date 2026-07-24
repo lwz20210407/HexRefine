@@ -84,6 +84,10 @@ export function refineHexTo27Hex(vertices: readonly Point[]): LocalRefinement {
   return subdivideHex(vertices, 3, "RefineH1To27H1");
 }
 
+export function refineHexTo8Hex(vertices: readonly Point[]): LocalRefinement {
+  return subdivideHex(vertices, 2, "RefineH1To8H1");
+}
+
 export function refineHexTo5Hex(vertices: readonly Point[]): LocalRefinement {
   const [x1, x2, x3, x4, x5, x6, x7, x8] = hex(vertices);
   const y12 = sub(x2, x1);

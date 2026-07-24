@@ -119,6 +119,7 @@ export type LocalRefinementFactory = (vertices: Point[]) => LocalRefinement;
 
 export interface RefinementSessionPatchOptions {
   includeTransitions?: boolean;
+  hexRefinementRatio?: 2 | 3;
   transitionSupportCellIds?: readonly CellId[];
   mergeTolerance?: number;
   activeBuild?: ActiveMeshBuildResult;
@@ -752,6 +753,9 @@ export function refineSessionPatch(
 
   const replacements = buildDefaultRefinementReplacements(active.mesh, selectedElementIds, {
     includeTransitions: options.includeTransitions ?? true,
+    ...(options.hexRefinementRatio !== undefined
+      ? { hexRefinementRatio: options.hexRefinementRatio }
+      : {}),
     transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
       .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
       .filter((elementId): elementId is number => elementId !== undefined),

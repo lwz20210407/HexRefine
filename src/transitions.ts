@@ -1,7 +1,8 @@
 import type { BoundaryPair, Mesh, RefineOptions, RefinementRole, ReplaceElement } from "./types.js";
 import { elementVertices, findBoundaryPairs, instantiateOnElement, minElementEdgeLength } from "./mesh.js";
 import { alignHexEdgeToVertical, alignHexFaceToBottom, sharedNodes } from "./topology.js";
-import { refineHexTo13Hex, refineHexTo27Hex, refineHexTo5Hex } from "./templates.js";
+import { refineHexTo13Hex, refineHexTo27Hex, refineHexTo5Hex, refineHexTo8Hex } from "./templates.js";
+import { buildTwoToOneHexReplacements } from "./two-to-one.js";
 
 export interface ClassifiedHexReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -14,6 +15,19 @@ export function buildHexClassifiedReplacements(
   options: RefineOptions = {}
 ): ClassifiedHexReplacement[] {
   const includeTransitions = options.includeTransitions ?? true;
+  const ratio = options.hexRefinementRatio ?? 3;
+  if (ratio === 2) {
+    if (!includeTransitions) {
+      return selected.map((elementId) =>
+        classifyHexReplacement(
+          instantiateOnElement(mesh, elementId, refineHexTo8Hex),
+          "selected",
+          8
+        )
+      );
+    }
+    return buildTwoToOneHexReplacements(mesh, selected);
+  }
   const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
   const replacements: ClassifiedHexReplacement[] = [];
 

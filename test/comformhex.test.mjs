@@ -98,6 +98,36 @@ test("HexRefine project command replay rebuilds a refined mesh with sets", () =>
   assert.equal(checkNoHangingNodes(replay.mesh, 1e-8).ok, true);
 });
 
+test("HexRefine command replay accepts the 2:1 Hex refinement ratio", () => {
+  const replay = replayHexRefineCommandScript({
+    commands: [
+      {
+        kind: "grid.generate",
+        payload: {
+          kind: "H1",
+          nx: 2,
+          ny: 2,
+          nz: 5,
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] }
+        }
+      },
+      {
+        kind: "refine.patch",
+        payload: {
+          elementIds: [9, 10, 11, 12],
+          options: {
+            includeTransitions: true,
+            hexRefinementRatio: 2
+          }
+        }
+      }
+    ]
+  });
+
+  assert.equal(replay.mesh.elements.length, 96);
+  assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
+});
+
 test("HexRefine project imports standard Quad and Hex meshes from JSON-like objects", () => {
   const quad = meshFromSerializable({
     nodes: [

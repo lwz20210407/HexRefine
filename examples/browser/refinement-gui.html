@@ -888,6 +888,13 @@
         <section>
           <h2>Refinement</h2>
           <div class="controls">
+            <label class="inline-label">
+              <span>Hex ratio</span>
+              <select id="hex-refinement-ratio">
+                <option value="3" selected>3:1</option>
+                <option value="2">2:1</option>
+              </select>
+            </label>
             <div class="actions">
               <button id="preview-refine" type="button">Preview</button>
               <button id="apply-refine" class="primary-action" type="button">Refine</button>
@@ -1274,6 +1281,7 @@
       const sliceCountEl = document.querySelector("#slice-count");
       const transitionsEl = document.querySelector("#transitions");
       const regularizeEl = document.querySelector("#regularize");
+      const hexRefinementRatioEl = document.querySelector("#hex-refinement-ratio");
       const selectToolButton = document.querySelector("#select-tool");
       const circleToolButton = document.querySelector("#circle-tool");
       const rotateToolButton = document.querySelector("#rotate-tool");
@@ -2344,7 +2352,8 @@
       function refineOptions() {
         return {
           includeTransitions: transitionsEl.value === "on",
-          regularizeHexSelection: regularizeEl.value === "on"
+          regularizeHexSelection: regularizeEl.value === "on",
+          hexRefinementRatio: Number(hexRefinementRatioEl.value)
         };
       }
 
@@ -2797,6 +2806,7 @@
           const refineStart = performance.now();
           const command = refineSessionPatch(refinementSession, cellIds, {
             includeTransitions: transitionsEl.value === "on",
+            hexRefinementRatio: Number(hexRefinementRatioEl.value),
             transitionSupportCellIds: prepared.outerCellIds ?? [],
             mergeTolerance: meshMergeTolerance,
             activeBuild
@@ -2810,6 +2820,7 @@
             options: {
               includeTransitions: transitionsEl.value === "on",
               regularizeHexSelection: regularizeEl.value === "on",
+              hexRefinementRatio: Number(hexRefinementRatioEl.value),
               mergeTolerance: meshMergeTolerance
             },
             commandId: command.id,
@@ -8266,8 +8277,10 @@
           setTool("rotate");
         }
         regularizeEl.disabled = isQ1;
+        hexRefinementRatioEl.disabled = isQ1;
         if (isQ1) {
           regularizeEl.value = "off";
+          hexRefinementRatioEl.value = "3";
           boxZMinEl.value = "0";
           boxZMaxEl.value = "0";
         } else if (boxZMinEl.value === "0" && boxZMaxEl.value === "0") {

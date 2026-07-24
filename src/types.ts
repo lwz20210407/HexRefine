@@ -36,6 +36,11 @@ export interface ReplaceElement {
 export interface RefineOptions {
   mergeTolerance?: number;
   includeTransitions?: boolean;
+  /**
+   * Hex edge subdivision factor. The established HexRefine templates use 3;
+   * the 2 option uses a uniform 1-to-8 core and a conforming 4-to-2 shell.
+   */
+  hexRefinementRatio?: 2 | 3;
   transitionSupportElementIds?: readonly number[];
   regularizeHexSelection?: boolean;
   regularizeHexBoundaryShell?: boolean;

@@ -60,6 +60,10 @@ export interface InpOptions {
   includeBoundarySets?: boolean;
 }
 
+export interface LsdynaKeywordOptions {
+  partId?: number;
+}
+
 interface BoundaryInpSets {
   cellSets: Map<string, number[]>;
   nodeSets: Map<string, number[]>;
@@ -255,6 +259,62 @@ export function* iterateLegacyVtkLines(mesh: Mesh | ExportMesh, options: VtkOpti
       }
     }
   }
+}
+
+export function* iterateLsdynaKeywordLines(
+  mesh: Mesh | ExportMesh,
+  options: LsdynaKeywordOptions = {}
+): Generator<string> {
+  const isHexMesh =
+    mesh.kind === "H1"
+    || mesh.kind === "H8"
+    || (mesh.kind === undefined && mesh.elements[0]?.length === 8);
+  if (!isHexMesh) {
+    throw new Error("LS-DYNA *ELEMENT_SOLID export requires an H1/H8 mesh");
+  }
+  const partId = options.partId ?? 1;
+  if (!Number.isInteger(partId) || partId <= 0) {
+    throw new Error("LS-DYNA part id must be a positive integer");
+  }
+
+  yield "*KEYWORD";
+  yield "*NODE";
+  mesh.nodes.forEach((point, index) => {
+    if (point.length < 3) {
+      throw new Error(`LS-DYNA node ${index + 1} requires three coordinates`);
+    }
+  });
+  for (let index = 0; index < mesh.nodes.length; index += 1) {
+    const point = mesh.nodes[index]!;
+    yield [
+      fixedInteger(index + 1, 8, "node id"),
+      fixedFloat(point[0]!, 16),
+      fixedFloat(point[1]!, 16),
+      fixedFloat(point[2]!, 16)
+    ].join("");
+  }
+  yield "*ELEMENT_SOLID";
+  for (let index = 0; index < mesh.elements.length; index += 1) {
+    const element = mesh.elements[index]!;
+    if (element.length !== 8) {
+      throw new Error(
+        `LS-DYNA *ELEMENT_SOLID expected 8-node element ${index + 1}, got ${element.length}`
+      );
+    }
+    yield [
+      fixedInteger(index + 1, 8, "element id"),
+      fixedInteger(partId, 8, "part id"),
+      ...element.map((nodeId) => fixedInteger(nodeId, 8, "node id"))
+    ].join("");
+  }
+  yield "*END";
+}
+
+export function meshToLsdynaKeyword(
+  mesh: Mesh | ExportMesh,
+  options: LsdynaKeywordOptions = {}
+): string {
+  return [...iterateLsdynaKeywordLines(mesh, options)].join("\n") + "\n";
 }
 
 export function* iterateNativeSessionVtkLines(plan: NativeSessionExportPlan, options: VtkOptions = {}): Generator<string> {
@@ -1060,6 +1120,30 @@ function formatPoint3(point: Point): string {
     formatNumber(point[1] ?? 0),
     formatNumber(point[2] ?? 0)
   ].join(" ");
+}
+
+function fixedInteger(value: number, width: number, label: string): string {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`LS-DYNA ${label} must be a positive integer`);
+  }
+  const text = String(value);
+  if (text.length > width) {
+    throw new Error(`LS-DYNA ${label} ${value} exceeds the ${width}-column field`);
+  }
+  return text.padStart(width);
+}
+
+function fixedFloat(value: number, width: number): string {
+  if (!Number.isFinite(value)) {
+    throw new Error(`LS-DYNA coordinate must be finite, got ${value}`);
+  }
+  for (let digits = 8; digits >= 1; digits -= 1) {
+    const text = value.toExponential(digits);
+    if (text.length <= width) {
+      return text.padStart(width);
+    }
+  }
+  throw new Error(`LS-DYNA coordinate ${value} exceeds the ${width}-column field`);
 }
 
 function formatNumber(value: number): string {
