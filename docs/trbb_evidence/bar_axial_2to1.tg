@@ -1,0 +1,67 @@
+lsdyna keyword
+c quarter butterfly bar, fine core z 20..30, coarse ends, axial 2:4 trbb
+c ---- fine mid segments (masters) ----
+c center mid
+block 1 17;1 17;1 5;0 30;0 30;20 30;
+bb 1 1 1 2 2 1 1;
+bb 1 1 2 2 2 2 2;
+endpart
+c B mid (top petal)
+block 1 17;1 9;1 5;0 30;30 50;20 30;
+sd 2 cy 0 0 0 0 0 1 50
+sfi  1 2; -2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 30
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 20
+bb 1 1 1 2 2 1 3;
+bb 1 1 2 2 2 2 4;
+endpart
+c C mid (right petal)
+block 1 9;1 17;1 5;30 50;0 30;20 30;
+sfi  -2; 1 2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 30
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 20
+bb 1 1 1 2 2 1 5;
+bb 1 1 2 2 2 2 6;
+endpart
+c ---- coarse bottom segments (slaves via z-max faces) ----
+c center bottom
+block 1 9;1 9;1 5;0 30;0 30;0 20;
+trbb 1 1 2 2 2 2 1;
+endpart
+c B bottom
+block 1 9;1 5;1 5;0 30;30 50;0 20;
+sfi  1 2; -2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 20
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 0
+trbb 1 1 2 2 2 2 3;
+endpart
+c C bottom
+block 1 5;1 9;1 5;30 50;0 30;0 20;
+sfi  -2; 1 2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 20
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 0
+trbb 1 1 2 2 2 2 5;
+endpart
+c ---- coarse top segments (slaves via z-min faces) ----
+c center top
+block 1 9;1 9;1 5;0 30;0 30;30 50;
+trbb 1 1 1 2 2 1 2;
+endpart
+c B top
+block 1 9;1 5;1 5;0 30;30 50;30 50;
+sfi  1 2; -2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 50
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 30
+trbb 1 1 1 2 2 1 4;
+endpart
+c C top
+block 1 5;1 9;1 5;30 50;0 30;30 50;
+sfi  -2; 1 2; 1 2;sd 2
+pb 2 2 1 2 2 2 xyz 35.3553 35.3553 50
+pb 2 2 1 2 2 1 xyz 35.3553 35.3553 30
+trbb 1 1 1 2 2 1 6;
+endpart
+merge
+stp 0.2
+write
+end
