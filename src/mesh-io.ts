@@ -356,7 +356,7 @@ export function parseLsdynaKeywordMesh(text: string): Mesh {
     }
 
     if (section === "node") {
-      const fields = splitDelimitedRecord(rawLine);
+      const fields = splitLsdynaNodeRecord(rawLine);
       if (fields.length < 4) {
         throw new Error(`LS-DYNA *NODE record on line ${index + 1} must contain node id and three coordinates`);
       }
@@ -697,6 +697,23 @@ function splitDelimitedRecord(line: string): string[] {
     .split(/[,\s]+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+function splitLsdynaNodeRecord(line: string): string[] {
+  const delimited = splitDelimitedRecord(line);
+  if (delimited.length >= 4 || line.includes(",") || line.length < 56) {
+    return delimited;
+  }
+  const nodeId = line.slice(0, 8).trim();
+  if (!nodeId) {
+    return delimited;
+  }
+  const coordinates = [
+    line.slice(8, 24),
+    line.slice(24, 40),
+    line.slice(40, 56)
+  ].map((field) => field.trim() || "0");
+  return [nodeId, ...coordinates];
 }
 
 function parsePointFields(

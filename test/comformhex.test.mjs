@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -388,6 +389,69 @@ test("HexRefine project auto-detects Abaqus INP, LS-DYNA K, and VTU meshes from 
   assert.deepEqual(lsdyna.elements, [[1, 2, 3, 4]]);
   assert.equal(quadVtu.kind, "Q1");
   assert.deepEqual(quadVtu.elements, [[1, 2, 3, 4]]);
+});
+
+test("HexRefine imports LS-DYNA fixed-field nodes with blank zero coordinates", () => {
+  const fixedInteger = (value) => String(value).padStart(8, " ");
+  const fixedCoordinate = (value) =>
+    value === 0 ? " ".repeat(16) : String(value).padStart(16, " ");
+  const node = (id, x, y, z) =>
+    `${fixedInteger(id)}${fixedCoordinate(x)}${fixedCoordinate(y)}${fixedCoordinate(z)}${" ".repeat(16)}`;
+  const solid = (id, partId, nodeIds) =>
+    [id, partId, ...nodeIds].map(fixedInteger).join("");
+  const keyword = [
+    "*KEYWORD",
+    "*NODE",
+    "$#   nid               x               y               z      tc      rc",
+    node(49166, 0, 35, 5),
+    node(49167, 1, 35, 5),
+    node(49168, 1, 36, 5),
+    node(49169, 0, 36, 5),
+    node(49170, 0, 35, 6),
+    node(49171, 1, 35, 6),
+    node(49172, 1, 36, 6),
+    node(49173, 0, 36, 6),
+    "*ELEMENT_SOLID",
+    solid(44440, 1, [49166, 49167, 49168, 49169, 49170, 49171, 49172, 49173]),
+    "*END"
+  ].join("\n");
+
+  const mesh = parseMeshText(keyword, "fixed-field.k");
+
+  assert.equal(mesh.kind, "H1");
+  assert.deepEqual(mesh.nodes[0], [0, 35, 5]);
+  assert.deepEqual(mesh.elements, [[1, 2, 3, 4, 5, 6, 7, 8]]);
+});
+
+test("HexRefine refines an anonymized real-deck O-grid gauge slab at 2:1", () => {
+  const fixtureUrl = new URL("./fixtures/lsdyna/real-ogrid-gauge-slab.k", import.meta.url);
+  const mesh = parseMeshText(readFileSync(fixtureUrl, "utf8"), "real-ogrid-gauge-slab.k");
+  const selected = mesh.elements
+    .map((element, index) => ({
+      elementId: index + 1,
+      y: element.reduce((total, nodeId) => total + mesh.nodes[nodeId - 1][1], 0) / 8
+    }))
+    .filter(({ y }) => Math.abs(y) < 0.06)
+    .map(({ elementId }) => elementId);
+
+  assert.equal(mesh.kind, "H1");
+  assert.equal(mesh.nodes.length, 1687);
+  assert.equal(mesh.elements.length, 1320);
+  assert.equal(selected.length, 440);
+
+  const result = refinementOps.refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+
+  assert.equal(result.summary.selectedElementCount, 440);
+  assert.equal(result.summary.faceTransitionElementCount, 440);
+  assert.equal(result.summary.unchangedElementCount, 440);
+  assert.equal(result.mesh.elements.length, 7040);
+  assert.equal(result.quality?.ok, true);
+  assert.equal(result.quality?.relativeVolumeError, 0);
+  assert.ok((result.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0.25);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-8).ok, true);
 });
 
 test("HexRefine project rejects non-quad and non-hex VTK and Abaqus INP imports", () => {

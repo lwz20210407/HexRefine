@@ -2366,6 +2366,8 @@ test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () =>
   assert.equal(templateCounts.get(7), 168);
   assert.equal(templateCounts.get(0), 24);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - hexMeshVolume(mesh)) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
 });
 
 test("Hex 2:1 box refinement completes a local pick to a full section", () => {
