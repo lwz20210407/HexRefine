@@ -1,3 +1,8 @@
+import type {
+  TwoToOneCapabilityReport,
+  TwoToOneCompensationOptions
+} from "./two-to-one-capability.js";
+
 export type Point = readonly number[];
 export type MutablePoint = number[];
 export type Element = readonly number[];
@@ -52,6 +57,7 @@ export interface RefineOptions {
    * closes it with the three-direction sweep strategy.
    */
   hexTwoToOneSelectionMode?: "section" | "local";
+  hexTwoToOneCompensation?: TwoToOneCompensationOptions;
   transitionSupportElementIds?: readonly number[];
   regularizeHexSelection?: boolean;
   regularizeHexBoundaryShell?: boolean;
@@ -119,6 +125,7 @@ export interface RefinementResult {
   summary: RefinementSummary;
   quality?: HexRefinementQualitySummary;
   regularization?: RegularizedHexSelection;
+  twoToOne?: TwoToOneCapabilityReport<number>;
 }
 
 export interface RefinementPlanItem {

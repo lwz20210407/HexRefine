@@ -12,6 +12,7 @@ export * as exportFormats from "./export.js";
 export * as q1Operations from "./q1-operations.js";
 
 export * from "./types.js";
+export * from "./two-to-one-capability.js";
 export * from "./conformance.js";
 export * from "./hex-quality.js";
 export * from "./grid.js";

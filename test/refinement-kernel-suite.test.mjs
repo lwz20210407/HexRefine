@@ -45,6 +45,7 @@ const {
   defaultRefinementPlanner,
   meshToLsdynaKeyword,
   minimumOrientedHexCornerScaledJacobian,
+  normalizeTwoToOneCompensation,
   replayHexRefineCommandScript,
   parseMeshText,
   refineHexTo13Hex,
@@ -64,8 +65,72 @@ const {
   refineSessionPatch,
   growQ1BoundaryLayer,
   replaceQ1BlockWithRectangleCircleTemplate,
+  TwoToOnePlanningError,
   undoRefinementSession
 } = api;
+
+test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
+  assert.deepEqual(
+    normalizeTwoToOneCompensation(8, {}),
+    {
+      mode: "local-topology",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    }
+  );
+  assert.deepEqual(
+    normalizeTwoToOneCompensation(200, {
+      hexTwoToOneCompensation: {
+        mode: "selection",
+        maxAddedParentLayers: 2,
+        maxAddedParentCount: 17
+      }
+    }),
+    {
+      mode: "selection",
+      maxAddedParentLayers: 2,
+      maxAddedParentCount: 17
+    }
+  );
+  assert.equal(
+    normalizeTwoToOneCompensation(8, {
+      hexTwoToOneCompensation: { mode: "selection" },
+      rebuildExistingTransitions: false
+    }).mode,
+    "none"
+  );
+  assert.equal(
+    normalizeTwoToOneCompensation(8, {
+      hexTwoToOneCompensation: { mode: "selection" },
+      rebuildExistingTransitions: true
+    }).mode,
+    "selection"
+  );
+});
+
+test("Hex 2:1 structured planning errors retain machine-readable diagnostics", () => {
+  const diagnostic = {
+    conflictingCellIds: [11, 12],
+    conflictingInterfaces: [],
+    attemptedActions: [],
+    suggestion: {
+      kind: "expand-selection",
+      axis: 1,
+      side: 1,
+      parentCellIds: [13]
+    }
+  };
+  const error = new TwoToOnePlanningError(
+    "TWO_TO_ONE_UNSUPPORTED_PARITY",
+    "odd periodic transition field",
+    diagnostic
+  );
+
+  assert.equal(error.name, "TwoToOnePlanningError");
+  assert.equal(error.code, "TWO_TO_ONE_UNSUPPORTED_PARITY");
+  assert.deepEqual(error.diagnostic, diagnostic);
+  assert.equal(error.diagnostic.suggestion.axis, 1);
+});
 
 test("HexRefine offline memory planner selects a bounded heap from system RAM", async () => {
   const { offlineMemoryPlan } = await import("../scripts/offline-memory.mjs");
