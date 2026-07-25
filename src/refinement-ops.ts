@@ -196,6 +196,7 @@ function regularizeCandidateSelection(
   regularizationOptions: HexSelectionRegularizationOptions
 ): RegularizedHexSelection {
   return options.hexRefinementRatio === 2
+    && options.hexTwoToOneSelectionMode !== "local"
     ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
     : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
 }

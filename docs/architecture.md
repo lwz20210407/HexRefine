@@ -34,6 +34,10 @@ Planning and algorithms
   src/transitions.ts
   src/regularization.ts
   src/session-regularization.ts
+  src/two-to-one.ts
+  src/two-to-one-templates.ts
+  src/two-to-one-sweep.ts
+  src/two-to-one-sweep-templates.ts
   src/conformance.ts
 
 Mesh kernel
@@ -88,6 +92,14 @@ The replacement plan classifies each parent as:
 - `edge-transition`: a Q1 edge transition or hex edge transition template.
 - `corner-transition`: a Q1 corner transition template.
 - `unchanged`: existing cells copied into the output mesh.
+
+H1 `2:1` dispatch has two native strategies. Full-section and even O-grid
+interfaces use the globally oriented seven-Hex transition-column field in
+`two-to-one.ts`. Rectangular local cores on mapped Hex lattices use
+`two-to-one-sweep.ts`: logical node planes are marked in three directions,
+regular Owen templates are applied with topological node sharing, and temporary
+children retain original-parent lineage before they are regrouped into normal
+replacement records.
 
 ## Session Flow
 

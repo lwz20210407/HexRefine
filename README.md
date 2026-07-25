@@ -34,10 +34,12 @@ customize for research, engineering experiments, and selected project work:
 - Spatial indexes for large GUI selection and stream-based offline VTK/INP
   writing to reduce interactive and export memory pressure.
 - Selectable Hex refinement ratios: the established `3:1` transition and an
-  experimental `2:1` (`4:2`) full-section transition based on a uniform
-  `1 -> 8` core and TrueGrid-derived `1 -> 7` transition columns.
+  experimental `2:1` (`4:2`) transition with a uniform `1 -> 8` core.
 - Automatic `2:1` completion of a local structured-Hex pick to an even,
   level-closed transverse section for box, preview, and GUI session workflows.
+- Optional local-box `2:1` mode for mapped structured Hex meshes. It keeps the
+  regularized rectangular core local and closes face, edge, and corner fronts
+  through three Owen/Shih directional sweeps.
 - Optional logical `U`, `V`, or `W` transition-axis override in the API, command
   script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
@@ -48,17 +50,22 @@ Large-mesh workflows are still an active engineering area. The GUI can guide
 large cases, but for production-size exports the recommended path is GUI first,
 then offline replay.
 
-The experimental `2:1` path currently supports one-direction, level-closed
-transition sections on structured or mapped Hex meshes, including even O-grid
-sections with trivalent lines. Intersecting transition shells, arbitrary
-multi-direction edge/corner closure, refinement across existing transition
-cells, irregular mixed-level domains, and automatic odd-section topology
-completion are not yet part of the TypeScript runtime.
+The experimental `2:1` path supports two strategies. `section` mode uses
+TrueGrid-derived seven-Hex columns for one-direction, level-closed transition
+sections, including even O-grid sections with trivalent lines. `local` mode
+uses regular Owen templates to close all directions around a rectangular
+mapped-lattice core. Concave or L-shaped local cores, refinement across
+existing transition cells, irregular mixed-level domains, and automatic
+odd-section topology completion are not yet part of the TypeScript runtime.
 Structured section completion selects a logical transition axis whose other two
 grid dimensions are even. The GUI `2:1 axis` control and the
 `hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported
 transverse odd sections fail with an explicit diagnostic instead of producing a
 nonconforming mesh.
+
+Set `hexTwoToOneSelectionMode: "local"` or choose `2:1 domain -> Local box` in
+the browser to retain a local rectangular core. The default remains
+`"section"` for compatibility.
 
 ## Copyright And Version
 

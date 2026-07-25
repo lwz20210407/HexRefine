@@ -362,6 +362,9 @@ function replayRefinePatch(
   const regularizeHexSelection = readBoolean(commandOptions.regularizeHexSelection, false);
   const hexRefinementRatio = readHexRefinementRatio(commandOptions.hexRefinementRatio);
   const hexTransitionAxis = readHexTransitionAxis(commandOptions.hexTransitionAxis);
+  const hexTwoToOneSelectionMode = readHexTwoToOneSelectionMode(
+    commandOptions.hexTwoToOneSelectionMode
+  );
   const mergeTolerance = readOptionalNumber(commandOptions.mergeTolerance) ?? state.mergeTolerance;
   const active = buildActiveMeshWithMap(session, {
     ...activeBuildOptions(state),
@@ -375,6 +378,7 @@ function replayRefinePatch(
     regularizeHexSelection,
     hexRefinementRatio,
     ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
+    ...(hexTwoToOneSelectionMode === undefined ? {} : { hexTwoToOneSelectionMode }),
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
   });
   const selectedCellIds = replaySelection.usedReplaySelectionSource
@@ -398,6 +402,7 @@ function replayRefinePatch(
     includeTransitions,
     hexRefinementRatio,
     ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
+    ...(hexTwoToOneSelectionMode === undefined ? {} : { hexTwoToOneSelectionMode }),
     transitionSupportCellIds,
     activeBuild: active,
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
@@ -429,6 +434,7 @@ function resolveReplayRefineSelection(
     regularizeHexSelection: boolean;
     hexRefinementRatio: 2 | 3;
     hexTransitionAxis?: 0 | 1 | 2;
+    hexTwoToOneSelectionMode?: "section" | "local";
     mergeTolerance?: number;
   }
 ): ReplayResolvedPatchSelection {
@@ -2012,6 +2018,18 @@ function readHexTransitionAxis(value: unknown): 0 | 1 | 2 | undefined {
     return axis;
   }
   throw new Error("hexTransitionAxis must be 0, 1, or 2");
+}
+
+function readHexTwoToOneSelectionMode(
+  value: unknown
+): "section" | "local" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "section" || value === "local") {
+    return value;
+  }
+  throw new Error("hexTwoToOneSelectionMode must be section or local");
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {

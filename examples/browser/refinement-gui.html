@@ -896,6 +896,13 @@
               </select>
             </label>
             <label class="inline-label">
+              <span>2:1 domain</span>
+              <select id="hex-two-to-one-selection-mode" disabled>
+                <option value="section" selected>Full section</option>
+                <option value="local">Local box</option>
+              </select>
+            </label>
+            <label class="inline-label">
               <span>2:1 axis</span>
               <select id="hex-transition-axis" disabled>
                 <option value="auto" selected>Auto</option>
@@ -1291,6 +1298,7 @@
       const transitionsEl = document.querySelector("#transitions");
       const regularizeEl = document.querySelector("#regularize");
       const hexRefinementRatioEl = document.querySelector("#hex-refinement-ratio");
+      const hexTwoToOneSelectionModeEl = document.querySelector("#hex-two-to-one-selection-mode");
       const hexTransitionAxisEl = document.querySelector("#hex-transition-axis");
       const selectToolButton = document.querySelector("#select-tool");
       const circleToolButton = document.querySelector("#circle-tool");
@@ -2367,6 +2375,7 @@
           includeTransitions: transitionsEl.value === "on",
           regularizeHexSelection: regularizeEl.value === "on",
           hexRefinementRatio: Number(hexRefinementRatioEl.value),
+          hexTwoToOneSelectionMode: hexTwoToOneSelectionModeEl.value,
           ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis })
         };
       }
@@ -2822,6 +2831,7 @@
           const command = refineSessionPatch(refinementSession, cellIds, {
             includeTransitions: options.includeTransitions,
             hexRefinementRatio: options.hexRefinementRatio,
+            hexTwoToOneSelectionMode: options.hexTwoToOneSelectionMode,
             ...(options.hexTransitionAxis === undefined ? {} : { hexTransitionAxis: options.hexTransitionAxis }),
             transitionSupportCellIds: prepared.outerCellIds ?? [],
             mergeTolerance: meshMergeTolerance,
@@ -8263,6 +8273,7 @@
       kindH1Button.addEventListener("click", () => setElementKind("H1"));
       kindQ1Button.addEventListener("click", () => setElementKind("Q1"));
       hexRefinementRatioEl.addEventListener("change", syncKindControls);
+      hexTwoToOneSelectionModeEl.addEventListener("change", syncKindControls);
       kindEl.addEventListener("change", () => {
         setTool(kindEl.value === "Q1" ? "select" : "rotate");
         syncKindControls();
@@ -8293,10 +8304,14 @@
         }
         regularizeEl.disabled = isQ1;
         hexRefinementRatioEl.disabled = isQ1;
-        hexTransitionAxisEl.disabled = isQ1 || hexRefinementRatioEl.value !== "2";
+        hexTwoToOneSelectionModeEl.disabled = isQ1 || hexRefinementRatioEl.value !== "2";
+        hexTransitionAxisEl.disabled = isQ1
+          || hexRefinementRatioEl.value !== "2"
+          || hexTwoToOneSelectionModeEl.value === "local";
         if (isQ1) {
           regularizeEl.value = "off";
           hexRefinementRatioEl.value = "3";
+          hexTwoToOneSelectionModeEl.value = "section";
           hexTransitionAxisEl.value = "auto";
           boxZMinEl.value = "0";
           boxZMaxEl.value = "0";

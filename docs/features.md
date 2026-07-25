@@ -54,6 +54,9 @@ H1 templates:
 - `refineHexTo27Hex`: selected hex refinement.
 - `refineHexTo13Hex`: face transition.
 - `refineHexTo5Hex` and `refineHexTo4Hex`: transition building blocks.
+- H1 `2:1` selected cores use a uniform eight-Hex split.
+- Local-box `2:1` transitions use rotated Owen pattern 1, 2, and 4 templates
+  composed through three logical sweeps.
 
 Template roles are encoded in refinement reports and VTK scalar output.
 
@@ -89,6 +92,14 @@ Regularization reports:
 
 The session-level regularizer works on active same-level cells and ignores
 inactive or transition-layer cells.
+
+For H1 `2:1`, selection preparation has two explicit modes:
+
+- `section` completes the core across two logical axes and uses the
+  TrueGrid-derived seven-Hex transition-column field.
+- `local` preserves a complete rectangular logical core and constructs a
+  multi-direction conforming shell. It supports straight and smoothly warped
+  mapped Hex blocks.
 
 ## Hierarchical Refinement Sessions
 
@@ -148,6 +159,7 @@ This makes browser sessions portable and testable.
 - Hanging-node checks.
 - VTK, INP, and command-script export.
 - Command-script import and replay.
+- A `2:1 domain` choice between full-section and local-box preparation.
 
 ## Testing
 

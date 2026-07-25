@@ -9,6 +9,7 @@ import test from "node:test";
 // This file intentionally stays within the project-local runtime build.
 
 import * as api from "../dist/index.js";
+import { regularSweepTemplateLibrary } from "../dist/two-to-one-sweep-templates.js";
 const {
   findBoundaryPairs,
   checkNoHangingNodes,
@@ -109,6 +110,24 @@ test("Hex local templates match notebook element counts", () => {
   assert.equal(h13.elements.length, 13);
   assert.equal(checkNoHangingNodes(refineHexTo5Hex(hex)).ok, true);
   assert.equal(checkNoHangingNodes(h13).ok, true);
+});
+
+test("Hex 2:1 Owen sweep template library covers every regular marked-corner signature", () => {
+  const templates = [...regularSweepTemplateLibrary().values()];
+  const counts = countBy(templates.map((template) => template.name));
+
+  assert.equal(templates.length, 27);
+  assert.equal(counts.get("pattern1"), 8);
+  assert.equal(counts.get("pattern2"), 12);
+  assert.equal(counts.get("pattern4"), 6);
+  assert.equal(counts.get("uniform8"), 1);
+  for (const template of templates) {
+    assert.ok(template.elements.length > 0);
+    for (const element of template.elements) {
+      assert.equal(element.length, 8);
+      assert.ok(element.every((nodeId) => nodeId >= 0 && nodeId < template.nodes.length));
+    }
+  }
 });
 
 test("LS-DYNA export writes a mesh-only fixed-field keyword deck", () => {
@@ -2075,6 +2094,97 @@ test("Hex 2:1 refinement builds a level-closed full-section transition", () => {
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
 });
 
+test("Hex 2:1 refinement closes a genuinely local structured box in three directions", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const result = refineByElementIdsWithReport(mesh, [selectedElementId], {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+  const repeated = refineByElementIdsWithReport(mesh, [selectedElementId], {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+  const selectedChildren = result.cellData.filter((cell) =>
+    cell.parentElementId === selectedElementId && cell.role === "selected"
+  );
+  const selectedNodeIds = new Set(
+    result.mesh.elements
+      .filter((_, index) =>
+        result.cellData[index]?.parentElementId === selectedElementId
+        && result.cellData[index]?.role === "selected"
+      )
+      .flat()
+  );
+
+  assert.equal(selectedChildren.length, 8);
+  assert.equal(result.mesh.elements.length, 283);
+  assert.equal(result.summary.unchangedElementCount, 99);
+  assert.equal(
+    result.summary.faceTransitionElementCount
+      + result.summary.edgeTransitionElementCount
+      + result.summary.cornerTransitionElementCount,
+    25
+  );
+  assert.deepEqual(repeated.mesh, result.mesh);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
+  for (const nodeId of selectedNodeIds) {
+    for (const coordinate of result.mesh.nodes[nodeId - 1]) {
+      assert.ok(Math.abs(coordinate * 10 - Math.round(coordinate * 10)) < 1e-10);
+    }
+  }
+});
+
+test("Hex 2:1 local sweep uniformly refines a mixed odd-even rectangular core", () => {
+  const mesh = createHexUnitCubeMesh(7, 7, 7);
+  const selected = idsInIndexBlock(7, 7, 7, [2, 2, 2], [4, 3, 4]);
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+
+  for (const parentElementId of selected) {
+    assert.equal(
+      result.cellData.filter((cell) =>
+        cell.parentElementId === parentElementId && cell.role === "selected"
+      ).length,
+      8
+    );
+  }
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
+});
+
+test("Hex 2:1 local sweep follows a warped mapped block", () => {
+  const base = createHexUnitCubeMesh(5, 5, 5);
+  const mesh = {
+    ...base,
+    nodes: base.nodes.map(([x, y, z]) => [
+      x + 0.015 * y * z,
+      y + 0.010 * x * z,
+      z + 0.012 * x * y
+    ])
+  };
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const result = refineByElementIdsWithReport(mesh, [selectedElementId], {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: false
+  });
+
+  assert.equal(
+    result.cellData.filter((cell) =>
+      cell.parentElementId === selectedElementId && cell.role === "selected"
+    ).length,
+    8
+  );
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - hexMeshVolume(mesh)) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
+});
+
 test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () => {
   const mesh = createButterflyOgridBar(6);
   const selected = Array.from({ length: 24 }, (_, index) => 25 + index);
@@ -2111,6 +2221,25 @@ test("Hex 2:1 box refinement completes a local pick to a full section", () => {
   assert.equal(result.summary.selectedElementCount, 16);
   assert.equal(result.summary.faceTransitionElementCount, 32);
   assert.equal(result.mesh.elements.length, 416);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+});
+
+test("Hex 2:1 box refinement can preserve a genuinely local regularized core", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const result = refineByBoxWithReport(mesh, {
+    min: [0.45, 0.45, 0.45],
+    max: [0.55, 0.55, 0.55]
+  }, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: true
+  });
+
+  assert.ok(result.regularization);
+  assert.deepEqual(result.regularization.indexRange?.dimensions, [1, 1, 1]);
+  assert.equal(result.regularization.selectedElementIds.length, 1);
+  assert.equal(result.summary.selectedElementCount, 1);
+  assert.equal(result.mesh.elements.length, 283);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
 });
 
@@ -2171,6 +2300,32 @@ test("Hex 2:1 session preparation completes a local pick to a full section", () 
   });
   const refined = buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 1e-9 });
   assert.equal(refined.elements.length, 416);
+  assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
+});
+
+test("Hex 2:1 session preparation can keep a local box core", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const prepared = prepareSessionRefineSelection(session, active, [selectedElementId], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: true
+  });
+
+  assert.deepEqual(prepared.regularization?.indexRange?.dimensions, [1, 1, 1]);
+  assert.equal(prepared.elementIds.length, 1);
+  assert.equal(prepared.cellIds.length, 1);
+
+  refineSessionPatch(session, prepared.cellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: active
+  });
+  const refined = buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 1e-9 });
+  assert.equal(refined.elements.length, 283);
   assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
 });
 
@@ -2485,6 +2640,89 @@ function createDeformedHexBlock(nx, ny, nz) {
       z + 0.09 * x * y
     ])
   };
+}
+
+function hexMeshVolume(mesh) {
+  const gauss = [-1 / Math.sqrt(3), 1 / Math.sqrt(3)];
+  return mesh.elements.reduce((total, element) => {
+    const vertices = element.map((nodeId) => mesh.nodes[nodeId - 1]);
+    let volume = 0;
+    for (const xi of gauss) {
+      for (const eta of gauss) {
+        for (const zeta of gauss) {
+          volume += determinant3(hexJacobian(vertices, xi, eta, zeta));
+        }
+      }
+    }
+    return total + volume;
+  }, 0);
+}
+
+function minimumCornerScaledJacobian(mesh) {
+  const signs = [
+    [-1, -1, -1],
+    [1, -1, -1],
+    [1, 1, -1],
+    [-1, 1, -1],
+    [-1, -1, 1],
+    [1, -1, 1],
+    [1, 1, 1],
+    [-1, 1, 1]
+  ];
+  let minimum = Infinity;
+  for (const element of mesh.elements) {
+    const vertices = element.map((nodeId) => mesh.nodes[nodeId - 1]);
+    for (const [xi, eta, zeta] of signs) {
+      const jacobian = hexJacobian(vertices, xi, eta, zeta);
+      const denominator = vectorLength(jacobian[0])
+        * vectorLength(jacobian[1])
+        * vectorLength(jacobian[2]);
+      minimum = Math.min(minimum, determinant3(jacobian) / denominator);
+    }
+  }
+  return minimum;
+}
+
+function hexJacobian(vertices, xi, eta, zeta) {
+  const signs = [
+    [-1, -1, -1],
+    [1, -1, -1],
+    [1, 1, -1],
+    [-1, 1, -1],
+    [-1, -1, 1],
+    [1, -1, 1],
+    [1, 1, 1],
+    [-1, 1, 1]
+  ];
+  const columns = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0]
+  ];
+  signs.forEach(([sx, sy, sz], corner) => {
+    const derivatives = [
+      sx * (1 + sy * eta) * (1 + sz * zeta) / 8,
+      sy * (1 + sx * xi) * (1 + sz * zeta) / 8,
+      sz * (1 + sx * xi) * (1 + sy * eta) / 8
+    ];
+    for (let axis = 0; axis < 3; axis += 1) {
+      for (let component = 0; component < 3; component += 1) {
+        columns[axis][component] += derivatives[axis] * vertices[corner][component];
+      }
+    }
+  });
+  return columns;
+}
+
+function determinant3(matrix) {
+  const [a, b, c] = matrix;
+  return a[0] * (b[1] * c[2] - b[2] * c[1])
+    - b[0] * (a[1] * c[2] - a[2] * c[1])
+    + c[0] * (a[1] * b[2] - a[2] * b[1]);
+}
+
+function vectorLength(vector) {
+  return Math.hypot(...vector);
 }
 
 function createButterflyOgridBar(layers) {

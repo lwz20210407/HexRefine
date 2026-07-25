@@ -10,10 +10,11 @@ import {
   type ReferencePoint3,
   type TwoWay7ReferenceTemplate
 } from "./two-to-one-templates.js";
+import { tryBuildLocalTwoToOneHexReplacements } from "./two-to-one-sweep.js";
 
 export interface TwoToOneReplacement extends ReplaceElement {
-  role: "selected" | "face-transition";
-  templateCode: 7 | 8;
+  role: "selected" | "face-transition" | "edge-transition" | "corner-transition";
+  templateCode: number;
 }
 
 interface FaceOwner {
@@ -73,6 +74,10 @@ export function buildTwoToOneHexReplacements(
   selectedElementIds: readonly number[]
 ): TwoToOneReplacement[] {
   const selected = uniqueSorted(selectedElementIds);
+  const localReplacements = tryBuildLocalTwoToOneHexReplacements(mesh, selected);
+  if (localReplacements) {
+    return localReplacements;
+  }
   const selectedSet = new Set(selected);
   const incidence = buildFaceIncidence(mesh);
   const cells = discoverTransitionCells(mesh, selectedSet, incidence);

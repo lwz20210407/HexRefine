@@ -98,11 +98,10 @@ export function prepareSessionRefineSelection(
         ? {}
         : { transitionAxis: options.hexTransitionAxis })
     };
-    const regularization = regularizeTwoToOneHexSelection(
-      active.mesh,
-      filtered.elementIds,
-      regularizationOptions
-    );
+    const localMode = options.hexTwoToOneSelectionMode === "local";
+    const regularization = localMode
+      ? regularizeHexSelection(active.mesh, filtered.elementIds, regularizationOptions)
+      : regularizeTwoToOneHexSelection(active.mesh, filtered.elementIds, regularizationOptions);
     if (regularization.selectedElementIds.length === 0) {
       return {
         elementIds: filtered.elementIds,
@@ -110,7 +109,9 @@ export function prepareSessionRefineSelection(
         sourceElementCount: rawElementIds.length,
         expandedCandidateCount: 0,
         warnings: [...filtered.warnings, ...regularization.warnings],
-        notice: "2:1 full-section completion was unavailable; falling back to the direct same-level selection."
+        notice: localMode
+          ? "2:1 local-box regularization was unavailable; falling back to the direct same-level selection."
+          : "2:1 full-section completion was unavailable; falling back to the direct same-level selection."
       };
     }
     const elementIds = regularization.selectedElementIds;
@@ -124,7 +125,9 @@ export function prepareSessionRefineSelection(
       expandedCandidateCount: elementIds.length,
       boundedCoreCount: elementIds.length,
       warnings: [...filtered.warnings, ...regularization.warnings],
-      notice: `Completed the 2:1 core to a ${elementIds.length}-cell full section before refinement.`
+      notice: localMode
+        ? `Regularized the 2:1 core to a ${elementIds.length}-cell local box before refinement.`
+        : `Completed the 2:1 core to a ${elementIds.length}-cell full section before refinement.`
     };
   }
 

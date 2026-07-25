@@ -129,6 +129,37 @@ test("HexRefine command replay accepts the 2:1 Hex refinement ratio", () => {
   assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
 });
 
+test("HexRefine command replay accepts the local-box 2:1 selection mode", () => {
+  const replay = replayHexRefineCommandScript({
+    commands: [
+      {
+        kind: "grid.generate",
+        payload: {
+          kind: "H1",
+          nx: 5,
+          ny: 5,
+          nz: 5,
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] }
+        }
+      },
+      {
+        kind: "refine.patch",
+        payload: {
+          elementIds: [63],
+          options: {
+            includeTransitions: true,
+            hexRefinementRatio: 2,
+            hexTwoToOneSelectionMode: "local"
+          }
+        }
+      }
+    ]
+  });
+
+  assert.equal(replay.mesh.elements.length, 283);
+  assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
+});
+
 test("HexRefine command replay rejects an invalid 2:1 transition axis", () => {
   assert.throws(
     () =>
@@ -158,6 +189,38 @@ test("HexRefine command replay rejects an invalid 2:1 transition axis", () => {
         ]
       }),
     /hexTransitionAxis must be 0, 1, or 2/
+  );
+});
+
+test("HexRefine command replay rejects an invalid 2:1 selection mode", () => {
+  assert.throws(
+    () =>
+      replayHexRefineCommandScript({
+        commands: [
+          {
+            kind: "grid.generate",
+            payload: {
+              kind: "H1",
+              nx: 5,
+              ny: 5,
+              nz: 5,
+              bounds: { min: [0, 0, 0], max: [1, 1, 1] }
+            }
+          },
+          {
+            kind: "refine.patch",
+            payload: {
+              elementIds: [63],
+              options: {
+                includeTransitions: true,
+                hexRefinementRatio: 2,
+                hexTwoToOneSelectionMode: "spiral"
+              }
+            }
+          }
+        ]
+      }),
+    /hexTwoToOneSelectionMode must be section or local/
   );
 });
 

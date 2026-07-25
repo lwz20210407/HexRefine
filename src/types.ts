@@ -46,6 +46,12 @@ export interface RefineOptions {
    * Omit it to choose the least-expanding axis with even transverse counts.
    */
   hexTransitionAxis?: 0 | 1 | 2;
+  /**
+   * Structured 2:1 selection preparation. "section" preserves the established
+   * full-section completion; "local" keeps a regularized rectangular core and
+   * closes it with the three-direction sweep strategy.
+   */
+  hexTwoToOneSelectionMode?: "section" | "local";
   transitionSupportElementIds?: readonly number[];
   regularizeHexSelection?: boolean;
   regularizeHexBoundaryShell?: boolean;

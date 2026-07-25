@@ -68,6 +68,21 @@ For H1:
 3. Edge transition replacements are added when required by the boundary
    pattern.
 
+When `hexRefinementRatio` is `2`, `src/two-to-one.ts` dispatches between two
+strategies:
+
+1. A full-section path uses a uniform eight-Hex core and globally compatible
+   orientations of the TrueGrid-derived seven-Hex transition column.
+2. A local-box path infers a mapped logical lattice and performs three
+   Owen/Shih directional sweeps. Canonical pattern 1, 2, 4, and uniform-8
+   templates are rotated over all proper cube orientations. Nodes are shared
+   by their source topological entity, and original-parent lineage is carried
+   through every temporary sweep so the selected core finishes with exactly
+   eight children rather than being recursively over-refined.
+
+The local-box milestone supports complete rectangular selections. Paired
+pattern-3 support for concave or L-shaped cores is a later extension.
+
 The planner returns classified replacements with:
 
 - Parent element id.

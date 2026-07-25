@@ -2,7 +2,7 @@ import type { HexIndexRange, HexSelectionRegularizationOptions, Mesh, Regularize
 import { elementCenter, inferMeshKind, minElementEdgeLength } from "./mesh.js";
 import { H1_FACES, boundaryKey } from "./topology.js";
 
-interface HexElementLattice {
+export interface HexElementLattice {
   elementIdByKey: Map<string, number>;
   indicesByElementId: Map<number, [number, number, number]>;
   dimensions: [number, number, number];
@@ -212,7 +212,7 @@ function transverseAxes(axis: HexAxis): HexAxis[] {
   return ([0, 1, 2] as const).filter((candidate) => candidate !== axis);
 }
 
-function inferHexElementLattice(mesh: Mesh, tolerance: number): HexElementLattice {
+export function inferHexElementLattice(mesh: Mesh, tolerance: number): HexElementLattice {
   const topologyLattice = inferHexTopologyLattice(mesh);
   if (topologyLattice) {
     return topologyLattice;

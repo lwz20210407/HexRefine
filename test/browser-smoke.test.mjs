@@ -25,6 +25,8 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.match(gui, /id="import-mesh"/);
   assert.match(gui, /id="webgl-preview"/);
   assert.match(gui, /id="projection-toggle"/);
+  assert.match(gui, /id="hex-two-to-one-selection-mode"/);
+  assert.match(gui, /hexTwoToOneSelectionMode/);
   assert.match(gui, /id="hex-transition-axis"/);
   assert.match(gui, /hexTransitionAxis/);
   assert.match(gui, /projectionMode\s*=\s*"perspective"/);
