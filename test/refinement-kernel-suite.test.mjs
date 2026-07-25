@@ -45,6 +45,7 @@ const {
   defaultRefinementPlanner,
   meshToLsdynaKeyword,
   minimumOrientedHexCornerScaledJacobian,
+  cloneTwoToOneCapabilityReport,
   normalizeTwoToOneCompensation,
   replayHexRefineCommandScript,
   parseMeshText,
@@ -95,6 +96,57 @@ function mutatePlanningDiagnostic(diagnostic) {
   diagnostic.suggestion.side = -1;
   diagnostic.suggestion.parentCellIds.push(92);
 }
+
+test("Hex 2:1 capability reports deep-clone string id arrays and actions", () => {
+  const report = {
+    status: "compensated",
+    topologyClass: "mixed-level",
+    originalSelectedCellIds: ["e1/c1"],
+    effectiveSelectedCellIds: ["e1/c2"],
+    actions: [{
+      kind: "transition-shell-rebuild",
+      reason: "test",
+      addedParentCellIds: ["e2"],
+      replacedTransitionCellIds: ["e3"],
+      templateId: "shell-template"
+    }],
+    affectedComponentCellIds: ["e1/c1", "e2", "e3"],
+    preservedFarFieldCellCount: 12
+  };
+  const command = { twoToOne: report };
+  const clonedCommand = {
+    twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne)
+  };
+
+  command.twoToOne.originalSelectedCellIds.push("mutated-original");
+  command.twoToOne.effectiveSelectedCellIds.push("mutated-effective");
+  command.twoToOne.affectedComponentCellIds.push("mutated-affected");
+  command.twoToOne.actions[0].reason = "mutated";
+  command.twoToOne.actions[0].addedParentCellIds.push("mutated-added");
+  command.twoToOne.actions[0].replacedTransitionCellIds.push("mutated-replaced");
+  command.twoToOne.actions.push({
+    kind: "local-template",
+    reason: "mutated action",
+    addedParentCellIds: [],
+    replacedTransitionCellIds: []
+  });
+
+  assert.deepEqual(clonedCommand.twoToOne, {
+    status: "compensated",
+    topologyClass: "mixed-level",
+    originalSelectedCellIds: ["e1/c1"],
+    effectiveSelectedCellIds: ["e1/c2"],
+    actions: [{
+      kind: "transition-shell-rebuild",
+      reason: "test",
+      addedParentCellIds: ["e2"],
+      replacedTransitionCellIds: ["e3"],
+      templateId: "shell-template"
+    }],
+    affectedComponentCellIds: ["e1/c1", "e2", "e3"],
+    preservedFarFieldCellCount: 12
+  });
+});
 
 test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
   assert.deepEqual(
@@ -3132,14 +3184,26 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
     includeTransitions: true,
     activeBuild: firstRefined
   };
-  const preview = previewSessionPatch(session, [boundaryCandidate.cellId], patchOptions);
+  const singleSelectionPreview = previewSessionPatch(
+    session,
+    [boundaryCandidate.cellId],
+    patchOptions
+  );
+  const preview = previewSessionPatch(
+    session,
+    [boundaryCandidate.cellId, boundaryCandidate.cellId],
+    patchOptions
+  );
   assert.deepEqual({
     activeLeafCount: session.activeLeafIds.size,
     nodeCount: session.nodes.length,
     undoCount: session.undoStack.length
   }, beforePreview);
 
-  const command = refineSessionPatch(session, [boundaryCandidate.cellId], {
+  const command = refineSessionPatch(session, [
+    boundaryCandidate.cellId,
+    boundaryCandidate.cellId
+  ], {
     ...patchOptions
   });
   const twiceRefined = buildActiveMesh(session, {
@@ -3155,6 +3219,17 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
       + (command.reactivatedCellIds?.length ?? 0)
   );
   assert.deepEqual(preview.quality, command.quality);
+  assert.deepEqual(preview.twoToOne, singleSelectionPreview.twoToOne);
+  assert.deepEqual(preview.twoToOne, command.twoToOne);
+  assert.equal(preview.twoToOne.status, "compensated");
+  assert.equal(preview.twoToOne.topologyClass, "mixed-level");
+  assert.deepEqual(preview.twoToOne.originalSelectedCellIds, [boundaryCandidate.cellId]);
+  assert.equal(preview.twoToOne.actions.length, 1);
+  assert.deepEqual(preview.twoToOne.actions[0], command.twoToOne.actions[0]);
+  assert.equal(
+    preview.twoToOne.preservedFarFieldCellCount,
+    beforePreview.activeLeafCount - command.hiddenCellIds.length
+  );
   assert.equal(preview.planMode, "aggregate");
   assert.deepEqual(preview.plan, []);
   assert.ok(twiceRefined.elements.length > firstRefined.mesh.elements.length);
@@ -3183,12 +3258,17 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   assert.ok(Math.abs(hexMeshVolume(twiceRefined) - 1) < 1e-10);
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 
-  assert.equal(undoRefinementSession(session)?.id, command.id);
+  const stableTwoToOne = structuredClone(command.twoToOne);
+  const undoneCommand = undoRefinementSession(session);
+  assert.equal(undoneCommand?.id, command.id);
+  assert.deepEqual(undoneCommand?.twoToOne, stableTwoToOne);
   assert.deepEqual(buildActiveMesh(session, {
     mergeNodes: true,
     mergeTolerance: 1e-9
   }), firstRefined.mesh);
-  assert.equal(redoRefinementSession(session)?.id, command.id);
+  const redoneCommand = redoRefinementSession(session);
+  assert.equal(redoneCommand?.id, command.id);
+  assert.deepEqual(redoneCommand?.twoToOne, stableTwoToOne);
   assert.deepEqual(buildActiveMesh(session, {
     mergeNodes: true,
     mergeTolerance: 1e-9
@@ -3239,6 +3319,7 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   });
   assert.deepEqual(replay.warnings, []);
   assert.deepEqual(replay.mesh, twiceRefined);
+  assert.deepEqual(replay.session.undoStack.at(-1)?.twoToOne, stableTwoToOne);
 
   const snapshotReplay = replayHexRefineCommandScript({
     format: "hexrefine-command-script",
@@ -3262,6 +3343,7 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   });
   assert.deepEqual(snapshotReplay.warnings, []);
   assert.deepEqual(snapshotReplay.mesh, twiceRefined);
+  assert.deepEqual(snapshotReplay.session.undoStack.at(-1)?.twoToOne, stableTwoToOne);
   assert.equal(checkNoHangingNodes(snapshotReplay.mesh, 1e-9).ok, true);
 
   const secondRefinedBuild = buildActiveMeshWithMap(session, {

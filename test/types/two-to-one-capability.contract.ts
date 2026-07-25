@@ -1,5 +1,8 @@
 import type {
+  AggregateRefinementPlanSummary,
   RefineOptions,
+  RefinementPlanSummary,
+  RefinementPreview,
   RefinementResult,
   TwoToOneCapabilityReport,
   TwoToOneCompensationAction,
@@ -104,3 +107,35 @@ type RefinementResultReportContract = Expect<Equal<
   RefinementResult["twoToOne"],
   TwoToOneCapabilityReport<number> | undefined
 >>;
+
+declare const preview: RefinementPreview<string>;
+
+if (preview.planMode === "aggregate") {
+  const aggregateSummary: AggregateRefinementPlanSummary = preview.summary;
+  const compoundKind: "transition-shell-rebuild" = preview.compound.kind;
+  const inputElementCount: number = preview.summary.inputElementCount;
+  const changedInputElementCount: number = preview.summary.changedInputElementCount;
+  const preservedInputElementCount: number = preview.summary.preservedInputElementCount;
+  const outputElementCount: number = preview.summary.outputElementCount;
+  // @ts-expect-error aggregate previews do not expose per-parent role counts
+  preview.summary.selectedElementCount;
+  // @ts-expect-error aggregate previews do not expose estimated per-parent output
+  preview.summary.estimatedOutputElementCount;
+  void [
+    compoundKind,
+    aggregateSummary,
+    inputElementCount,
+    changedInputElementCount,
+    preservedInputElementCount,
+    outputElementCount
+  ];
+} else {
+  const perParentSummary: RefinementPlanSummary = preview.summary;
+  const selectedElementCount: number = preview.summary.selectedElementCount;
+  const estimatedOutputElementCount: number = preview.summary.estimatedOutputElementCount;
+  // @ts-expect-error per-parent previews do not expose aggregate input counts
+  preview.summary.inputElementCount;
+  // @ts-expect-error per-parent previews do not expose compound rebuild metadata
+  preview.compound;
+  void [perParentSummary, selectedElementCount, estimatedOutputElementCount];
+}

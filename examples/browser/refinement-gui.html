@@ -5439,6 +5439,25 @@
         }
       }
 
+      function refinementPreviewReportLines(preview) {
+        if (preview.planMode === "aggregate") {
+          return [
+            `input elements: ${preview.summary.inputElementCount}`,
+            `changed input elements: ${preview.summary.changedInputElementCount}`,
+            `preserved input elements: ${preview.summary.preservedInputElementCount}`,
+            `output elements: ${preview.summary.outputElementCount}`
+          ];
+        }
+        return [
+          `selected parents: ${preview.summary.selectedElementCount}`,
+          `face transitions: ${preview.summary.faceTransitionElementCount}`,
+          `edge transitions: ${preview.summary.edgeTransitionElementCount}`,
+          `corner transitions: ${preview.summary.cornerTransitionElementCount}`,
+          `unchanged parents: ${preview.summary.unchangedElementCount}`,
+          `estimated elements: ${preview.summary.estimatedOutputElementCount}`
+        ];
+      }
+
       function updateReport() {
         updateStats();
         const conformance = mesh.elements.length > 0
@@ -5499,12 +5518,7 @@
           lines.push(
             "",
             "preview:",
-            `selected parents: ${preview.summary.selectedElementCount}`,
-            `face transitions: ${preview.summary.faceTransitionElementCount}`,
-            `edge transitions: ${preview.summary.edgeTransitionElementCount}`,
-            `corner transitions: ${preview.summary.cornerTransitionElementCount}`,
-            `unchanged parents: ${preview.summary.unchangedElementCount}`,
-            `estimated elements: ${preview.summary.estimatedOutputElementCount}`,
+            ...refinementPreviewReportLines(preview),
             ...(preview.quality ? [
               `minimum parent scaled Jacobian: ${formatQualityNumber(preview.quality.parentMinimumOrientedScaledJacobian)}`,
               `minimum child scaled Jacobian: ${formatQualityNumber(preview.quality.childMinimumOrientedScaledJacobian)}`,

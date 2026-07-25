@@ -28,7 +28,10 @@ import {
 } from "./hex-quality.js";
 import { inferHexElementLattice } from "./regularization.js";
 import { H1_FACES } from "./topology.js";
-import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
+import {
+  cloneTwoToOneCapabilityReport,
+  type TwoToOneCapabilityReport
+} from "./two-to-one-capability.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -960,7 +963,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
   session: RefinementSession,
   cellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
-): RefinementSessionCommand {
+): RefinementSessionCommand & { twoToOne: TwoToOneCapabilityReport<CellId> } {
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
@@ -1115,7 +1118,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
   const twoToOne: TwoToOneCapabilityReport<CellId> = {
     status: "compensated",
     topologyClass: "mixed-level",
-    originalSelectedCellIds: [...cellIds].sort(compareCellIds),
+    originalSelectedCellIds: [...validation.cellIds].sort(compareCellIds),
     effectiveSelectedCellIds: [...remappedCellIds].sort(compareCellIds),
     actions: [{
       kind: "transition-shell-rebuild",
@@ -1131,7 +1134,9 @@ function refineSessionPatchWithRebuiltTransitionShell(
     ])].sort(compareCellIds),
     preservedFarFieldCellCount: originalActiveLeafIds.size - hiddenCellIds.length
   };
-  const command: RefinementSessionCommand = {
+  const command: RefinementSessionCommand & {
+    twoToOne: TwoToOneCapabilityReport<CellId>;
+  } = {
     id: compoundCommandId,
     kind: "refine",
     hiddenCellIds,
@@ -1536,7 +1541,10 @@ function cloneRefinementSessionCommand(command: RefinementSessionCommand): Refin
     ...(command.reactivatedCellIds
       ? { reactivatedCellIds: [...command.reactivatedCellIds] }
       : {}),
-    createdNodeIds: [...command.createdNodeIds]
+    createdNodeIds: [...command.createdNodeIds],
+    ...(command.twoToOne
+      ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
+      : {})
   };
 }
 
@@ -1625,7 +1633,7 @@ function previewSessionPatchWithRebuiltTransitionShell(
   sourceActive: ActiveMeshBuildResult
 ): RefinementPreview<CellId> {
   const working = cloneRefinementSession(session);
-  const command = refineSessionPatch(working, [...cellIds], {
+  const command = refineSessionPatchWithRebuiltTransitionShell(working, [...cellIds], {
     ...options,
     activeBuild: sourceActive
   });
@@ -1650,7 +1658,7 @@ function previewSessionPatchWithRebuiltTransitionShell(
       preservedInputElementCount: inputElementCount - changedInputElementCount,
       outputElementCount: finalActive.mesh.elements.length
     },
-    twoToOne: command.twoToOne!,
+    twoToOne: command.twoToOne,
     ...(command.quality ? { quality: command.quality } : {})
   };
 }

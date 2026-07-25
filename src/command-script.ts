@@ -1,5 +1,12 @@
-import type { ActiveMeshBuildResult, CellId, RefinementSession, RefinementSessionCell } from "./refinement-session.js";
+import type {
+  ActiveMeshBuildResult,
+  CellId,
+  RefinementSession,
+  RefinementSessionCell,
+  RefinementSessionCommand
+} from "./refinement-session.js";
 import type { HexRefinementQualitySummary, Mesh, Point } from "./types.js";
+import { cloneTwoToOneCapabilityReport } from "./two-to-one-capability.js";
 import {
   buildActiveMeshWithMap,
   createRefinementSession,
@@ -1939,20 +1946,30 @@ function cloneRefinementSessionState(session: RefinementSession): RefinementSess
     activeLeafIdsByNodeKey: new Map(
       [...session.activeLeafIdsByNodeKey.entries()].map(([key, cellIds]) => [key, [...cellIds]])
     ),
-    undoStack: session.undoStack.map((command) => ({
-      ...command,
-      hiddenCellIds: [...command.hiddenCellIds],
-      createdCellIds: [...command.createdCellIds],
-      createdNodeIds: [...command.createdNodeIds]
-    })),
-    redoStack: session.redoStack.map((command) => ({
-      ...command,
-      hiddenCellIds: [...command.hiddenCellIds],
-      createdCellIds: [...command.createdCellIds],
-      createdNodeIds: [...command.createdNodeIds]
-    })),
+    undoStack: session.undoStack.map(cloneReplayRefinementCommand),
+    redoStack: session.redoStack.map(cloneReplayRefinementCommand),
     nextCommandId: session.nextCommandId,
     nextCellOrdinal: session.nextCellOrdinal
+  };
+}
+
+function cloneReplayRefinementCommand(
+  command: RefinementSessionCommand
+): RefinementSessionCommand {
+  return {
+    ...command,
+    hiddenCellIds: [...command.hiddenCellIds],
+    createdCellIds: [...command.createdCellIds],
+    ...(command.activeCreatedCellIds
+      ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
+      : {}),
+    ...(command.reactivatedCellIds
+      ? { reactivatedCellIds: [...command.reactivatedCellIds] }
+      : {}),
+    createdNodeIds: [...command.createdNodeIds],
+    ...(command.twoToOne
+      ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
+      : {})
   };
 }
 

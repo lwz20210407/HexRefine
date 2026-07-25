@@ -4,6 +4,24 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
+function extractNamedFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `missing function ${name}`);
+  const bodyStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") {
+      depth += 1;
+    } else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+  assert.fail(`unterminated function ${name}`);
+}
+
 test("HexRefine browser GUI imports the project-local runtime build", async () => {
   const redirect = await readFile(new URL("examples/browser/hexrefine.html", projectRoot), "utf8");
   const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
@@ -53,4 +71,54 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.equal(typeof runtime.prepareSessionRefineSelection, "function");
   assert.equal(typeof runtime.previewSessionPatch, "function");
   assert.equal(typeof runtime.refineByElementIdsWithReport, "function");
+});
+
+test("HexRefine browser reports aggregate refinement previews without per-parent placeholders", async () => {
+  const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
+  const standalone = await readFile(
+    new URL("examples/browser/hexrefine-standalone.html", projectRoot),
+    "utf8"
+  );
+  const functionSource = extractNamedFunction(gui, "refinementPreviewReportLines");
+  assert.match(standalone, /function refinementPreviewReportLines\(preview\)/);
+  const refinementPreviewReportLines = Function(
+    `${functionSource}; return refinementPreviewReportLines;`
+  )();
+  const lines = refinementPreviewReportLines({
+    planMode: "aggregate",
+    summary: {
+      inputElementCount: 1171,
+      changedInputElementCount: 1037,
+      preservedInputElementCount: 134,
+      outputElementCount: 1669
+    }
+  });
+
+  assert.deepEqual(lines, [
+    "input elements: 1171",
+    "changed input elements: 1037",
+    "preserved input elements: 134",
+    "output elements: 1669"
+  ]);
+  assert.doesNotMatch(lines.join("\n"), /undefined/);
+  assert.doesNotMatch(lines.join("\n"), /selected parents|transitions|estimated elements/);
+
+  assert.deepEqual(refinementPreviewReportLines({
+    planMode: "per-parent",
+    summary: {
+      selectedElementCount: 1,
+      faceTransitionElementCount: 3,
+      edgeTransitionElementCount: 3,
+      cornerTransitionElementCount: 0,
+      unchangedElementCount: 1,
+      estimatedOutputElementCount: 82
+    }
+  }), [
+    "selected parents: 1",
+    "face transitions: 3",
+    "edge transitions: 3",
+    "corner transitions: 0",
+    "unchanged parents: 1",
+    "estimated elements: 82"
+  ]);
 });

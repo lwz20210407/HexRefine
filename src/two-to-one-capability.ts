@@ -122,6 +122,26 @@ export function serializeTwoToOnePlanningError<TId extends TwoToOneEntityId = nu
   return error.toJSON();
 }
 
+export function cloneTwoToOneCapabilityReport<TId extends TwoToOneEntityId>(
+  report: TwoToOneCapabilityReport<TId>
+): TwoToOneCapabilityReport<TId> {
+  return {
+    status: report.status,
+    topologyClass: report.topologyClass,
+    originalSelectedCellIds: [...report.originalSelectedCellIds],
+    effectiveSelectedCellIds: [...report.effectiveSelectedCellIds],
+    actions: report.actions.map((action) => ({
+      kind: action.kind,
+      reason: action.reason,
+      addedParentCellIds: [...action.addedParentCellIds],
+      replacedTransitionCellIds: [...action.replacedTransitionCellIds],
+      ...(action.templateId === undefined ? {} : { templateId: action.templateId })
+    })),
+    affectedComponentCellIds: [...report.affectedComponentCellIds],
+    preservedFarFieldCellCount: report.preservedFarFieldCellCount
+  };
+}
+
 export function normalizeTwoToOneCompensation(
   originalSelectedParentCount: number,
   options: TwoToOneCompensationCarrier
