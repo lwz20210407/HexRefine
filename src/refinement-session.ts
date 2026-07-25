@@ -28,6 +28,7 @@ import {
 } from "./hex-quality.js";
 import { inferHexElementLattice } from "./regularization.js";
 import { H1_FACES } from "./topology.js";
+import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -56,6 +57,7 @@ export interface RefinementSessionCommand {
   reactivatedCellIds?: CellId[];
   createdNodeIds: number[];
   quality?: HexRefinementQualitySummary;
+  twoToOne?: TwoToOneCapabilityReport<CellId>;
 }
 
 export interface RefinementSession {
@@ -1109,6 +1111,26 @@ function refineSessionPatchWithRebuiltTransitionShell(
     { length: working.nodes.length - originalNodeCount },
     (_, index) => originalNodeCount + index + 1
   );
+  const previousCoreParentIdSet = new Set(previousCoreParentIds);
+  const twoToOne: TwoToOneCapabilityReport<CellId> = {
+    status: "compensated",
+    topologyClass: "mixed-level",
+    originalSelectedCellIds: [...cellIds].sort(compareCellIds),
+    effectiveSelectedCellIds: [...remappedCellIds].sort(compareCellIds),
+    actions: [{
+      kind: "transition-shell-rebuild",
+      reason: "the nested core reached an existing 2:1 transition component",
+      addedParentCellIds: rebuiltCoreParentIds
+        .filter((cellId) => !previousCoreParentIdSet.has(cellId)),
+      replacedTransitionCellIds: [...collidingTransitionParentIds]
+    }],
+    affectedComponentCellIds: [...new Set([
+      ...hiddenCellIds,
+      ...activeCreatedCellIds,
+      ...reactivatedCellIds
+    ])].sort(compareCellIds),
+    preservedFarFieldCellCount: originalActiveLeafIds.size - hiddenCellIds.length
+  };
   const command: RefinementSessionCommand = {
     id: compoundCommandId,
     kind: "refine",
@@ -1117,7 +1139,8 @@ function refineSessionPatchWithRebuiltTransitionShell(
     activeCreatedCellIds,
     reactivatedCellIds,
     createdNodeIds,
-    ...(quality ? { quality } : {})
+    ...(quality ? { quality } : {}),
+    twoToOne
   };
   working.undoStack = [...originalUndoStack, command];
   working.redoStack = [];
@@ -1539,7 +1562,7 @@ export function previewSessionPatch(
   session: RefinementSession,
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
-): RefinementPreview {
+): RefinementPreview<CellId> {
   const sourceActive = options.activeBuild ?? buildActiveMeshWithMap(session, {
     mergeNodes: true,
     includeSessionNodeIdByNodeId: false,
@@ -1580,6 +1603,7 @@ export function previewSessionPatch(
   const unchangedElementCount = sourceActive.mesh.elements.length - replacedIds.size;
   return {
     kind: session.kind,
+    planMode: "per-parent",
     plan,
     summary: {
       selectedElementCount: countRole("selected"),
@@ -1599,7 +1623,7 @@ function previewSessionPatchWithRebuiltTransitionShell(
   cellIds: readonly CellId[],
   options: RefinementSessionPatchOptions,
   sourceActive: ActiveMeshBuildResult
-): RefinementPreview {
+): RefinementPreview<CellId> {
   const working = cloneRefinementSession(session);
   const command = refineSessionPatch(working, [...cellIds], {
     ...options,
@@ -1612,23 +1636,21 @@ function previewSessionPatchWithRebuiltTransitionShell(
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
   });
   const changedInputElementCount = command.hiddenCellIds.length;
-  const unchangedElementCount = sourceActive.mesh.elements.length - changedInputElementCount;
+  const inputElementCount = sourceActive.mesh.elements.length;
   return {
     kind: session.kind,
-    plan: [],
     planMode: "aggregate",
+    plan: [],
     compound: {
-      kind: "transition-shell-rebuild",
-      changedInputElementCount
+      kind: "transition-shell-rebuild"
     },
     summary: {
-      selectedElementCount: new Set(cellIds).size,
-      faceTransitionElementCount: 0,
-      edgeTransitionElementCount: 0,
-      cornerTransitionElementCount: 0,
-      unchangedElementCount,
-      estimatedOutputElementCount: finalActive.mesh.elements.length
+      inputElementCount,
+      changedInputElementCount,
+      preservedInputElementCount: inputElementCount - changedInputElementCount,
+      outputElementCount: finalActive.mesh.elements.length
     },
+    twoToOne: command.twoToOne!,
     ...(command.quality ? { quality: command.quality } : {})
   };
 }

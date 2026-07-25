@@ -3073,7 +3073,7 @@ test("Hex 2:1 local refinement supports a second level in a warped mapped core",
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 });
 
-test("Hex 2:1 local refinement rebuilds an existing transition shell reached by a second-level core", () => {
+test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-level core", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
   const initial = buildActiveMeshWithMap(session);
@@ -3157,20 +3157,18 @@ test("Hex 2:1 local refinement rebuilds an existing transition shell reached by 
   assert.deepEqual(preview.quality, command.quality);
   assert.equal(preview.planMode, "aggregate");
   assert.deepEqual(preview.plan, []);
-  assert.deepEqual(preview.compound, {
-    kind: "transition-shell-rebuild",
-    changedInputElementCount: command.hiddenCellIds.length
-  });
-  assert.equal(preview.summary.selectedElementCount, 1);
-  assert.equal(preview.summary.faceTransitionElementCount, 0);
-  assert.equal(preview.summary.edgeTransitionElementCount, 0);
-  assert.equal(preview.summary.cornerTransitionElementCount, 0);
-  assert.equal(
-    preview.summary.unchangedElementCount,
-    firstRefined.mesh.elements.length - command.hiddenCellIds.length
-  );
   assert.ok(twiceRefined.elements.length > firstRefined.mesh.elements.length);
-  assert.equal(preview.summary.estimatedOutputElementCount, twiceRefined.elements.length);
+  assert.deepEqual(preview.summary, {
+    inputElementCount: firstRefined.mesh.elements.length,
+    changedInputElementCount: command.hiddenCellIds.length,
+    preservedInputElementCount: firstRefined.mesh.elements.length - command.hiddenCellIds.length,
+    outputElementCount: twiceRefined.elements.length
+  });
+  assert.equal("selectedElementCount" in preview.summary, false);
+  assert.equal("faceTransitionElementCount" in preview.summary, false);
+  assert.deepEqual(preview.compound, {
+    kind: "transition-shell-rebuild"
+  });
   const twiceRefinedCoarseCellCount = [...session.activeLeafIds].filter((cellId) => {
     const cell = session.cells.get(cellId);
     return cell?.level === 0 && cell.role === "base";
@@ -3715,16 +3713,19 @@ test("Hex refinement report identifies automatic transition templates", () => {
 
 test("Hex refinement preview reports transition templates without replacing mesh", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 2);
+  const result = refineByElementIdsWithReport(mesh, [1]);
   const preview = previewRefinementByElementIds(mesh, [1]);
   const templateCounts = countBy(preview.plan.map((item) => item.templateCode));
 
   assert.equal(preview.kind, "H1");
+  assert.equal(preview.planMode, "per-parent");
+  assert.ok(preview.plan.length > 0);
   assert.equal(preview.plan.length, 7);
   assert.equal(preview.summary.selectedElementCount, 1);
   assert.equal(preview.summary.faceTransitionElementCount, 3);
   assert.equal(preview.summary.edgeTransitionElementCount, 3);
   assert.equal(preview.summary.unchangedElementCount, 1);
-  assert.equal(preview.summary.estimatedOutputElementCount, 82);
+  assert.equal(preview.summary.estimatedOutputElementCount, result.mesh.elements.length);
   assert.equal(preview.quality?.ok, true);
   assert.equal(preview.quality?.parentElementCount, 7);
   assert.equal(preview.quality?.childElementCount, 81);

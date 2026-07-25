@@ -1,6 +1,7 @@
 import type {
   TwoToOneCapabilityReport,
-  TwoToOneCompensationOptions
+  TwoToOneCompensationOptions,
+  TwoToOneEntityId
 } from "./two-to-one-capability.js";
 
 export type Point = readonly number[];
@@ -145,22 +146,39 @@ export interface RefinementPlanSummary {
   estimatedOutputElementCount: number;
 }
 
-export interface RefinementPreview {
+export interface PerParentRefinementPreview<TId extends TwoToOneEntityId = number> {
   kind: ElementKind;
+  planMode: "per-parent";
   plan: RefinementPlanItem[];
   summary: RefinementPlanSummary;
-  /**
-   * Aggregate previews represent compound topology changes that cannot be
-   * decomposed honestly into one template assignment per active input element.
-   */
-  planMode?: "per-parent" | "aggregate";
-  compound?: {
+  quality?: HexRefinementQualitySummary;
+  regularization?: RegularizedHexSelection;
+  twoToOne?: TwoToOneCapabilityReport<TId>;
+}
+
+export interface AggregateRefinementPlanSummary {
+  inputElementCount: number;
+  changedInputElementCount: number;
+  preservedInputElementCount: number;
+  outputElementCount: number;
+}
+
+export interface AggregateRefinementPreview<TId extends TwoToOneEntityId = number> {
+  kind: ElementKind;
+  planMode: "aggregate";
+  plan: [];
+  summary: AggregateRefinementPlanSummary;
+  compound: {
     kind: "transition-shell-rebuild";
-    changedInputElementCount: number;
   };
   quality?: HexRefinementQualitySummary;
   regularization?: RegularizedHexSelection;
+  twoToOne: TwoToOneCapabilityReport<TId>;
 }
+
+export type RefinementPreview<TId extends TwoToOneEntityId = number> =
+  | PerParentRefinementPreview<TId>
+  | AggregateRefinementPreview<TId>;
 
 export interface BoxRange {
   min: Point;

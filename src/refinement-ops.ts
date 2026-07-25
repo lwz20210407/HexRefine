@@ -281,6 +281,7 @@ function buildRefinementPreview(mesh: Mesh, kind: "Q1" | "H1", replacements: rea
   const unchangedElementCount = mesh.elements.length - replacedIds.size;
   return {
     kind,
+    planMode: "per-parent",
     plan,
     summary: {
       selectedElementCount: countRole("selected"),

@@ -278,6 +278,7 @@ function buildHexRefinementPreview(
   const unchangedElementCount = mesh.elements.length - replacedIds.size;
   return {
     kind: "H1",
+    planMode: "per-parent",
     plan,
     summary: {
       selectedElementCount: countRole("selected"),
