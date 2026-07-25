@@ -2367,6 +2367,15 @@
         return `${(value / 1000).toFixed(2)} s`;
       }
 
+      function formatQualityNumber(value) {
+        if (!Number.isFinite(value)) {
+          return "n/a";
+        }
+        return Math.abs(value) >= 0.001 && Math.abs(value) < 1000
+          ? value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")
+          : value.toExponential(6);
+      }
+
       function refineOptions() {
         const hexTransitionAxis = hexTransitionAxisEl.value === "auto"
           ? undefined
@@ -2851,6 +2860,7 @@
             commandId: command.id,
             hiddenCellIds: command.hiddenCellIds,
             createdCellCount: command.createdCellIds.length,
+            quality: command.quality,
             sourceElementCount: prepared.sourceElementCount ?? selected.size,
             expandedCandidateCount: prepared.expandedCandidateCount,
             boundedCoreCount: prepared.boundedCoreCount,
@@ -2887,6 +2897,7 @@
             },
             localCheckedElementCount,
             hangingCount: localHangingCount,
+            ...(command.quality ? { quality: command.quality } : {}),
             ...(prepared.regularization ? { regularization: prepared.regularization } : {}),
             ...(prepared.sourceElementCount !== undefined ? { sourceElementCount: prepared.sourceElementCount } : {}),
             ...(prepared.expandedCandidateCount !== undefined ? { expandedCandidateCount: prepared.expandedCandidateCount } : {}),
@@ -5493,7 +5504,12 @@
             `edge transitions: ${preview.summary.edgeTransitionElementCount}`,
             `corner transitions: ${preview.summary.cornerTransitionElementCount}`,
             `unchanged parents: ${preview.summary.unchangedElementCount}`,
-            `estimated elements: ${preview.summary.estimatedOutputElementCount}`
+            `estimated elements: ${preview.summary.estimatedOutputElementCount}`,
+            ...(preview.quality ? [
+              `minimum parent scaled Jacobian: ${formatQualityNumber(preview.quality.parentMinimumOrientedScaledJacobian)}`,
+              `minimum child scaled Jacobian: ${formatQualityNumber(preview.quality.childMinimumOrientedScaledJacobian)}`,
+              `relative volume error: ${formatQualityNumber(preview.quality.relativeVolumeError)}`
+            ] : [])
           );
           if (preview.regularization) {
             lines.push(
@@ -5544,6 +5560,11 @@
             `face transitions: ${lastResult.summary.faceTransitionElementCount}`,
             `edge transitions: ${lastResult.summary.edgeTransitionElementCount}`,
             `corner transitions: ${lastResult.summary.cornerTransitionElementCount}`,
+            ...(lastResult.quality ? [
+              `minimum parent scaled Jacobian: ${formatQualityNumber(lastResult.quality.parentMinimumOrientedScaledJacobian)}`,
+              `minimum child scaled Jacobian: ${formatQualityNumber(lastResult.quality.childMinimumOrientedScaledJacobian)}`,
+              `relative volume error: ${formatQualityNumber(lastResult.quality.relativeVolumeError)}`
+            ] : []),
             ...(lastResult.sourceElementCount !== undefined ? [`user selected: ${lastResult.sourceElementCount}`] : []),
             ...(lastResult.expandedCandidateCount !== undefined ? [`expanded candidates: ${lastResult.expandedCandidateCount}`] : []),
             ...(lastResult.regularization?.components?.length ? [`components: ${lastResult.regularization.components.length}`] : []),

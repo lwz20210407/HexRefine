@@ -102,10 +102,22 @@ export interface RefinementSummary {
   outputElementCount: number;
 }
 
+export interface HexRefinementQualitySummary {
+  ok: boolean;
+  parentElementCount: number;
+  childElementCount: number;
+  parentOrientedVolume: number;
+  childOrientedVolume: number;
+  relativeVolumeError: number;
+  parentMinimumOrientedScaledJacobian: number;
+  childMinimumOrientedScaledJacobian: number;
+}
+
 export interface RefinementResult {
   mesh: Mesh;
   cellData: RefinementCellData[];
   summary: RefinementSummary;
+  quality?: HexRefinementQualitySummary;
   regularization?: RegularizedHexSelection;
 }
 
@@ -129,6 +141,7 @@ export interface RefinementPreview {
   kind: ElementKind;
   plan: RefinementPlanItem[];
   summary: RefinementPlanSummary;
+  quality?: HexRefinementQualitySummary;
   regularization?: RegularizedHexSelection;
 }
 

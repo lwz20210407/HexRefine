@@ -1,6 +1,7 @@
 import type {
   Element,
   ElementKind,
+  HexRefinementQualitySummary,
   LocalRefinement,
   Mesh,
   Point,
@@ -19,7 +20,10 @@ import {
   type ClassifiedReplacement
 } from "./refinement-planner.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
-import { auditHexRefinementQuality } from "./hex-quality.js";
+import {
+  auditHexRefinementPatchQuality,
+  auditHexRefinementQuality
+} from "./hex-quality.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -45,6 +49,7 @@ export interface RefinementSessionCommand {
   hiddenCellIds: CellId[];
   createdCellIds: CellId[];
   createdNodeIds: number[];
+  quality?: HexRefinementQualitySummary;
 }
 
 export interface RefinementSession {
@@ -150,6 +155,7 @@ interface RefinementSessionPatchPlan {
   replacements: ClassifiedReplacement[];
   sourceReplacements: ClassifiedReplacement[];
   hiddenCellIds: CellId[];
+  quality?: HexRefinementQualitySummary;
 }
 
 export function createRefinementSession(mesh: Mesh): RefinementSession {
@@ -709,6 +715,19 @@ export function refineSessionCells(
     }
     return { parentId, parent, refinement };
   });
+  const quality = session.kind === "H1" && planned.length > 0
+    ? auditHexRefinementPatchQuality(
+        {
+          kind: "H1",
+          nodes: session.nodes,
+          elements: planned.map(({ parent }) => parent.element)
+        },
+        planned.map(({ refinement }, index) => ({
+          elementId: index + 1,
+          refinement
+        }))
+      )
+    : undefined;
   const createdCellIds: CellId[] = [];
   const createdNodeIds: number[] = [];
   const hiddenCellIds: CellId[] = [];
@@ -758,7 +777,8 @@ export function refineSessionCells(
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
-    createdNodeIds
+    createdNodeIds,
+    ...(quality ? { quality } : {})
   };
   session.nextCommandId += 1;
   session.undoStack.push(command);
@@ -829,7 +849,8 @@ export function refineSessionPatch(
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
-    createdNodeIds
+    createdNodeIds,
+    ...(plan.quality ? { quality: plan.quality } : {})
   };
   session.nextCommandId += 1;
   session.undoStack.push(command);
@@ -878,7 +899,8 @@ export function previewSessionPatch(
       unchangedElementCount,
       estimatedOutputElementCount: unchangedElementCount
         + plan.reduce((total, item) => total + item.outputElementCount, 0)
-    }
+    },
+    ...(patch.quality ? { quality: patch.quality } : {})
   };
 }
 
@@ -943,9 +965,9 @@ function buildRefinementSessionPatchPlan(
   const sourceReplacements = active === sourceActive
     ? replacements
     : mapPlanningReplacementsToSource(session, sourceActive, active, replacements);
-  if (session.kind === "H1") {
-    assertHexPatchQuality(sourceActive.mesh, sourceReplacements);
-  }
+  const quality = session.kind === "H1" && sourceReplacements.length > 0
+    ? assertHexPatchQuality(sourceActive.mesh, sourceReplacements)
+    : undefined;
   if (usesSameLevelPlanning) {
     validateSameLevelPlanningConformance(
       sourceActive,
@@ -959,7 +981,8 @@ function buildRefinementSessionPatchPlan(
     planningActive: active,
     replacements,
     sourceReplacements,
-    hiddenCellIds: [...parentIds].sort(compareCellIds)
+    hiddenCellIds: [...parentIds].sort(compareCellIds),
+    ...(quality ? { quality } : {})
   };
 }
 
@@ -1385,42 +1408,27 @@ function assertHexRefinementQuality(
 function assertHexPatchQuality(
   sourceMesh: Mesh,
   replacements: readonly ClassifiedReplacement[]
-): void {
-  let parentOrientedVolume = 0;
-  let childOrientedVolume = 0;
-  for (const replacement of replacements) {
-    const parent = sourceMesh.elements[replacement.elementId - 1];
-    if (!parent) {
-      throw new Error(`quality audit parent element ${replacement.elementId} is outside the active mesh`);
-    }
-    const report = auditHexRefinementQuality(
-      elementVertices(sourceMesh, parent),
-      replacement.refinement,
-      Number.POSITIVE_INFINITY
-    );
-    if (report.parentMinimumOrientedScaledJacobian <= 0) {
-      throw new Error(
-        `refinement of active element ${replacement.elementId} starts from a parent ` +
-        `with non-positive scaled Jacobian ${report.parentMinimumOrientedScaledJacobian}`
-      );
-    }
-    if (report.childMinimumOrientedScaledJacobian <= 0) {
-      throw new Error(
-        `refinement of active element ${replacement.elementId} produced a non-positive ` +
-        `scaled Jacobian ${report.childMinimumOrientedScaledJacobian}`
-      );
-    }
-    const orientation = report.parentSignedVolume < 0 ? -1 : 1;
-    parentOrientedVolume += orientation * report.parentSignedVolume;
-    childOrientedVolume += orientation * report.childSignedVolume;
-  }
-  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
-    / Math.max(parentOrientedVolume, Number.EPSILON);
-  if (relativeVolumeError > 1e-8) {
+): HexRefinementQualitySummary {
+  const quality = auditHexRefinementPatchQuality(sourceMesh, replacements);
+  if (quality.parentMinimumOrientedScaledJacobian <= 0) {
     throw new Error(
-      `refinement patch does not conserve parent volume; relative error is ${relativeVolumeError}`
+      "refinement patch starts from a parent with non-positive scaled Jacobian " +
+      `${quality.parentMinimumOrientedScaledJacobian}`
     );
   }
+  if (quality.childMinimumOrientedScaledJacobian <= 0) {
+    throw new Error(
+      "refinement patch produced a non-positive scaled Jacobian " +
+      `${quality.childMinimumOrientedScaledJacobian}`
+    );
+  }
+  if (quality.relativeVolumeError > 1e-8) {
+    throw new Error(
+      "refinement patch does not conserve parent volume; relative error is " +
+      `${quality.relativeVolumeError}`
+    );
+  }
+  return quality;
 }
 
 function namedSetEntries<T extends string | number>(

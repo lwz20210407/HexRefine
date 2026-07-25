@@ -1,4 +1,14 @@
-import type { LocalRefinement, Point } from "./types.js";
+import type {
+  HexRefinementQualitySummary,
+  LocalRefinement,
+  Mesh,
+  Point
+} from "./types.js";
+
+export interface HexRefinementPatchEntry {
+  elementId: number;
+  refinement: LocalRefinement;
+}
 
 export interface HexRefinementQualityReport {
   ok: boolean;
@@ -62,6 +72,71 @@ export function auditHexRefinementQuality(
       && relativeVolumeError <= relativeVolumeTolerance,
     parentSignedVolume,
     childSignedVolume,
+    relativeVolumeError,
+    parentMinimumOrientedScaledJacobian,
+    childMinimumOrientedScaledJacobian
+  };
+}
+
+export function auditHexRefinementPatchQuality(
+  mesh: Mesh,
+  replacements: readonly HexRefinementPatchEntry[],
+  relativeVolumeTolerance = 1e-8
+): HexRefinementQualitySummary {
+  if (replacements.length === 0) {
+    throw new Error("Hex patch quality audit requires at least one replacement");
+  }
+  let parentOrientedVolume = 0;
+  let childOrientedVolume = 0;
+  let parentMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
+  let childMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
+  let childElementCount = 0;
+
+  for (const replacement of replacements) {
+    const parent = mesh.elements[replacement.elementId - 1];
+    if (!parent) {
+      throw new Error(
+        `quality audit parent element ${replacement.elementId} is outside the mesh`
+      );
+    }
+    const parentVertices = parent.map((nodeId) => {
+      const point = mesh.nodes[nodeId - 1];
+      if (!point) {
+        throw new Error(
+          `quality audit parent element ${replacement.elementId} references missing node ${nodeId}`
+        );
+      }
+      return point;
+    });
+    const report = auditHexRefinementQuality(
+      parentVertices,
+      replacement.refinement,
+      Number.POSITIVE_INFINITY
+    );
+    const orientation = report.parentSignedVolume < 0 ? -1 : 1;
+    parentOrientedVolume += orientation * report.parentSignedVolume;
+    childOrientedVolume += orientation * report.childSignedVolume;
+    parentMinimumOrientedScaledJacobian = Math.min(
+      parentMinimumOrientedScaledJacobian,
+      report.parentMinimumOrientedScaledJacobian
+    );
+    childMinimumOrientedScaledJacobian = Math.min(
+      childMinimumOrientedScaledJacobian,
+      report.childMinimumOrientedScaledJacobian
+    );
+    childElementCount += replacement.refinement.elements.length;
+  }
+
+  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
+    / Math.max(parentOrientedVolume, Number.EPSILON);
+  return {
+    ok: parentMinimumOrientedScaledJacobian > 0
+      && childMinimumOrientedScaledJacobian > 0
+      && relativeVolumeError <= relativeVolumeTolerance,
+    parentElementCount: replacements.length,
+    childElementCount,
+    parentOrientedVolume,
+    childOrientedVolume,
     relativeVolumeError,
     parentMinimumOrientedScaledJacobian,
     childMinimumOrientedScaledJacobian

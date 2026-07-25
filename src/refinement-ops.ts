@@ -28,6 +28,7 @@ import {
   pointInBox as pointInBoxCore,
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
+import { auditHexRefinementPatchQuality } from "./hex-quality.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -221,6 +222,9 @@ export function pointInBox(point: Point, box: BoxRange): boolean {
 function buildRefinementResult(inputMesh: Mesh, mesh: Mesh, replacements: readonly ClassifiedReplacement[], selectedElementCount: number): RefinementResult {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const cellData: RefinementCellData[] = [];
+  const quality = inferMeshKind(inputMesh) === "H1" && replacements.length > 0
+    ? auditHexRefinementPatchQuality(inputMesh, replacements)
+    : undefined;
 
   for (let index = 0; index < inputMesh.elements.length; index += 1) {
     const elementId = index + 1;
@@ -255,12 +259,16 @@ function buildRefinementResult(inputMesh: Mesh, mesh: Mesh, replacements: readon
       unchangedElementCount: cellData.filter((cell) => cell.role === "unchanged").length,
       outputNodeCount: mesh.nodes.length,
       outputElementCount: mesh.elements.length
-    }
+    },
+    ...(quality ? { quality } : {})
   };
 }
 
 function buildRefinementPreview(mesh: Mesh, kind: "Q1" | "H1", replacements: readonly ClassifiedReplacement[]): RefinementPreview {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
+  const quality = kind === "H1" && replacements.length > 0
+    ? auditHexRefinementPatchQuality(mesh, replacements)
+    : undefined;
   const plan: RefinementPlanItem[] = replacements
     .map((replacement) => ({
       parentElementId: replacement.elementId,
@@ -281,7 +289,8 @@ function buildRefinementPreview(mesh: Mesh, kind: "Q1" | "H1", replacements: rea
       cornerTransitionElementCount: countRole("corner-transition"),
       unchangedElementCount,
       estimatedOutputElementCount: unchangedElementCount + plan.reduce((total, item) => total + item.outputElementCount, 0)
-    }
+    },
+    ...(quality ? { quality } : {})
   };
 }
 

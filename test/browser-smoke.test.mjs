@@ -39,6 +39,8 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.match(gui, /parseMeshText/);
   assert.match(gui, /prepareSessionRefineSelection/);
   assert.match(gui, /previewSessionPatch\(refinementSession/);
+  assert.match(gui, /minimum child scaled Jacobian/);
+  assert.match(gui, /relative volume error/);
   assert.match(gui, /accept="application\/json,.json,.vtk,.vtu,.inp,.k,.key,text\/plain"/);
   assert.doesNotMatch(gui, /cellData:\s*\[\]/);
   assert.doesNotMatch(gui, /Regularized block rejected:/);

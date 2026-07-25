@@ -14,6 +14,7 @@ import {
   regularSweepTemplateLibrary
 } from "../dist/two-to-one-sweep-templates.js";
 const {
+  auditHexRefinementPatchQuality,
   findBoundaryPairs,
   checkNoHangingNodes,
   minElementEdgeLength,
@@ -257,6 +258,9 @@ test("Hierarchical refinement session hides mother cells and supports undo redo"
 
   assert.equal(command.hiddenCellIds.length, 1);
   assert.equal(command.createdCellIds.length, 27);
+  assert.equal(command.quality?.ok, true);
+  assert.equal(command.quality?.parentElementCount, 1);
+  assert.equal(command.quality?.childElementCount, 27);
   assert.equal(session.cells.get("e1").active, false);
   assert.equal(session.cells.get("e1").hidden, true);
   assert.equal(refined.kind, "H1");
@@ -295,6 +299,13 @@ test("Hierarchical refinement session rejects inverted Hex children atomically",
     nodeCount: session.nodes.length,
     undoCount: session.undoStack.length
   }, before);
+});
+
+test("Hex patch quality audit rejects an empty replacement set", () => {
+  assert.throws(
+    () => auditHexRefinementPatchQuality(createHexUnitCubeMesh(1, 1, 1), []),
+    /at least one replacement/
+  );
 });
 
 test("Hierarchical refinement session rejects incomplete Hex replacement volume atomically", () => {
@@ -1372,6 +1383,11 @@ test("HexRefine offline export manifest includes replay selection diagnostics", 
   assert.equal(result.manifest.selectionDiagnostics.length, 1);
   assert.equal(result.manifest.selectionDiagnostics[0].commandKind, "refine.patch");
   assert.equal(result.manifest.selectionDiagnostics[0].selectionSource, "state.selected-elements");
+  assert.equal(Array.isArray(result.manifest.refinementQuality), true);
+  assert.equal(result.manifest.refinementQuality.length, 1);
+  assert.equal(result.manifest.refinementQuality[0].ok, true);
+  assert.ok(result.manifest.refinementQuality[0].childMinimumOrientedScaledJacobian > 0);
+  assert.ok(result.manifest.refinementQuality[0].relativeVolumeError < 1e-10);
 });
 
 test("HexRefine offline export defaults to VTK without INP output", async () => {
@@ -2638,6 +2654,11 @@ test("Hex 2:1 local refinement supports a second level inside a uniform refined 
   }, beforePreview);
 
   const command = refineSessionPatch(session, prepared.cellIds, patchOptions);
+  assert.deepEqual(command.quality, patchPreview.quality);
+  assert.equal(command.quality?.ok, true);
+  assert.equal(command.quality?.parentElementCount, patchPreview.plan.length);
+  assert.ok((command.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0);
+  assert.ok((command.quality?.relativeVolumeError ?? 1) < 1e-10);
   const selectedChildren = command.createdCellIds
     .map((cellId) => session.cells.get(cellId))
     .filter((cell) => cell?.role === "selected");
@@ -2898,6 +2919,11 @@ test("Hex refinement report identifies automatic transition templates", () => {
   assert.equal(result.summary.faceTransitionElementCount, 3);
   assert.equal(result.summary.edgeTransitionElementCount, 3);
   assert.equal(result.summary.unchangedElementCount, 1);
+  assert.equal(result.quality?.ok, true);
+  assert.equal(result.quality?.parentElementCount, 7);
+  assert.equal(result.quality?.childElementCount, 81);
+  assert.ok((result.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0);
+  assert.ok((result.quality?.relativeVolumeError ?? 1) < 1e-10);
   assert.equal(templateCounts.get(27), 27);
   assert.equal(templateCounts.get(13), 39);
   assert.equal(templateCounts.get(5), 15);
@@ -2916,6 +2942,11 @@ test("Hex refinement preview reports transition templates without replacing mesh
   assert.equal(preview.summary.edgeTransitionElementCount, 3);
   assert.equal(preview.summary.unchangedElementCount, 1);
   assert.equal(preview.summary.estimatedOutputElementCount, 82);
+  assert.equal(preview.quality?.ok, true);
+  assert.equal(preview.quality?.parentElementCount, 7);
+  assert.equal(preview.quality?.childElementCount, 81);
+  assert.ok((preview.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0);
+  assert.ok((preview.quality?.relativeVolumeError ?? 1) < 1e-10);
   assert.equal(templateCounts.get(27), 1);
   assert.equal(templateCounts.get(13), 3);
   assert.equal(templateCounts.get(5), 3);

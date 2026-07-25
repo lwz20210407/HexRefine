@@ -1,5 +1,5 @@
 import type { ActiveMeshBuildResult, CellId, RefinementSession, RefinementSessionCell } from "./refinement-session.js";
-import type { Mesh, Point } from "./types.js";
+import type { HexRefinementQualitySummary, Mesh, Point } from "./types.js";
 import {
   buildActiveMeshWithMap,
   createRefinementSession,
@@ -45,6 +45,7 @@ export interface ComformHexReplayResult {
   cellSetMaterials: Map<string, ComformHexMaterial>;
   warnings: string[];
   selectionDiagnostics: ComformHexReplaySelectionDiagnostic[];
+  refinementQuality: HexRefinementQualitySummary[];
   replayedCommandCount: number;
 }
 
@@ -146,6 +147,7 @@ interface ReplayState {
   deleteRedoSnapshots: ReplaySnapshot[];
   warnings: string[];
   selectionDiagnostics: ComformHexReplaySelectionDiagnostic[];
+  refinementQuality: HexRefinementQualitySummary[];
   replayedCommandCount: number;
 }
 
@@ -181,6 +183,7 @@ export function replayComformHexCommandScript(
     deleteRedoSnapshots: [],
     warnings: [],
     selectionDiagnostics: [],
+    refinementQuality: [],
     replayedCommandCount: 0
   };
 
@@ -206,6 +209,7 @@ export function replayComformHexCommandScript(
     cellSetMaterials: state.cellSetMaterials,
     warnings: state.warnings,
     selectionDiagnostics: state.selectionDiagnostics,
+    refinementQuality: state.refinementQuality,
     replayedCommandCount: state.replayedCommandCount
   };
 }
@@ -398,7 +402,7 @@ function replayRefinePatch(
   for (const warning of replaySelection.warnings) {
     handleWarning(state, options, warning);
   }
-  refineSessionPatch(session, selectedCellIds, {
+  const command = refineSessionPatch(session, selectedCellIds, {
     includeTransitions,
     hexRefinementRatio,
     ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
@@ -407,6 +411,9 @@ function replayRefinePatch(
     activeBuild: active,
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
   });
+  if (command.quality) {
+    state.refinementQuality.push(command.quality);
+  }
   resetReplayViewState(state);
 }
 
