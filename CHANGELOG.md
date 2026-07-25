@@ -10,6 +10,10 @@ Private/custom performance edition.
   atomic full-mesh conformance gate before nested `2:1` hierarchy mutation.
 - Added exact command replay, undo/redo, and cell/node set-remap regression
   coverage for second-level local `2:1` refinement.
+- Added atomic H1 session quality validation for positive oriented corner
+  scaled Jacobians and signed-volume conservation before hierarchy mutation.
+- Added aggregate volume validation for multi-parent transition macros, while
+  preserving per-parent validation for ordinary Hex replacement batches.
 - Added shared-kernel support for disconnected Hex selection regions, with
   per-region uvw regularization before refinement.
 - Improved large-mesh GUI rendering with cached WebGL surface/edge paths.

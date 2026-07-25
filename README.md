@@ -48,6 +48,11 @@ customize for research, engineering experiments, and selected project work:
   Preview and execution share the same session planner, and a nested patch is
   rejected atomically when its new shell would intersect an existing
   transition layer.
+- Atomic H1 session quality gates reject inverted children and volume loss
+  before nodes, cells, or undo history are mutated. Single-parent refinements
+  conserve volume per parent; multi-parent transition macros conserve the
+  aggregate patch volume while every generated Hex retains a positive oriented
+  corner scaled Jacobian.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide

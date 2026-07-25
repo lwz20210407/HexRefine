@@ -39,6 +39,7 @@ Planning and algorithms
   src/two-to-one-sweep.ts
   src/two-to-one-sweep-templates.ts
   src/conformance.ts
+  src/hex-quality.ts
 
 Mesh kernel
   src/types.ts
@@ -106,6 +107,14 @@ same-level active cells that are not transition cells. `previewSessionPatch`
 and `refineSessionPatch` share this plan. The plan is remapped to the complete
 active mesh and checked for hanging nodes before the hierarchy is mutated, so a
 new local shell cannot silently cut through an older transition layer.
+
+H1 session plans also pass through `hex-quality.ts` before mutation. Every
+parent and generated child must have a positive oriented corner scaled
+Jacobian. Ordinary replacement batches conserve signed volume for each parent.
+Transition macros may redistribute volume among their participating parents,
+so patch plans use aggregate signed-volume conservation across the complete
+macro instead. Preview and execution share these checks because they share the
+same immutable patch plan.
 
 ## Session Flow
 

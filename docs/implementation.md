@@ -105,6 +105,29 @@ The planner returns classified replacements with:
 
 Preview APIs use the same planner but do not mutate or replace the mesh.
 
+## Hex Quality Validation
+
+`src/hex-quality.ts` provides the runtime H1 checks used by hierarchical
+refinement:
+
+- Signed Hex volume integrated with a `2 x 2 x 2` Gauss rule.
+- Minimum oriented corner scaled Jacobian over all eight Hex corners.
+- Relative parent/child volume error.
+
+The session validates the complete requested operation before adding nodes,
+children, or undo history. A non-positive parent or child scaled Jacobian, or a
+volume error above the runtime tolerance, rejects the operation atomically.
+`refineSessionCell` and `refineSessionCells` require each parent's children to
+conserve that parent's volume.
+
+Planned transition patches use a deliberately different volume scope. Paired
+and other multi-parent macros can move an internal partition across the
+original parent boundary, so an individual replacement record need not preserve
+its parent's volume. Every generated child must still remain positively
+oriented, while signed volume is conserved across the complete patch. This
+distinction is required by the paired pattern-3 construction and must not be
+replaced with per-parent macro validation.
+
 ## Replacing Elements and Merging Nodes
 
 `replaceElements` in `src/mesh.ts` builds a flat output mesh:
