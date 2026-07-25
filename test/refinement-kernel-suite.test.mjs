@@ -9,7 +9,10 @@ import test from "node:test";
 // This file intentionally stays within the project-local runtime build.
 
 import * as api from "../dist/index.js";
-import { regularSweepTemplateLibrary } from "../dist/two-to-one-sweep-templates.js";
+import {
+  pattern3PairTemplateLibrary,
+  regularSweepTemplateLibrary
+} from "../dist/two-to-one-sweep-templates.js";
 const {
   findBoundaryPairs,
   checkNoHangingNodes,
@@ -127,6 +130,19 @@ test("Hex 2:1 Owen sweep template library covers every regular marked-corner sig
       assert.equal(element.length, 8);
       assert.ok(element.every((nodeId) => nodeId >= 0 && nodeId < template.nodes.length));
     }
+  }
+});
+
+test("Hex 2:1 paired pattern-3 library covers every marked-face frame", () => {
+  const templates = [...pattern3PairTemplateLibrary().values()];
+
+  assert.equal(templates.length, 24);
+  for (const template of templates) {
+    assert.equal(template.markedCorners.length, 3);
+    assert.equal(template.faceCorners.length, 4);
+    assert.equal(template.children.length, 2);
+    assert.equal(template.mergeGroups.length, 2);
+    assert.ok(template.children.every((child) => child.length === 8));
   }
 });
 
@@ -2185,6 +2201,58 @@ test("Hex 2:1 local sweep follows a warped mapped block", () => {
   assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
 });
 
+test("Hex 2:1 local sweep closes an L-shaped core with paired pattern-3 templates", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 2);
+  const selected = [
+    ...idsInIndexBlock(5, 5, 2, [0, 0, 0], [3, 1, 1]),
+    ...idsInIndexBlock(5, 5, 2, [0, 2, 0], [1, 3, 1])
+  ];
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false
+  });
+
+  for (const parentElementId of selected) {
+    assert.equal(
+      result.cellData.filter((cell) =>
+        cell.parentElementId === parentElementId && cell.role === "selected"
+      ).length,
+      8
+    );
+  }
+  assert.equal(result.mesh.elements.length, 328);
+  assert.equal(result.mesh.nodes.length, 473);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
+});
+
+test("Hex 2:1 local sweep refines two disjoint logical cores in one operation", () => {
+  const mesh = createHexUnitCubeMesh(9, 9, 9);
+  const selected = [
+    ...idsInIndexBlock(9, 9, 9, [1, 1, 2], [2, 2, 3]),
+    ...idsInIndexBlock(9, 9, 9, [6, 6, 2], [7, 7, 3])
+  ];
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false
+  });
+
+  for (const parentElementId of selected) {
+    assert.equal(
+      result.cellData.filter((cell) =>
+        cell.parentElementId === parentElementId && cell.role === "selected"
+      ).length,
+      8
+    );
+  }
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(result.mesh) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
+});
+
 test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () => {
   const mesh = createButterflyOgridBar(6);
   const selected = Array.from({ length: 24 }, (_, index) => 25 + index);
@@ -2326,6 +2394,31 @@ test("Hex 2:1 session preparation can keep a local box core", () => {
   });
   const refined = buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 1e-9 });
   assert.equal(refined.elements.length, 283);
+  assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
+});
+
+test("Hex 2:1 session refinement preserves an explicit L-shaped core", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 2);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const selectedElementIds = [
+    ...idsInIndexBlock(5, 5, 2, [0, 0, 0], [3, 1, 1]),
+    ...idsInIndexBlock(5, 5, 2, [0, 2, 0], [1, 3, 1])
+  ];
+  const selectedCellIds = selectedElementIds
+    .map((elementId) => activeBuildCellIdByElementId(active, elementId))
+    .filter(Boolean);
+
+  refineSessionPatch(session, selectedCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: active
+  });
+  const refined = buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 1e-9 });
+
+  assert.equal(refined.elements.length, 328);
+  assert.equal(refined.nodes.length, 473);
   assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
 });
 

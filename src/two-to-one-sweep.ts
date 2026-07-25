@@ -11,8 +11,11 @@ import { inferHexElementLattice, type HexElementLattice } from "./regularization
 import { H1_FACES } from "./topology.js";
 import {
   markedCornerSignature,
+  pattern3PairTemplateLibrary,
   regularSweepCornerSigns,
   regularSweepTemplateLibrary,
+  type Pattern3Half,
+  type Pattern3Symbol,
   type RegularSweepTemplate
 } from "./two-to-one-sweep-templates.js";
 
@@ -29,6 +32,22 @@ interface IndexBox {
   max: Index3;
 }
 
+interface LogicalSelection {
+  cells: Index3[];
+  cellKeys: ReadonlySet<string>;
+  bounds: IndexBox;
+  completeBox: boolean;
+}
+
+interface SweepPatch {
+  axis: number;
+  plane: number;
+  firstCrossAxis: number;
+  firstMin: number;
+  secondCrossAxis: number;
+  secondMin: number;
+}
+
 interface SweepPassResult {
   mesh: Mesh;
   logicalCoordinates: LogicalPoint[];
@@ -39,8 +58,8 @@ const AXIS_ORDER = [2, 1, 0] as const;
 
 /**
  * Build a local mapped-box 2:1 transition using the Owen/Shih three-sweep
- * construction. Returns undefined when the input is not a complete mapped
- * rectangular selection so the caller can retain another strategy.
+ * construction. Returns undefined when the input is not a mapped logical
+ * selection so the caller can retain another strategy.
  */
 export function tryBuildLocalTwoToOneHexReplacements(
   mesh: Mesh,
@@ -52,8 +71,11 @@ export function tryBuildLocalTwoToOneHexReplacements(
   }
   const tolerance = minElementEdgeLength(mesh) * 0.000001;
   const lattice = inferHexElementLattice(mesh, tolerance);
-  const box = selectedIndexBox(selected, lattice);
-  if (!box || spansFullSection(box, lattice.dimensions)) {
+  const logicalSelection = selectedLogicalSelection(selected, lattice);
+  if (
+    !logicalSelection
+    || spansFullSection(logicalSelection, lattice.dimensions)
+  ) {
     return undefined;
   }
   const logicalCoordinates = logicalNodeCoordinates(mesh, lattice, tolerance);
@@ -70,11 +92,12 @@ export function tryBuildLocalTwoToOneHexReplacements(
   let lineage = mesh.elements.map((_, index) => index + 1);
 
   for (const axis of AXIS_ORDER) {
-    const markedNodes = markedNodesForSweep(currentLogical, box, axis, tolerance);
+    const patches = sweepPatches(logicalSelection, axis);
+    const markedNodes = markedNodesForSweep(currentLogical, patches, tolerance);
     if (markedNodes.size === 0) {
       throw new Error(`local 2:1 logical sweep on axis ${axis + 1} selected no nodes`);
     }
-    const planes = markPlanes(box, axis);
+    const planes = uniqueSorted(patches.map((patch) => patch.plane));
     const quads = logicalPlaneQuads(
       currentMesh,
       currentLogical,
@@ -110,14 +133,14 @@ export function tryBuildLocalTwoToOneHexReplacements(
     lineage,
     new Set(selected),
     lattice,
-    box
+    logicalSelection
   );
 }
 
-function selectedIndexBox(
+function selectedLogicalSelection(
   selected: readonly number[],
   lattice: HexElementLattice
-): IndexBox | undefined {
+): LogicalSelection | undefined {
   const indices = selected.map((elementId) => lattice.indicesByElementId.get(elementId));
   if (indices.some((index) => index === undefined)) {
     return undefined;
@@ -132,31 +155,49 @@ function selectedIndexBox(
   const expected = (max[0] - min[0] + 1)
     * (max[1] - min[1] + 1)
     * (max[2] - min[2] + 1);
-  if (expected !== selected.length) {
-    return undefined;
-  }
-  const selectedSet = new Set(selected);
-  for (let k = min[2]; k <= max[2]; k += 1) {
-    for (let j = min[1]; j <= max[1]; j += 1) {
-      for (let i = min[0]; i <= max[0]; i += 1) {
-        const elementId = lattice.elementIdByKey.get(indexKey([i, j, k]));
-        if (!elementId || !selectedSet.has(elementId)) {
-          return undefined;
-        }
-      }
-    }
-  }
-  return { min, max };
+  const cellKeys = new Set(typed.map(indexKey));
+  return {
+    cells: typed.map((index) => [...index]),
+    cellKeys,
+    bounds: { min, max },
+    completeBox: expected === selected.length
+      && allCellsPresent({ min, max }, cellKeys)
+  };
 }
 
-function spansFullSection(box: IndexBox, dimensions: Index3): boolean {
+function spansFullSection(
+  selection: LogicalSelection,
+  dimensions: Index3
+): boolean {
+  if (!selection.completeBox) {
+    return false;
+  }
   let completeAxes = 0;
   for (let axis = 0; axis < 3; axis += 1) {
-    if (box.min[axis] === 0 && box.max[axis] === dimensions[axis]! - 1) {
+    if (
+      selection.bounds.min[axis] === 0
+      && selection.bounds.max[axis] === dimensions[axis]! - 1
+    ) {
       completeAxes += 1;
     }
   }
   return completeAxes >= 2;
+}
+
+function allCellsPresent(
+  box: IndexBox,
+  cellKeys: ReadonlySet<string>
+): boolean {
+  for (let k = box.min[2]; k <= box.max[2]; k += 1) {
+    for (let j = box.min[1]; j <= box.max[1]; j += 1) {
+      for (let i = box.min[0]; i <= box.max[0]; i += 1) {
+        if (!cellKeys.has(indexKey([i, j, k]))) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
 }
 
 function logicalNodeCoordinates(
@@ -201,41 +242,102 @@ function logicalNodeCoordinates(
   return logical as LogicalPoint[];
 }
 
-function markPlanes(box: IndexBox, axis: number): number[] {
-  const planes: number[] = [];
-  for (
-    let plane = box.min[axis]! + 1;
-    plane <= box.max[axis]! + 1;
-    plane += 2
-  ) {
-    planes.push(plane);
+function sweepPatches(
+  selection: LogicalSelection,
+  axis: number
+): SweepPatch[] {
+  const crossAxes = [0, 1, 2].filter((candidate) => candidate !== axis);
+  const cellsByCrossSection = new Map<string, Index3[]>();
+  for (const cell of selection.cells) {
+    const key = `${cell[crossAxes[0]!]!}:${cell[crossAxes[1]!]!}`;
+    const cells = cellsByCrossSection.get(key) ?? [];
+    cells.push(cell);
+    cellsByCrossSection.set(key, cells);
   }
-  return planes;
+  const patches: SweepPatch[] = [];
+  for (const cells of cellsByCrossSection.values()) {
+    const axial = [...new Set(cells.map((cell) => cell[axis]!))].sort((a, b) => a - b);
+    const sample = cells[0]!;
+    let runStart = axial[0]!;
+    let runEnd = runStart;
+    const emitRun = (): void => {
+      for (let plane = runStart + 1; plane <= runEnd + 1; plane += 2) {
+        patches.push({
+          axis,
+          plane,
+          firstCrossAxis: crossAxes[0]!,
+          firstMin: sample[crossAxes[0]!]!,
+          secondCrossAxis: crossAxes[1]!,
+          secondMin: sample[crossAxes[1]!]!
+        });
+      }
+    };
+    for (const coordinate of axial.slice(1)) {
+      if (coordinate === runEnd + 1) {
+        runEnd = coordinate;
+        continue;
+      }
+      emitRun();
+      runStart = coordinate;
+      runEnd = coordinate;
+    }
+    emitRun();
+  }
+  return patches.sort((first, second) =>
+    first.plane - second.plane
+    || first.firstCrossAxis - second.firstCrossAxis
+    || first.firstMin - second.firstMin
+    || first.secondMin - second.secondMin
+  );
 }
 
 function markedNodesForSweep(
   logical: readonly LogicalPoint[],
-  box: IndexBox,
-  axis: number,
+  patches: readonly SweepPatch[],
   tolerance: number
 ): Set<number> {
-  const planes = markPlanes(box, axis);
-  const crossAxes = [0, 1, 2].filter((candidate) => candidate !== axis);
+  const axis = patches[0]?.axis;
+  if (axis === undefined) {
+    return new Set();
+  }
+  const cellsByPlane = new Map<number, Set<string>>();
+  for (const patch of patches) {
+    const cells = cellsByPlane.get(patch.plane) ?? new Set<string>();
+    cells.add(`${patch.firstMin}:${patch.secondMin}`);
+    cellsByPlane.set(patch.plane, cells);
+  }
   const marked = new Set<number>();
   logical.forEach((point, nodeIndex) => {
-    const onPlane = planes.some((plane) => Math.abs(point[axis]! - plane) <= tolerance);
-    if (!onPlane) {
+    const plane = Math.round(point[axis]!);
+    if (Math.abs(point[axis]! - plane) > tolerance) {
       return;
     }
-    const inside = crossAxes.every((crossAxis) =>
-      point[crossAxis]! >= box.min[crossAxis]! - tolerance
-      && point[crossAxis]! <= box.max[crossAxis]! + 1 + tolerance
-    );
-    if (inside) {
+    const cells = cellsByPlane.get(plane);
+    if (!cells) {
+      return;
+    }
+    const firstCrossAxis = patches[0]!.firstCrossAxis;
+    const secondCrossAxis = patches[0]!.secondCrossAxis;
+    const firstCandidates = containingLogicalCells(point[firstCrossAxis]!, tolerance);
+    const secondCandidates = containingLogicalCells(point[secondCrossAxis]!, tolerance);
+    if (firstCandidates.some((first) =>
+      secondCandidates.some((second) => cells.has(`${first}:${second}`))
+    )) {
       marked.add(nodeIndex + 1);
     }
   });
   return marked;
+}
+
+function containingLogicalCells(
+  coordinate: number,
+  tolerance: number
+): number[] {
+  const rounded = Math.round(coordinate);
+  if (Math.abs(coordinate - rounded) <= tolerance) {
+    return [rounded - 1, rounded];
+  }
+  return [Math.floor(coordinate)];
 }
 
 function logicalPlaneQuads(
@@ -246,6 +348,7 @@ function logicalPlaneQuads(
   tolerance: number
 ): number[][] {
   const quads = new Map<string, number[]>();
+  const planeSet = new Set(planes);
   for (const element of mesh.elements) {
     for (const faceTemplate of H1_FACES) {
       const face = faceTemplate.map((localId) => element[localId - 1]!);
@@ -255,7 +358,11 @@ function logicalPlaneQuads(
       )) {
         continue;
       }
-      if (!planes.some((plane) => Math.abs(coordinate - plane) <= tolerance)) {
+      const roundedPlane = Math.round(coordinate);
+      if (
+        Math.abs(coordinate - roundedPlane) > tolerance
+        || !planeSet.has(roundedPlane)
+      ) {
         continue;
       }
       quads.set([...face].sort((a, b) => a - b).join(":"), face);
@@ -344,21 +451,46 @@ function applyRegularSweepPass(
   tolerance: number
 ): SweepPassResult {
   const library = regularSweepTemplateLibrary();
+  const pattern3Library = pattern3PairTemplateLibrary();
   const cornerSigns = regularSweepCornerSigns();
-  const plans = mesh.elements.map((element, elementIndex) => {
-    const marks = cornerSigns.filter((_, corner) => markedNodes.has(element[corner]!));
-    if (marks.length === 0) {
-      return undefined;
+  const plans: Array<RegularSweepTemplate | Pattern3Half | undefined> =
+    mesh.elements.map((element, elementIndex) => {
+      const marks = cornerSigns.filter((_, corner) => markedNodes.has(element[corner]!));
+      if (marks.length === 0) {
+        return undefined;
+      }
+      const signature = markedCornerSignature(marks);
+      const plan = library.get(signature) ?? pattern3Library.get(signature);
+      if (!plan) {
+        throw new Error(
+          `local 2:1 sweep element ${elementIndex + 1} has unsupported marked-corner signature ` +
+          signature
+        );
+      }
+      return plan;
+    });
+  const unpairedFaces = new Map<string, number>();
+  plans.forEach((plan, elementIndex) => {
+    if (!isPattern3Half(plan)) {
+      return;
     }
-    const plan = library.get(markedCornerSignature(marks));
-    if (!plan) {
-      throw new Error(
-        `local 2:1 sweep element ${elementIndex + 1} has unsupported marked-corner signature ` +
-        markedCornerSignature(marks)
-      );
+    const element = mesh.elements[elementIndex]!;
+    const faceKey = plan.faceCorners
+      .map((corner) => element[corner]!)
+      .sort((a, b) => a - b)
+      .join(":");
+    if (unpairedFaces.has(faceKey)) {
+      unpairedFaces.delete(faceKey);
+    } else {
+      unpairedFaces.set(faceKey, elementIndex + 1);
     }
-    return plan;
   });
+  if (unpairedFaces.size > 0) {
+    throw new Error(
+      "local 2:1 pattern-3 elements have no partner sharing their marked face: " +
+      [...unpairedFaces.values()].sort((a, b) => a - b).join(", ")
+    );
+  }
 
   const outputNodes: Point[] = mesh.nodes.map((point) => [...point]);
   const outputLogical: LogicalPoint[] = logical.map((point) => [...point]);
@@ -366,12 +498,56 @@ function applyRegularSweepPass(
   mesh.nodes.forEach((_, index) => entityNodeId.set(`vertex:${index + 1}`, index + 1));
   const outputElements: Element[] = [];
   const parentToChildren: number[][] = [];
+  const mergeGroups = new Map<string, number[]>();
+
+  const internNode = (
+    key: string,
+    physical: Point,
+    logicalPoint: LogicalPoint
+  ): number => {
+    const existingNodeId = entityNodeId.get(key);
+    if (existingNodeId !== undefined) {
+      if (
+        !pointsEqual(outputNodes[existingNodeId - 1]!, physical, tolerance)
+        || !pointsEqual(outputLogical[existingNodeId - 1]!, logicalPoint, tolerance)
+      ) {
+        throw new Error(`local 2:1 sweep entity ${key} maps inconsistently`);
+      }
+      return existingNodeId;
+    }
+    const nodeId = outputNodes.length + 1;
+    outputNodes.push(physical);
+    outputLogical.push(logicalPoint);
+    entityNodeId.set(key, nodeId);
+    return nodeId;
+  };
 
   mesh.elements.forEach((element, parentIndex) => {
     const firstChild = outputElements.length;
     const plan = plans[parentIndex];
     if (!plan) {
       outputElements.push([...element]);
+    } else if (isPattern3Half(plan)) {
+      const resolve = (item: Pattern3Symbol): number => {
+        const nodeIds = item.corners
+          .map((corner) => element[corner]!)
+          .sort((a, b) => a - b);
+        if (item.kind === "corner") {
+          return nodeIds[0]!;
+        }
+        const physical = averagePoints(nodeIds.map((nodeId) => mesh.nodes[nodeId - 1]!));
+        const logicalPoint = averagePoints(
+          nodeIds.map((nodeId) => logical[nodeId - 1]!)
+        ) as LogicalPoint;
+        return internNode(`${item.kind}:${nodeIds.join(":")}`, physical, logicalPoint);
+      };
+      for (const child of plan.children) {
+        outputElements.push(child.map(resolve));
+      }
+      for (const group of plan.mergeGroups) {
+        const nodeIds = group.map(resolve).sort((a, b) => a - b);
+        mergeGroups.set(nodeIds.join(":"), nodeIds);
+      }
     } else {
       const localToGlobal = plan.nodes.map((reference) => {
         const physical = trilinearMap(
@@ -383,21 +559,7 @@ function applyRegularSweepPass(
           reference
         ) as LogicalPoint;
         const key = referenceEntityKey(element, reference, parentIndex);
-        const existingNodeId = entityNodeId.get(key);
-        if (existingNodeId !== undefined) {
-          if (
-            !pointsEqual(outputNodes[existingNodeId - 1]!, physical, tolerance)
-            || !pointsEqual(outputLogical[existingNodeId - 1]!, logicalPoint, tolerance)
-          ) {
-            throw new Error(`local 2:1 sweep entity ${key} maps inconsistently`);
-          }
-          return existingNodeId;
-        }
-        const nodeId = outputNodes.length + 1;
-        outputNodes.push(physical);
-        outputLogical.push(logicalPoint);
-        entityNodeId.set(key, nodeId);
-        return nodeId;
+        return internNode(key, physical, logicalPoint);
       });
       for (const child of plan.elements) {
         outputElements.push(child.map((localNodeId) => localToGlobal[localNodeId]!));
@@ -411,10 +573,104 @@ function applyRegularSweepPass(
     );
   });
 
+  const merged = mergePattern3Nodes(
+    outputNodes,
+    outputLogical,
+    outputElements,
+    [...mergeGroups.values()],
+    mesh.nodes.length
+  );
   return {
-    mesh: { kind: "H1", nodes: outputNodes, elements: outputElements },
-    logicalCoordinates: outputLogical,
+    mesh: { kind: "H1", nodes: merged.nodes, elements: merged.elements },
+    logicalCoordinates: merged.logicalCoordinates,
     parentToChildren
+  };
+}
+
+function isPattern3Half(
+  plan: RegularSweepTemplate | Pattern3Half | undefined
+): plan is Pattern3Half {
+  return plan?.name === "pattern3pair";
+}
+
+function mergePattern3Nodes(
+  nodes: readonly Point[],
+  logical: readonly LogicalPoint[],
+  elements: readonly Element[],
+  groups: readonly (readonly number[])[],
+  sourceNodeCount: number
+): {
+  nodes: Point[];
+  logicalCoordinates: LogicalPoint[];
+  elements: Element[];
+} {
+  if (groups.length === 0) {
+    return {
+      nodes: nodes.map((point) => [...point]),
+      logicalCoordinates: logical.map((point) => [...point]),
+      elements: elements.map((element) => [...element])
+    };
+  }
+  const parent = Array.from({ length: nodes.length + 1 }, (_, nodeId) => nodeId);
+  const find = (nodeId: number): number => {
+    let root = nodeId;
+    while (parent[root] !== root) {
+      root = parent[root]!;
+    }
+    while (parent[nodeId] !== nodeId) {
+      const next = parent[nodeId]!;
+      parent[nodeId] = root;
+      nodeId = next;
+    }
+    return root;
+  };
+  const unite = (first: number, second: number): void => {
+    const firstRoot = find(first);
+    const secondRoot = find(second);
+    if (firstRoot === secondRoot) {
+      return;
+    }
+    const keep = Math.min(firstRoot, secondRoot);
+    const retire = Math.max(firstRoot, secondRoot);
+    if (keep <= sourceNodeCount || retire <= sourceNodeCount) {
+      throw new Error("local 2:1 pattern-3 merge cannot retire a source node");
+    }
+    parent[retire] = keep;
+  };
+  for (const group of groups) {
+    for (const nodeId of group.slice(1)) {
+      unite(group[0]!, nodeId);
+    }
+  }
+
+  const membersByRoot = new Map<number, number[]>();
+  for (let nodeId = 1; nodeId <= nodes.length; nodeId += 1) {
+    const root = find(nodeId);
+    const members = membersByRoot.get(root) ?? [];
+    members.push(nodeId);
+    membersByRoot.set(root, members);
+  }
+  const compactNodeIdByRoot = new Map<number, number>();
+  const compactNodes: Point[] = [];
+  const compactLogical: LogicalPoint[] = [];
+  for (let nodeId = 1; nodeId <= nodes.length; nodeId += 1) {
+    const root = find(nodeId);
+    if (compactNodeIdByRoot.has(root)) {
+      continue;
+    }
+    const members = membersByRoot.get(root)!;
+    compactNodeIdByRoot.set(root, compactNodes.length + 1);
+    compactNodes.push(averagePoints(members.map((member) => nodes[member - 1]!)));
+    compactLogical.push(
+      averagePoints(members.map((member) => logical[member - 1]!)) as LogicalPoint
+    );
+  }
+  return {
+    nodes: compactNodes,
+    logicalCoordinates: compactLogical,
+    elements: elements.map((element) =>
+      element.map((nodeId) => compactNodeIdByRoot.get(find(nodeId))!)
+    )
   };
 }
 
@@ -453,7 +709,7 @@ function regroupByOriginalParent(
   lineage: readonly number[],
   selected: ReadonlySet<number>,
   lattice: HexElementLattice,
-  box: IndexBox
+  logicalSelection: LogicalSelection
 ): LocalTwoToOneReplacement[] {
   const childIndicesByParent = new Map<number, number[]>();
   lineage.forEach((parentId, childIndex) => {
@@ -469,7 +725,7 @@ function regroupByOriginalParent(
     const refinement = localRefinement(refinedMesh, childIndices, parentId);
     const role = selected.has(parentId)
       ? "selected"
-      : transitionRole(lattice.indicesByElementId.get(parentId)!, box);
+      : transitionRole(lattice.indicesByElementId.get(parentId)!, logicalSelection.cells);
     replacements.push({
       elementId: parentId,
       refinement,
@@ -518,10 +774,27 @@ function localRefinement(
   };
 }
 
-function transitionRole(index: Index3, box: IndexBox): LocalTwoToOneReplacement["role"] {
-  const outsideAxes = [0, 1, 2].filter((axis) =>
-    index[axis]! < box.min[axis]! || index[axis]! > box.max[axis]!
-  ).length;
+function transitionRole(
+  index: Index3,
+  selectedCells: readonly Index3[]
+): LocalTwoToOneReplacement["role"] {
+  const nearest = selectedCells
+    .map((selected) => {
+      const distances = [0, 1, 2].map((axis) =>
+        Math.abs(index[axis]! - selected[axis]!)
+      );
+      return {
+        maximumDistance: Math.max(...distances),
+        totalDistance: distances.reduce((sum, value) => sum + value, 0),
+        outsideAxes: distances.filter((distance) => distance > 0).length
+      };
+    })
+    .sort((first, second) =>
+      first.maximumDistance - second.maximumDistance
+      || first.totalDistance - second.totalDistance
+      || first.outsideAxes - second.outsideAxes
+    )[0];
+  const outsideAxes = nearest?.outsideAxes ?? 1;
   if (outsideAxes <= 1) {
     return "face-transition";
   }
@@ -549,6 +822,16 @@ function trilinearMap(
     }
   }
   return result;
+}
+
+function averagePoints(points: readonly Point[]): Point {
+  const sum = [0, 0, 0];
+  for (const point of points) {
+    for (let component = 0; component < 3; component += 1) {
+      sum[component] = sum[component]! + point[component]!;
+    }
+  }
+  return sum.map((value) => value / points.length);
 }
 
 function pointsEqual(
