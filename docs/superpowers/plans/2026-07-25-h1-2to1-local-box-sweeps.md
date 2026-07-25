@@ -97,9 +97,19 @@ this case. That count is a regression oracle, not a public API guarantee.
 
 ## Deferred Follow-Up
 
-- Paired pattern-3 handling for L-shaped or concave selections.
-- Multiple touching or disjoint local boxes in one operation.
 - General unstructured shell CSP beyond mapped logical lattices.
 - Browser control for explicitly choosing local-box versus full-section
   completion.
 
+## Completion Update
+
+The initial rectangular-box milestone was completed in commit `ea7df8c`.
+The following phase also completed the first two deferred items:
+
+- all 24 paired pattern-3 marked-face frames were ported;
+- L-shaped core output matches the Python oracle at 328 Hexes and 473 nodes;
+- multiple disjoint local cores are refined in the same three sweeps;
+- explicit unpaired pattern-3 states fail before mesh replacement.
+
+The browser now exposes the full-section/local-box choice. General unstructured
+shell planning remains outside this mapped-lattice sweep implementation.

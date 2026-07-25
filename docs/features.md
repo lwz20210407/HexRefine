@@ -99,7 +99,9 @@ For H1 `2:1`, selection preparation has two explicit modes:
   TrueGrid-derived seven-Hex transition-column field.
 - `local` preserves a complete rectangular logical core and constructs a
   multi-direction conforming shell. It supports straight and smoothly warped
-  mapped Hex blocks.
+  mapped Hex blocks. With regularization disabled, the same path supports
+  compatible L-shaped/concave cell unions through paired pattern-3 templates
+  and supports multiple disjoint local cores in one operation.
 
 ## Hierarchical Refinement Sessions
 

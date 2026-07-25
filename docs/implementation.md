@@ -80,8 +80,13 @@ strategies:
    through every temporary sweep so the selected core finishes with exactly
    eight children rather than being recursively over-refined.
 
-The local-box milestone supports complete rectangular selections. Paired
-pattern-3 support for concave or L-shaped cores is a later extension.
+The local sweep also supports compatible non-rectangular logical-cell unions.
+Each logical cell line is split into contiguous runs so separate runs keep
+their own alternating mark phase. Isolated three-corner signatures are handled
+by paired pattern-3 halves across their shared marked face. Their temporary
+edge and face nodes are merged at the prescribed barycenters after each pass,
+which seals the pillow interface without expanding an L-shaped core to its
+bounding box. Unpaired pattern-3 signatures are rejected atomically.
 
 The planner returns classified replacements with:
 

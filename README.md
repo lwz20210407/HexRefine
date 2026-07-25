@@ -38,8 +38,9 @@ customize for research, engineering experiments, and selected project work:
 - Automatic `2:1` completion of a local structured-Hex pick to an even,
   level-closed transverse section for box, preview, and GUI session workflows.
 - Optional local-box `2:1` mode for mapped structured Hex meshes. It keeps the
-  regularized rectangular core local and closes face, edge, and corner fronts
-  through three Owen/Shih directional sweeps.
+  core local and closes face, edge, and corner fronts through three Owen/Shih
+  directional sweeps. Paired pattern-3 templates support L-shaped and other
+  compatible concave unions, and disjoint cores can be refined together.
 - Optional logical `U`, `V`, or `W` transition-axis override in the API, command
   script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
@@ -53,10 +54,12 @@ then offline replay.
 The experimental `2:1` path supports two strategies. `section` mode uses
 TrueGrid-derived seven-Hex columns for one-direction, level-closed transition
 sections, including even O-grid sections with trivalent lines. `local` mode
-uses regular Owen templates to close all directions around a rectangular
-mapped-lattice core. Concave or L-shaped local cores, refinement across
-existing transition cells, irregular mixed-level domains, and automatic
-odd-section topology completion are not yet part of the TypeScript runtime.
+uses regular Owen templates plus a paired pattern-3 construction to close all
+directions around mapped-lattice cores. Rectangular, L-shaped, and disjoint
+logical-cell selections are covered by regression tests. Highly irregular
+selections that leave an unpaired pattern-3 face, refinement across existing
+transition cells, irregular mixed-level domains, and automatic odd-section
+topology completion are not yet part of the TypeScript runtime.
 Structured section completion selects a logical transition axis whose other two
 grid dimensions are even. The GUI `2:1 axis` control and the
 `hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported
@@ -64,7 +67,8 @@ transverse odd sections fail with an explicit diagnostic instead of producing a
 nonconforming mesh.
 
 Set `hexTwoToOneSelectionMode: "local"` or choose `2:1 domain -> Local box` in
-the browser to retain a local rectangular core. The default remains
+the browser to retain a local core. Disable regularization when an explicit
+non-rectangular logical-cell selection must be preserved. The default remains
 `"section"` for compatibility.
 
 ## Copyright And Version
