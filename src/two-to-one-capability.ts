@@ -25,7 +25,10 @@ export interface TwoToOneCompensationOptions {
 
 export interface TwoToOneCompensationCarrier {
   hexTwoToOneCompensation?: TwoToOneCompensationOptions;
-  /** Compatibility switch: false forces compensation mode to "none". */
+  /**
+   * @deprecated Use `hexTwoToOneCompensation.mode`. False forces `"none"`;
+   * true does not relax or override an explicit mode.
+   */
   rebuildExistingTransitions?: boolean;
 }
 
@@ -100,7 +103,7 @@ export class TwoToOnePlanningError<TId extends TwoToOneEntityId = number> extend
     super(message);
     this.name = "TwoToOnePlanningError";
     this.code = code;
-    this.diagnostic = diagnostic;
+    this.diagnostic = cloneTwoToOnePlanningDiagnostic(diagnostic);
   }
 
   toJSON(): TwoToOnePlanningErrorDto<TId> {
@@ -108,7 +111,7 @@ export class TwoToOnePlanningError<TId extends TwoToOneEntityId = number> extend
       name: "TwoToOnePlanningError",
       message: this.message,
       code: this.code,
-      diagnostic: this.diagnostic
+      diagnostic: cloneTwoToOnePlanningDiagnostic(this.diagnostic)
     };
   }
 }
@@ -128,46 +131,94 @@ export function normalizeTwoToOneCompensation(
 
   let compensation: TwoToOneCompensationOptions | undefined;
   if (Object.hasOwn(options, "hexTwoToOneCompensation")) {
-    const candidate: unknown = options.hexTwoToOneCompensation;
-    assertPlainObject(candidate, "hexTwoToOneCompensation");
-    compensation = candidate as TwoToOneCompensationOptions;
+    const compensationValue: unknown = options.hexTwoToOneCompensation;
+    assertPlainObject(compensationValue, "hexTwoToOneCompensation");
+    compensation = compensationValue as TwoToOneCompensationOptions;
   }
 
-  if (
-    compensation !== undefined
-    && Object.hasOwn(compensation, "mode")
-    && compensation.mode !== "none"
-    && compensation.mode !== "selection"
-    && compensation.mode !== "local-topology"
-  ) {
-    throw new TypeError("hexTwoToOneCompensation.mode must be none, selection, or local-topology");
-  }
-  if (
-    Object.hasOwn(options, "rebuildExistingTransitions")
-    && typeof options.rebuildExistingTransitions !== "boolean"
-  ) {
-    throw new TypeError("rebuildExistingTransitions must be a boolean");
+  let mode: TwoToOneCompensationMode | undefined;
+  if (compensation !== undefined && Object.hasOwn(compensation, "mode")) {
+    const modeValue: unknown = compensation.mode;
+    if (!isTwoToOneCompensationMode(modeValue)) {
+      throw new TypeError("hexTwoToOneCompensation.mode must be none, selection, or local-topology");
+    }
+    mode = modeValue;
   }
 
-  const maxAddedParentLayers =
-    compensation !== undefined && Object.hasOwn(compensation, "maxAddedParentLayers")
-      ? compensation.maxAddedParentLayers
-      : 1;
-  const maxAddedParentCount =
-    compensation !== undefined && Object.hasOwn(compensation, "maxAddedParentCount")
-      ? compensation.maxAddedParentCount
-      : Math.max(32, Math.ceil(originalSelectedParentCount * 0.25));
+  let rebuildExistingTransitions: boolean | undefined;
+  if (Object.hasOwn(options, "rebuildExistingTransitions")) {
+    const rebuildValue: unknown = options.rebuildExistingTransitions;
+    if (typeof rebuildValue !== "boolean") {
+      throw new TypeError("rebuildExistingTransitions must be a boolean");
+    }
+    rebuildExistingTransitions = rebuildValue;
+  }
+
+  let maxAddedParentLayers: unknown = 1;
+  if (compensation !== undefined && Object.hasOwn(compensation, "maxAddedParentLayers")) {
+    maxAddedParentLayers = compensation.maxAddedParentLayers;
+  }
+  let maxAddedParentCount: unknown =
+    Math.max(32, Math.ceil(originalSelectedParentCount * 0.25));
+  if (compensation !== undefined && Object.hasOwn(compensation, "maxAddedParentCount")) {
+    maxAddedParentCount = compensation.maxAddedParentCount;
+  }
 
   assertNonNegativeSafeInteger(maxAddedParentLayers, "maxAddedParentLayers");
   assertNonNegativeSafeInteger(maxAddedParentCount, "maxAddedParentCount");
 
   return {
-    mode: options.rebuildExistingTransitions === false
+    mode: rebuildExistingTransitions === false
       ? "none"
-      : compensation?.mode ?? "local-topology",
+      : mode ?? "local-topology",
     maxAddedParentLayers,
     maxAddedParentCount
   };
+}
+
+function cloneTwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId>(
+  diagnostic: TwoToOnePlanningDiagnostic<TId>
+): TwoToOnePlanningDiagnostic<TId> {
+  const conflictingInterfaces = diagnostic.conflictingInterfaces.map((entry) => {
+    const secondCellId = entry.secondCellId;
+    return {
+      firstCellId: entry.firstCellId,
+      ...(secondCellId === undefined ? {} : { secondCellId }),
+      faceNodeIds: [...entry.faceNodeIds]
+    };
+  });
+  const attemptedActions = diagnostic.attemptedActions.map((action) => {
+    const templateId = action.templateId;
+    return {
+      kind: action.kind,
+      reason: action.reason,
+      addedParentCellIds: [...action.addedParentCellIds],
+      replacedTransitionCellIds: [...action.replacedTransitionCellIds],
+      ...(templateId === undefined ? {} : { templateId })
+    };
+  });
+  const suggestion = diagnostic.suggestion;
+  const clonedSuggestion = suggestion === undefined
+    ? undefined
+    : {
+        kind: suggestion.kind,
+        ...(suggestion.axis === undefined ? {} : { axis: suggestion.axis }),
+        ...(suggestion.side === undefined ? {} : { side: suggestion.side }),
+        ...(suggestion.parentCellIds === undefined
+          ? {}
+          : { parentCellIds: [...suggestion.parentCellIds] })
+      };
+
+  return {
+    conflictingCellIds: [...diagnostic.conflictingCellIds],
+    conflictingInterfaces,
+    attemptedActions,
+    ...(clonedSuggestion === undefined ? {} : { suggestion: clonedSuggestion })
+  };
+}
+
+function isTwoToOneCompensationMode(value: unknown): value is TwoToOneCompensationMode {
+  return value === "none" || value === "selection" || value === "local-topology";
 }
 
 function assertNonNegativeSafeInteger(value: unknown, name: string): asserts value is number {

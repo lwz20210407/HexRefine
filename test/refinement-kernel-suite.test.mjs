@@ -70,6 +70,32 @@ const {
   undoRefinementSession
 } = api;
 
+function mutatePlanningDiagnostic(diagnostic) {
+  diagnostic.conflictingCellIds.push(99);
+  diagnostic.conflictingInterfaces[0].firstCellId = 99;
+  diagnostic.conflictingInterfaces[0].secondCellId = 98;
+  diagnostic.conflictingInterfaces[0].faceNodeIds.push(99);
+  diagnostic.conflictingInterfaces.push({
+    firstCellId: 97,
+    faceNodeIds: [5, 6, 7, 8]
+  });
+  diagnostic.attemptedActions[0].kind = "local-template";
+  diagnostic.attemptedActions[0].reason = "mutated";
+  diagnostic.attemptedActions[0].addedParentCellIds.push(96);
+  diagnostic.attemptedActions[0].replacedTransitionCellIds.push(95);
+  diagnostic.attemptedActions[0].templateId = "mutated-template";
+  diagnostic.attemptedActions.push({
+    kind: "transition-shell-rebuild",
+    reason: "mutated action list",
+    addedParentCellIds: [94],
+    replacedTransitionCellIds: [93]
+  });
+  diagnostic.suggestion.kind = "reduce-level";
+  diagnostic.suggestion.axis = 2;
+  diagnostic.suggestion.side = -1;
+  diagnostic.suggestion.parentCellIds.push(92);
+}
+
 test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
   assert.deepEqual(
     normalizeTwoToOneCompensation(8, {}),
@@ -94,6 +120,20 @@ test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
     }
   );
   assert.equal(
+    normalizeTwoToOneCompensation(200, {}).maxAddedParentCount,
+    50
+  );
+  assert.equal(
+    normalizeTwoToOneCompensation(201, {}).maxAddedParentCount,
+    51
+  );
+  assert.equal(
+    normalizeTwoToOneCompensation(8, {
+      hexTwoToOneCompensation: { mode: "none" }
+    }).mode,
+    "none"
+  );
+  assert.equal(
     normalizeTwoToOneCompensation(8, {
       hexTwoToOneCompensation: { mode: "selection" },
       rebuildExistingTransitions: false
@@ -107,6 +147,82 @@ test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
     }).mode,
     "selection"
   );
+  assert.equal(
+    normalizeTwoToOneCompensation(8, {
+      hexTwoToOneCompensation: { mode: "none" },
+      rebuildExistingTransitions: true
+    }).mode,
+    "none"
+  );
+});
+
+test("Hex 2:1 compensation options read own properties exactly once", () => {
+  let modeReadCount = 0;
+  const compensation = Object.defineProperty({}, "mode", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      modeReadCount += 1;
+      return modeReadCount === 1 ? "none" : "automatic";
+    }
+  });
+
+  const normalized = normalizeTwoToOneCompensation(8, {
+    hexTwoToOneCompensation: compensation
+  });
+
+  assert.equal(normalized.mode, "none");
+  assert.equal(modeReadCount, 1);
+});
+
+test("Hex 2:1 compensation options ignore inherited compatibility properties", () => {
+  const originalMode = Object.getOwnPropertyDescriptor(Object.prototype, "mode");
+  const originalRebuild = Object.getOwnPropertyDescriptor(
+    Object.prototype,
+    "rebuildExistingTransitions"
+  );
+
+  try {
+    Object.defineProperty(Object.prototype, "mode", {
+      configurable: true,
+      writable: true,
+      value: "none"
+    });
+    Object.defineProperty(Object.prototype, "rebuildExistingTransitions", {
+      configurable: true,
+      writable: true,
+      value: false
+    });
+
+    assert.equal(
+      normalizeTwoToOneCompensation(8, {
+        hexTwoToOneCompensation: {},
+        rebuildExistingTransitions: true
+      }).mode,
+      "local-topology"
+    );
+    assert.equal(
+      normalizeTwoToOneCompensation(8, {
+        hexTwoToOneCompensation: { mode: "selection" }
+      }).mode,
+      "selection"
+    );
+  } finally {
+    if (originalMode === undefined) {
+      delete Object.prototype.mode;
+    } else {
+      Object.defineProperty(Object.prototype, "mode", originalMode);
+    }
+    if (originalRebuild === undefined) {
+      delete Object.prototype.rebuildExistingTransitions;
+    } else {
+      Object.defineProperty(
+        Object.prototype,
+        "rebuildExistingTransitions",
+        originalRebuild
+      );
+    }
+  }
 });
 
 test("Hex 2:1 compensation options reject invalid runtime input", () => {
@@ -198,6 +314,50 @@ test("Hex 2:1 structured planning errors retain machine-readable diagnostics", (
   const serialized = serializeTwoToOnePlanningError(error);
   assert.equal(Object.getPrototypeOf(serialized), Object.prototype);
   assert.deepEqual(structuredClone(serialized), expectedDto);
+});
+
+test("Hex 2:1 structured planning errors isolate nested diagnostic snapshots", () => {
+  const diagnostic = {
+    conflictingCellIds: [11, 12],
+    conflictingInterfaces: [{
+      firstCellId: 11,
+      secondCellId: 12,
+      faceNodeIds: [1, 2, 3, 4]
+    }],
+    attemptedActions: [{
+      kind: "selection-expand",
+      reason: "close transition",
+      addedParentCellIds: [13],
+      replacedTransitionCellIds: [14],
+      templateId: "selection-shell"
+    }],
+    suggestion: {
+      kind: "expand-selection",
+      axis: 1,
+      side: 1,
+      parentCellIds: [15]
+    }
+  };
+  const expectedDiagnostic = structuredClone(diagnostic);
+  const error = new TwoToOnePlanningError(
+    "TWO_TO_ONE_COMPENSATION_LIMIT",
+    "compensation budget exhausted",
+    diagnostic
+  );
+
+  mutatePlanningDiagnostic(diagnostic);
+  assert.notEqual(error.diagnostic, diagnostic);
+  assert.deepEqual(error.diagnostic, expectedDiagnostic);
+
+  const dto = error.toJSON();
+  assert.notEqual(dto.diagnostic, error.diagnostic);
+  mutatePlanningDiagnostic(dto.diagnostic);
+  assert.deepEqual(error.diagnostic, expectedDiagnostic);
+
+  const serialized = serializeTwoToOnePlanningError(error);
+  assert.notEqual(serialized.diagnostic, error.diagnostic);
+  assert.notEqual(serialized.diagnostic, dto.diagnostic);
+  assert.deepEqual(serialized.diagnostic, expectedDiagnostic);
 });
 
 test("HexRefine offline memory planner selects a bounded heap from system RAM", async () => {

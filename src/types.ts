@@ -57,6 +57,7 @@ export interface RefineOptions {
    * closes it with the three-direction sweep strategy.
    */
   hexTwoToOneSelectionMode?: "section" | "local";
+  /** Bounded compensation policy used by Hex 2:1 planning entry points. */
   hexTwoToOneCompensation?: TwoToOneCompensationOptions;
   transitionSupportElementIds?: readonly number[];
   regularizeHexSelection?: boolean;
