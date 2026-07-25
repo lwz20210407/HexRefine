@@ -2160,6 +2160,68 @@ test("Hex 2:1 session preparation completes a local pick to a full section", () 
   assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
 });
 
+test("Hex 2:1 session preparation supports a second level inside the refined core", () => {
+  const mesh = createHexUnitCubeMesh(4, 4, 7);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session);
+  const firstCoreElementIds = idsInIndexBlock(4, 4, 7, [0, 0, 2], [3, 3, 4]);
+  const firstCoreCellIds = firstCoreElementIds
+    .map((elementId) => activeBuildCellIdByElementId(initial, elementId))
+    .filter(Boolean);
+
+  refineSessionPatch(session, firstCoreCellIds, {
+    hexRefinementRatio: 2,
+    includeTransitions: true,
+    activeBuild: initial
+  });
+
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const secondLevelCandidates = firstRefined.mesh.elements
+    .map((element, index) => {
+      const elementId = index + 1;
+      const cellId = activeBuildCellIdByElementId(firstRefined, elementId);
+      const cell = cellId ? session.cells.get(cellId) : undefined;
+      const centerZ = element.reduce(
+        (total, nodeId) => total + firstRefined.mesh.nodes[nodeId - 1][2],
+        0
+      ) / element.length;
+      return cell?.level === 1
+        && cell.role === "selected"
+        && centerZ > 0.45
+        && centerZ < 0.5
+        ? elementId
+        : undefined;
+    })
+    .filter((elementId) => elementId !== undefined);
+  assert.equal(secondLevelCandidates.length, 64);
+
+  const prepared = prepareSessionRefineSelection(
+    session,
+    firstRefined,
+    [secondLevelCandidates[0]],
+    {
+      hexRefinementRatio: 2,
+      regularizeHexSelection: true
+    }
+  );
+  assert.equal(prepared.elementIds.length, 64);
+
+  refineSessionPatch(session, prepared.cellIds, {
+    hexRefinementRatio: 2,
+    includeTransitions: true,
+    activeBuild: firstRefined
+  });
+  const twiceRefined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  assert.equal(twiceRefined.elements.length, 1856);
+  assert.equal(checkNoHangingNodes(twiceRefined, 1e-9).ok, true);
+});
+
 test("Hex refinement report identifies automatic transition templates", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 2);
   const result = refineByElementIdsWithReport(mesh, [1]);
