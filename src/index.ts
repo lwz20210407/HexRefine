@@ -13,6 +13,7 @@ export * as q1Operations from "./q1-operations.js";
 
 export * from "./types.js";
 export * from "./conformance.js";
+export * from "./hex-quality.js";
 export * from "./grid.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";

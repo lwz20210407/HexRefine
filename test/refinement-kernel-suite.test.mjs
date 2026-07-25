@@ -273,6 +273,86 @@ test("Hierarchical refinement session hides mother cells and supports undo redo"
   assert.equal(buildActiveMesh(session).elements.length, 27);
 });
 
+test("Hierarchical refinement session rejects inverted Hex children atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const before = {
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  };
+
+  assert.throws(
+    () => refineSessionCell(session, "e1", (vertices) => ({
+      kind: "H1",
+      source: "inverted_test_hex",
+      nodes: vertices.map((point) => [...point]),
+      elements: [[1, 4, 3, 2, 5, 8, 7, 6]]
+    })),
+    /non-positive scaled Jacobian/
+  );
+  assert.deepEqual({
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  }, before);
+});
+
+test("Hierarchical refinement session rejects incomplete Hex replacement volume atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const before = {
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  };
+
+  assert.throws(
+    () => refineSessionCell(session, "e1", (vertices) => {
+      const refinement = refineHexTo8Hex(vertices);
+      return {
+        ...refinement,
+        source: "incomplete_test_hex",
+        elements: [refinement.elements[0]]
+      };
+    }),
+    /does not conserve parent volume/
+  );
+  assert.deepEqual({
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  }, before);
+});
+
+test("Hierarchical refinement session validates every Hex parent before a batch mutation", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const before = {
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  };
+
+  assert.throws(
+    () => refineSessionCells(session, ["e1", "e2"], (vertices) => {
+      const refinement = refineHexTo8Hex(vertices);
+      const centerX = vertices.reduce((total, point) => total + point[0], 0)
+        / vertices.length;
+      return centerX < 0.5
+        ? refinement
+        : {
+            ...refinement,
+            source: "incomplete_batch_test_hex",
+            elements: [refinement.elements[0]]
+          };
+    }),
+    /does not conserve parent volume/
+  );
+  assert.deepEqual({
+    activeLeafIds: [...session.activeLeafIds],
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  }, before);
+});
+
 test("Hierarchical refinement session assigns stable numeric cell ordinals", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   assert.equal(session.cells.get("e1").ordinal, 1);

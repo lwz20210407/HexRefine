@@ -19,6 +19,7 @@ import {
   type ClassifiedReplacement
 } from "./refinement-planner.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
+import { auditHexRefinementQuality } from "./hex-quality.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -695,18 +696,24 @@ export function refineSessionCells(
   }
 
   const parentIds = validation.cellIds.sort(compareCellIds);
-  const createdCellIds: CellId[] = [];
-  const createdNodeIds: number[] = [];
-  const hiddenCellIds: CellId[] = [];
   const meshView = sessionMeshView(session);
-
-  for (const parentId of parentIds) {
+  const planned = parentIds.map((parentId) => {
     const parent = requiredCell(session, parentId);
-    const refinement = factory(elementVertices(meshView, parent.element));
+    const vertices = elementVertices(meshView, parent.element);
+    const refinement = factory(vertices);
     if (refinement.kind !== parent.kind) {
       throw new Error(`refinement kind ${refinement.kind} does not match parent kind ${parent.kind}`);
     }
+    if (parent.kind === "H1") {
+      assertHexRefinementQuality(vertices, refinement, `refinement of ${parentId}`);
+    }
+    return { parentId, parent, refinement };
+  });
+  const createdCellIds: CellId[] = [];
+  const createdNodeIds: number[] = [];
+  const hiddenCellIds: CellId[] = [];
 
+  for (const { parentId, parent, refinement } of planned) {
     const nodeOffset = session.nodes.length;
     for (const [index, point] of refinement.nodes.entries()) {
       session.nodes.push([...point]);
@@ -936,6 +943,9 @@ function buildRefinementSessionPatchPlan(
   const sourceReplacements = active === sourceActive
     ? replacements
     : mapPlanningReplacementsToSource(session, sourceActive, active, replacements);
+  if (session.kind === "H1") {
+    assertHexPatchQuality(sourceActive.mesh, sourceReplacements);
+  }
   if (usesSameLevelPlanning) {
     validateSameLevelPlanningConformance(
       sourceActive,
@@ -1344,6 +1354,73 @@ function buildElementIdsByNodeId(elements: readonly Element[]): Map<number, numb
     }
   });
   return elementIdsByNodeId;
+}
+
+function assertHexRefinementQuality(
+  parentVertices: readonly Point[],
+  refinement: LocalRefinement,
+  label: string
+): void {
+  const report = auditHexRefinementQuality(parentVertices, refinement);
+  if (report.parentMinimumOrientedScaledJacobian <= 0) {
+    throw new Error(
+      `${label} starts from a parent with non-positive scaled Jacobian ` +
+      `${report.parentMinimumOrientedScaledJacobian}`
+    );
+  }
+  if (report.childMinimumOrientedScaledJacobian <= 0) {
+    throw new Error(
+      `${label} produced a non-positive scaled Jacobian ` +
+      `${report.childMinimumOrientedScaledJacobian}`
+    );
+  }
+  if (report.relativeVolumeError > 1e-8) {
+    throw new Error(
+      `${label} does not conserve parent volume; relative error is ` +
+      `${report.relativeVolumeError}`
+    );
+  }
+}
+
+function assertHexPatchQuality(
+  sourceMesh: Mesh,
+  replacements: readonly ClassifiedReplacement[]
+): void {
+  let parentOrientedVolume = 0;
+  let childOrientedVolume = 0;
+  for (const replacement of replacements) {
+    const parent = sourceMesh.elements[replacement.elementId - 1];
+    if (!parent) {
+      throw new Error(`quality audit parent element ${replacement.elementId} is outside the active mesh`);
+    }
+    const report = auditHexRefinementQuality(
+      elementVertices(sourceMesh, parent),
+      replacement.refinement,
+      Number.POSITIVE_INFINITY
+    );
+    if (report.parentMinimumOrientedScaledJacobian <= 0) {
+      throw new Error(
+        `refinement of active element ${replacement.elementId} starts from a parent ` +
+        `with non-positive scaled Jacobian ${report.parentMinimumOrientedScaledJacobian}`
+      );
+    }
+    if (report.childMinimumOrientedScaledJacobian <= 0) {
+      throw new Error(
+        `refinement of active element ${replacement.elementId} produced a non-positive ` +
+        `scaled Jacobian ${report.childMinimumOrientedScaledJacobian}`
+      );
+    }
+    const orientation = report.parentSignedVolume < 0 ? -1 : 1;
+    parentOrientedVolume += orientation * report.parentSignedVolume;
+    childOrientedVolume += orientation * report.childSignedVolume;
+  }
+  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
+    / Math.max(parentOrientedVolume, Number.EPSILON);
+  if (relativeVolumeError > 1e-8) {
+    throw new Error(
+      `refinement patch does not conserve parent volume; relative error is ${relativeVolumeError}`
+    );
+  }
 }
 
 function namedSetEntries<T extends string | number>(
