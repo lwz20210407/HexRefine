@@ -19,6 +19,10 @@ import {
   type RegularSweepTemplate
 } from "./two-to-one-sweep-templates.js";
 import { DirectTwoToOnePlanningError } from "./two-to-one-capability.js";
+import {
+  normalizeTwoToOneSelection,
+  type NormalizedTwoToOneSelection
+} from "./two-to-one-selection.js";
 
 export interface LocalTwoToOneReplacement extends ReplaceElement {
   role: Exclude<RefinementRole, "unchanged">;
@@ -66,7 +70,16 @@ export function tryBuildLocalTwoToOneHexReplacements(
   mesh: Mesh,
   selectedElementIds: readonly number[]
 ): LocalTwoToOneReplacement[] | undefined {
-  const selected = uniqueSorted(selectedElementIds);
+  return tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
+    mesh,
+    normalizeTwoToOneSelection(mesh, selectedElementIds)
+  );
+}
+
+export function tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
+  mesh: Mesh,
+  selected: NormalizedTwoToOneSelection
+): LocalTwoToOneReplacement[] | undefined {
   if (selected.length === 0) {
     return [];
   }

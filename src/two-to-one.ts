@@ -10,8 +10,19 @@ import {
   type ReferencePoint3,
   type TwoWay7ReferenceTemplate
 } from "./two-to-one-templates.js";
-import { tryBuildLocalTwoToOneHexReplacements } from "./two-to-one-sweep.js";
+import {
+  tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection
+} from "./two-to-one-sweep.js";
 import { DirectTwoToOnePlanningError } from "./two-to-one-capability.js";
+import {
+  normalizeTwoToOneSelection,
+  type NormalizedTwoToOneSelection
+} from "./two-to-one-selection.js";
+
+export {
+  normalizeTwoToOneSelection,
+  type NormalizedTwoToOneSelection
+} from "./two-to-one-selection.js";
 
 export interface TwoToOneReplacement extends ReplaceElement {
   role: "selected" | "face-transition" | "edge-transition" | "corner-transition";
@@ -34,7 +45,7 @@ interface TransitionCell {
   elementId: number;
   innerFace: number;
   outerFace: number;
-  selectedOwnerElementId: number;
+  selectedOwnerElementIds: number[];
 }
 
 interface Candidate {
@@ -82,10 +93,19 @@ export function buildDirectTwoToOneHexPlan(
   mesh: Mesh,
   selectedElementIds: readonly number[]
 ): DirectTwoToOnePlan {
-  const selected = uniqueSorted(selectedElementIds);
-  assertSelectedElementIds(mesh, selected);
+  return buildDirectTwoToOneHexPlanFromNormalizedSelection(
+    mesh,
+    normalizeTwoToOneSelection(mesh, selectedElementIds)
+  );
+}
+
+export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
+  mesh: Mesh,
+  selected: NormalizedTwoToOneSelection
+): DirectTwoToOnePlan {
   const incidence = buildFaceIncidence(mesh);
-  const localReplacements = tryBuildLocalTwoToOneHexReplacements(mesh, selected);
+  const localReplacements =
+    tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(mesh, selected);
   if (localReplacements) {
     return {
       replacements: localReplacements,
@@ -210,28 +230,32 @@ function discoverTransitionCells(
     const transitionOwner = selected.has(first.elementId) ? second : first;
     const existing = cellsByElement.get(transitionOwner.elementId);
     if (existing) {
-      throw new DirectTwoToOnePlanningError(
-        "valence",
-        `2:1 transition columns overlap at element ${transitionOwner.elementId}; ` +
-        "intersecting face-transition shells require dedicated edge/corner templates",
-        uniqueSorted([
-          existing.selectedOwnerElementId,
-          selectedOwner.elementId,
-          transitionOwner.elementId
-        ])
-      );
+      existing.selectedOwnerElementIds.push(selectedOwner.elementId);
+      continue;
     }
     cellsByElement.set(transitionOwner.elementId, {
       elementId: transitionOwner.elementId,
       innerFace: transitionOwner.face,
       outerFace: OPPOSITE_FACE[transitionOwner.face]!,
-      selectedOwnerElementId: selectedOwner.elementId
+      selectedOwnerElementIds: [selectedOwner.elementId]
     });
   }
   if (cellsByElement.size === 0) {
     return [];
   }
-  return [...cellsByElement.values()].sort((a, b) => a.elementId - b.elementId);
+  const cells = [...cellsByElement.values()].sort((a, b) => a.elementId - b.elementId);
+  const conflict = cells.find((cell) =>
+    new Set(cell.selectedOwnerElementIds).size > 1
+  );
+  if (conflict) {
+    throw new DirectTwoToOnePlanningError(
+      "valence",
+      `2:1 transition columns overlap at element ${conflict.elementId}; ` +
+      "intersecting face-transition shells require dedicated edge/corner templates",
+      uniqueSorted([conflict.elementId, ...conflict.selectedOwnerElementIds])
+    );
+  }
+  return cells;
 }
 
 function buildTransitionConstraints(
@@ -741,21 +765,6 @@ function buildFaceIncidence(mesh: Mesh): Map<string, FaceOwner[]> {
     }
   }
   return incidence;
-}
-
-function assertSelectedElementIds(mesh: Mesh, selectedElementIds: readonly number[]): void {
-  const invalidElementIds = selectedElementIds.filter((elementId) =>
-    !Number.isSafeInteger(elementId)
-    || elementId < 1
-    || elementId > mesh.elements.length
-  );
-  if (invalidElementIds.length > 0) {
-    throw new DirectTwoToOnePlanningError(
-      "topology",
-      `selected Hex element ids are out of range: ${invalidElementIds.join(", ")}`,
-      invalidElementIds
-    );
-  }
 }
 
 function constraintComponents(

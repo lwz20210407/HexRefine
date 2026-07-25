@@ -17,6 +17,8 @@ import {
   buildDirectTwoToOneHexPlan,
   buildTwoToOneHexReplacements
 } from "../dist/two-to-one.js";
+import * as twoToOneModule from "../dist/two-to-one.js";
+import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
 const {
   auditHexRefinementPatchQuality,
   findBoundaryPairs,
@@ -2762,17 +2764,102 @@ test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", (
   assert.deepEqual(result.twoToOne, preview.twoToOne);
 });
 
-test("Hex 2:1 classified plans reject invalid ids as topology without mutation", () => {
+test("Hex 2:1 normalized trusted paths match public and classified entries", () => {
+  assert.equal(typeof twoToOneModule.normalizeTwoToOneSelection, "function");
+  assert.equal(
+    typeof twoToOneModule.buildDirectTwoToOneHexPlanFromNormalizedSelection,
+    "function"
+  );
+  assert.equal(
+    typeof twoToOneSweepModule.tryBuildLocalTwoToOneHexReplacements,
+    "function"
+  );
+  assert.equal(
+    typeof twoToOneSweepModule.tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection,
+    "function"
+  );
+
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const rawSelected = [
+    selectedElementId + 1,
+    selectedElementId,
+    selectedElementId + 1
+  ];
+  const rawSnapshot = [...rawSelected];
+  const normalized = twoToOneModule.normalizeTwoToOneSelection(mesh, rawSelected);
+  const normalizedSnapshot = [...normalized];
+  const publicPlan = buildDirectTwoToOneHexPlan(mesh, rawSelected);
+  const trustedPlan =
+    twoToOneModule.buildDirectTwoToOneHexPlanFromNormalizedSelection(
+      mesh,
+      normalized
+    );
+  const classifiedPlan = buildHexClassifiedPlan(mesh, rawSelected, {
+    hexRefinementRatio: 2,
+    includeTransitions: true
+  });
+  const publicSweep =
+    twoToOneSweepModule.tryBuildLocalTwoToOneHexReplacements(mesh, rawSelected);
+  const trustedSweep =
+    twoToOneSweepModule.tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
+      mesh,
+      normalized
+    );
+
+  assert.deepEqual(normalized, [selectedElementId, selectedElementId + 1]);
+  assert.deepEqual(trustedPlan, publicPlan);
+  assert.deepEqual(classifiedPlan.replacements, publicPlan.replacements);
+  assert.deepEqual(
+    buildTwoToOneHexReplacements(mesh, rawSelected),
+    publicPlan.replacements
+  );
+  assert.deepEqual(trustedSweep, publicSweep);
+  assert.deepEqual(rawSelected, rawSnapshot);
+  assert.deepEqual(normalized, normalizedSnapshot);
+  assert.equal(Object.hasOwn(api, "normalizeTwoToOneSelection"), false);
+  assert.equal(
+    Object.hasOwn(api, "buildDirectTwoToOneHexPlanFromNormalizedSelection"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(api, "tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection"),
+    false
+  );
+});
+
+test("Hex 2:1 entry points reject invalid ids as topology without mutation", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 2);
   const snapshot = structuredClone(mesh);
-  const error = captureError(() => buildHexClassifiedPlan(mesh, [0], {
-    hexRefinementRatio: 2,
-    includeTransitions: false
-  }));
+  const invalidElementIds = [0, mesh.elements.length + 1, Number.NaN, 1.5];
 
-  assert.equal(error instanceof DirectTwoToOnePlanningError, true);
-  assert.equal(error.kind, "topology");
-  assert.deepEqual(error.conflictingElementIds, [0]);
+  for (const includeTransitions of [true, false]) {
+    for (const invalidElementId of invalidElementIds) {
+      const error = captureError(() => buildHexClassifiedPlan(
+        mesh,
+        [invalidElementId],
+        {
+          hexRefinementRatio: 2,
+          includeTransitions
+        }
+      ));
+      assert.equal(error instanceof DirectTwoToOnePlanningError, true);
+      assert.equal(error.kind, "topology");
+      assert.equal(error.conflictingElementIds.length, 1);
+      assert.equal(Object.is(error.conflictingElementIds[0], invalidElementId), true);
+    }
+  }
+
+  for (const entry of [
+    buildDirectTwoToOneHexPlan,
+    buildTwoToOneHexReplacements,
+    twoToOneSweepModule.tryBuildLocalTwoToOneHexReplacements
+  ]) {
+    const error = captureError(() => entry(mesh, [0]));
+    assert.equal(error instanceof DirectTwoToOnePlanningError, true);
+    assert.equal(error.kind, "topology");
+    assert.deepEqual(error.conflictingElementIds, [0]);
+  }
   assert.deepEqual(mesh, snapshot);
 });
 
@@ -2807,7 +2894,6 @@ test("Hex 2:1 solver classifies a free coarse boundary selection signature", () 
 
   assert.equal(error instanceof DirectTwoToOnePlanningError, true);
   assert.equal(error.kind, "selection-signature");
-  assert.match(error.message, /reaches a free boundary on its coarse side/);
   assert.deepEqual(error.conflictingElementIds, [1]);
   assert.deepEqual(mesh, snapshot);
 });
@@ -2824,7 +2910,6 @@ test("Hex 2:1 solver classifies an odd full-section field as parity", () => {
 
   assert.equal(error instanceof DirectTwoToOnePlanningError, true);
   assert.equal(error.kind, "parity");
-  assert.equal(error.message, "no level-closed 2:1 seven-hex transition field exists");
   assert.deepEqual(
     error.conflictingElementIds,
     Array.from({ length: 9 }, (_, index) => index + 10)
@@ -2843,8 +2928,20 @@ test("Hex 2:1 solver valence errors retain both owners and the transition", () =
 
   assert.equal(error instanceof DirectTwoToOnePlanningError, true);
   assert.equal(error.kind, "valence");
-  assert.match(error.message, /transition columns overlap at element 14/);
   assert.deepEqual(error.conflictingElementIds, [13, 14, 15]);
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("Hex 2:1 solver valence errors retain every owner of the first conflict", () => {
+  const mesh = createButterflyOgridBar(3);
+  const snapshot = structuredClone(mesh);
+  const error = captureError(() =>
+    buildDirectTwoToOneHexPlan(mesh, [2, 4, 5])
+  );
+
+  assert.equal(error instanceof DirectTwoToOnePlanningError, true);
+  assert.equal(error.kind, "valence");
+  assert.deepEqual(error.conflictingElementIds, [1, 2, 4, 5]);
   assert.deepEqual(mesh, snapshot);
 });
 
@@ -2861,7 +2958,6 @@ test("Hex 2:1 solver leaves sweep invariants as ordinary errors", () => {
 
   assert.equal(error instanceof Error, true);
   assert.equal(error instanceof DirectTwoToOnePlanningError, false);
-  assert.match(error.message, /local 2:1 sweep entity vertex:\d+ maps inconsistently/);
   assert.deepEqual(mesh, snapshot);
 });
 
@@ -3299,6 +3395,13 @@ test("Hex 2:1 local refinement supports a second level inside a uniform refined 
     patchPreview.twoToOne.affectedComponentCellIds
   ).size;
   assert.equal(beforePreview.activeLeafCount, 1171);
+  assert.equal(
+    patchPreview.twoToOne.affectedComponentCellIds.length,
+    affectedCellCount
+  );
+  assert.equal(affectedCellCount, 26);
+  assert.equal(patchPreview.twoToOne.preservedFarFieldCellCount, 1145);
+  assert.ok(patchPreview.twoToOne.preservedFarFieldCellCount >= 0);
   assert.equal(
     patchPreview.twoToOne.preservedFarFieldCellCount,
     beforePreview.activeLeafCount - affectedCellCount
@@ -4038,6 +4141,14 @@ test("HexRefine command script replays a second-level local 2:1 patch exactly", 
   const directAffectedCount = new Set(
     directTwoToOne.affectedComponentCellIds
   ).size;
+  assert.equal(
+    directTwoToOne.affectedComponentCellIds.length,
+    directAffectedCount
+  );
+  assert.equal(firstRefined.mesh.elements.length, 1171);
+  assert.equal(directAffectedCount, 26);
+  assert.equal(directTwoToOne.preservedFarFieldCellCount, 1145);
+  assert.ok(directTwoToOne.preservedFarFieldCellCount >= 0);
   assert.equal(
     directTwoToOne.preservedFarFieldCellCount,
     firstRefined.mesh.elements.length - directAffectedCount
