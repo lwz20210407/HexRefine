@@ -45,6 +45,9 @@ customize for research, engineering experiments, and selected project work:
   script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
   each level again uses one uniform core pass and one transition-parent layer.
+  Preview and execution share the same session planner, and a nested patch is
+  rejected atomically when its new shell would intersect an existing
+  transition layer.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide
@@ -60,6 +63,10 @@ logical-cell selections are covered by regression tests. Highly irregular
 selections that leave an unpaired pattern-3 face, refinement across existing
 transition cells, irregular mixed-level domains, and automatic odd-section
 topology completion are not yet part of the TypeScript runtime.
+Repeated local refinement reconstructs a same-level, non-transition planning
+domain from the hierarchy. A shared-face center-direction fallback recovers
+logical axes when earlier sweeps changed local corner orientation, including
+moderately warped mapped cores.
 Structured section completion selects a logical transition axis whose other two
 grid dimensions are even. The GUI `2:1 axis` control and the
 `hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported

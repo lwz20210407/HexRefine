@@ -88,6 +88,14 @@ edge and face nodes are merged at the prescribed barycenters after each pass,
 which seals the pillow interface without expanding an L-shaped core to its
 bounding box. Unpaired pattern-3 signatures are rejected atomically.
 
+Repeated local `2:1` refinement does not run the planner over the mixed active
+mesh. The session layer extracts active, refinable cells at the selected level
+and excludes all existing transition-role cells. Preview and execution call the
+same session patch planner. Before any hierarchy mutation, the planned
+replacements are mapped back onto the complete active mesh and passed through
+`checkNoHangingNodes`; a nested core that reaches an existing transition layer
+is therefore rejected without creating nodes, cells, or undo history.
+
 The planner returns classified replacements with:
 
 - Parent element id.
@@ -132,9 +140,14 @@ history, which lets it validate arbitrary meshes.
 Hex regularization lives in `src/regularization.ts`.
 
 The goal is to turn a candidate set into a complete uvw block. The code first
-tries topology-based lattice inference from shared faces. If that fails, it
-falls back to coordinate-center lattice inference. It then crops the candidate
-bounding range until it finds a complete block.
+tries topology-based lattice inference from shared faces. If local Hex corner
+orientations differ, it next estimates three independent logical directions
+from shared-face neighbor-center vectors and propagates integer cell indices.
+Only then does it fall back to coordinate-center lattice inference. The
+direction-based path keeps repeated refinement available on moderately warped
+mapped cores whose physical coordinates do not form separable x/y/z ranks.
+The regularizer then crops the candidate bounding range until it finds a
+complete block.
 
 The regularizer also supports a boundary-shell mode. In this mode the crop only
 requires the outer one-layer uvw shell to be complete in the candidate set; the

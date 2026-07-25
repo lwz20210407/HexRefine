@@ -101,6 +101,12 @@ regular Owen templates are applied with topological node sharing, and temporary
 children retain original-parent lineage before they are regrouped into normal
 replacement records.
 
+For repeated local `2:1`, `refinement-session.ts` builds a planning mesh from
+same-level active cells that are not transition cells. `previewSessionPatch`
+and `refineSessionPatch` share this plan. The plan is remapped to the complete
+active mesh and checked for hanging nodes before the hierarchy is mutated, so a
+new local shell cannot silently cut through an older transition layer.
+
 ## Session Flow
 
 `RefinementSession` keeps a hierarchy of cells instead of immediately discarding

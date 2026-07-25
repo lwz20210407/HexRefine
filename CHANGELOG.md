@@ -4,6 +4,12 @@
 
 Private/custom performance edition.
 
+- Added repeated local H1 `2:1` refinement inside same-level uniform cores,
+  including warped mapped cores with differing child corner orientations.
+- Added a shared session patch planner for preview and execution, plus an
+  atomic full-mesh conformance gate before nested `2:1` hierarchy mutation.
+- Added exact command replay, undo/redo, and cell/node set-remap regression
+  coverage for second-level local `2:1` refinement.
 - Added shared-kernel support for disconnected Hex selection regions, with
   per-region uvw regularization before refinement.
 - Improved large-mesh GUI rendering with cached WebGL surface/edge paths.
