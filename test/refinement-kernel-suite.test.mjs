@@ -57,6 +57,7 @@ const {
   regularizeHexSelection,
   regularizeTwoToOneHexSelection,
   remapSessionSetsToActiveMesh,
+  serializeTwoToOnePlanningError,
   refineQ1To3x3,
   refineQ1To4Q1,
   refineQ1To5Q1,
@@ -108,6 +109,59 @@ test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
   );
 });
 
+test("Hex 2:1 compensation options reject invalid runtime input", () => {
+  for (const count of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => normalizeTwoToOneCompensation(count, {}),
+      RangeError
+    );
+  }
+
+  for (const options of [null, [], new Date(), () => undefined]) {
+    assert.throws(
+      () => normalizeTwoToOneCompensation(8, options),
+      TypeError
+    );
+  }
+
+  for (const compensation of [null, [], new Date()]) {
+    assert.throws(
+      () => normalizeTwoToOneCompensation(8, {
+        hexTwoToOneCompensation: compensation
+      }),
+      TypeError
+    );
+  }
+
+  assert.throws(
+    () => normalizeTwoToOneCompensation(8, {
+      hexTwoToOneCompensation: { mode: "automatic" }
+    }),
+    TypeError
+  );
+  assert.throws(
+    () => normalizeTwoToOneCompensation(8, {
+      rebuildExistingTransitions: "false"
+    }),
+    TypeError
+  );
+
+  for (const limit of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => normalizeTwoToOneCompensation(8, {
+        hexTwoToOneCompensation: { maxAddedParentLayers: limit }
+      }),
+      RangeError
+    );
+    assert.throws(
+      () => normalizeTwoToOneCompensation(8, {
+        hexTwoToOneCompensation: { maxAddedParentCount: limit }
+      }),
+      RangeError
+    );
+  }
+});
+
 test("Hex 2:1 structured planning errors retain machine-readable diagnostics", () => {
   const diagnostic = {
     conflictingCellIds: [11, 12],
@@ -130,6 +184,20 @@ test("Hex 2:1 structured planning errors retain machine-readable diagnostics", (
   assert.equal(error.code, "TWO_TO_ONE_UNSUPPORTED_PARITY");
   assert.deepEqual(error.diagnostic, diagnostic);
   assert.equal(error.diagnostic.suggestion.axis, 1);
+  assert.equal(error instanceof Error, true);
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+
+  const expectedDto = {
+    name: "TwoToOnePlanningError",
+    message: "odd periodic transition field",
+    code: "TWO_TO_ONE_UNSUPPORTED_PARITY",
+    diagnostic
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(error)), expectedDto);
+
+  const serialized = serializeTwoToOnePlanningError(error);
+  assert.equal(Object.getPrototypeOf(serialized), Object.prototype);
+  assert.deepEqual(structuredClone(serialized), expectedDto);
 });
 
 test("HexRefine offline memory planner selects a bounded heap from system RAM", async () => {

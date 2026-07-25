@@ -25,6 +25,7 @@
     "examples/browser",
     "examples/output",
     "test",
+    "!test/types",
     "README.md",
     "LICENSE",
     "CONTRIBUTING.md",
@@ -61,7 +62,7 @@
     "prepack": "npm run build",
     "release": "npm test && npm run examples:vtk && npm run standalone:build && node scripts/prepare-release.mjs && npm pack --pack-destination release --cache .npm-cache",
     "standalone:build": "node scripts/build-standalone-lite.mjs",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p test/types/tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {

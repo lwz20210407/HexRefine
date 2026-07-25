@@ -1,11 +1,16 @@
 import type {
+  RefineOptions,
+  RefinementResult,
   TwoToOneCapabilityReport,
   TwoToOneCompensationAction,
+  TwoToOneCompensationOptions,
   TwoToOnePlanningDiagnostic,
   TwoToOnePlanningError,
+  TwoToOnePlanningErrorDto,
   TwoToOnePlanningStatus,
-  TwoToOneTopologyClass
-} from "./two-to-one-capability.js";
+  TwoToOneTopologyClass,
+  serializeTwoToOnePlanningError
+} from "../../src/index.js";
 
 type Equal<TLeft, TRight> =
   (<T>() => T extends TLeft ? 1 : 2) extends
@@ -64,4 +69,38 @@ type PlanningDiagnosticDefaultIdContract = Expect<Equal<
 type PlanningErrorDefaultIdContract = Expect<Equal<
   TwoToOnePlanningError["diagnostic"],
   TwoToOnePlanningDiagnostic<number>
+>>;
+
+type PlanningErrorDtoFieldsContract = Expect<
+  TwoToOnePlanningErrorDto extends {
+    name: "TwoToOnePlanningError";
+    message: string;
+    code: TwoToOnePlanningError["code"];
+    diagnostic: TwoToOnePlanningDiagnostic<number>;
+  }
+    ? true
+    : false
+>;
+
+type PlanningErrorJsonContract = Expect<Equal<
+  ReturnType<TwoToOnePlanningError["toJSON"]>,
+  TwoToOnePlanningErrorDto<number>
+>>;
+
+type PlanningErrorSerializerContract = Expect<
+  typeof serializeTwoToOnePlanningError extends (
+    error: TwoToOnePlanningError<number>
+  ) => TwoToOnePlanningErrorDto<number>
+    ? true
+    : false
+>;
+
+type RefineOptionsCompensationContract = Expect<Equal<
+  RefineOptions["hexTwoToOneCompensation"],
+  TwoToOneCompensationOptions | undefined
+>>;
+
+type RefinementResultReportContract = Expect<Equal<
+  RefinementResult["twoToOne"],
+  TwoToOneCapabilityReport<number> | undefined
 >>;
