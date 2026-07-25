@@ -93,8 +93,50 @@ mesh. The session layer extracts active, refinable cells at the selected level
 and excludes all existing transition-role cells. Preview and execution call the
 same session patch planner. Before any hierarchy mutation, the planned
 replacements are mapped back onto the complete active mesh and passed through
-`checkNoHangingNodes`; a nested core that reaches an existing transition layer
-is therefore rejected without creating nodes, cells, or undo history.
+`checkNoHangingNodes`.
+
+If that gate finds that a nested local core reaches an existing transition
+shell, the default session path can rebuild one untouched supporting patch.
+The operation runs on a cloned session first and restores only the connected
+support component containing the selected fine cells. Its initial rebuilt core
+is the previous core plus transition parents that share a face with the new
+patch. The planner first tries that exact irregular core; only unsupported Owen
+corner signatures or unpaired pattern-3 faces trigger completion to the minimum
+logical bounding block of that local core. Disconnected support components
+remain untouched. Bounding completion is limited to the original component and
+its one-face-neighbor parents, and a rebuilt plan may not consume cells owned by
+another refinement command.
+
+The requested fine cells are remapped by exact vertex geometry before the next
+level is applied. The internal patches are committed as one command whose
+active-cell delta records newly created leaves and existing coarse parents
+reactivated by the rebuild. Undo therefore returns exactly to the pre-request
+mesh and redo restores the complete result. The command quality summary audits
+the net transaction boundary (`before - after` parents against `after - before`
+children), so intermediate rebuilt cells are not counted twice.
+The net audit is also the final transaction gate: non-positive oriented
+Jacobians or relative volume error above `1e-8` discard the cloned session
+instead of committing it.
+
+Compound preview is explicitly aggregate: it returns an empty per-parent
+`plan`, exact final and changed-input counts, and the same net quality summary
+as execution. It does not invent template codes or distribute output counts
+across obsolete input cells. Command replay exercises the same transactional
+path. Callers can set `rebuildExistingTransitions: false` to retain the original
+atomic rejection behavior.
+
+Conformance collisions and patch-quality failures use distinct structured error
+codes. A warped mapped candidate that reports a provisional volume error is
+eligible for rebuilding only when its selected cell also has an exact shared
+face with an active transition cell; the rebuilt transaction must then pass the
+same net quality gate.
+
+Automatic rebuilding currently requires the selected cells to come from one
+supporting refinement command and every cell in that supporting level to remain
+an active leaf. A shell spanning multiple history commands, or a shell already
+partly refined by later commands, is rejected explicitly rather than reordered.
+Structured affine and lightly warped mapped-block collisions are covered by
+regression tests.
 
 The planner returns classified replacements with:
 

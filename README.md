@@ -45,9 +45,14 @@ customize for research, engineering experiments, and selected project work:
   script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
   each level again uses one uniform core pass and one transition-parent layer.
-  Preview and execution share the same session planner, and a nested patch is
-  rejected atomically when its new shell would intersect an existing
-  transition layer.
+  When a nested local patch reaches one untouched transition shell from its
+  supporting refinement command, the session restores only that connected
+  support component, promotes the prior core plus directly colliding transition
+  parents, and rebuilds the shell before applying the new level. The exact
+  irregular core is tried first; minimum logical-block completion is only a
+  parity fallback. Preview, execution, command replay, undo, and redo use the
+  same transactional path. Set `rebuildExistingTransitions: false` to keep
+  strict atomic rejection instead.
 - Atomic H1 session quality gates reject inverted children and volume loss
   before nodes, cells, or undo history are mutated. Single-parent refinements
   conserve volume per parent; multi-parent transition macros conserve the
@@ -73,12 +78,17 @@ uses regular Owen templates plus a paired pattern-3 construction to close all
 directions around mapped-lattice cores. Rectangular, L-shaped, and disjoint
 logical-cell selections are covered by regression tests. Highly irregular
 selections that leave an unpaired pattern-3 face, refinement across existing
-transition cells, irregular mixed-level domains, and automatic odd-section
-topology completion are not yet part of the TypeScript runtime.
+transition shells created by multiple or partially modified history commands,
+irregular mixed-level domains, and automatic odd-section topology completion
+are not yet part of the TypeScript runtime.
 Repeated local refinement reconstructs a same-level, non-transition planning
 domain from the hierarchy. A shared-face center-direction fallback recovers
 logical axes when earlier sweeps changed local corner orientation, including
 moderately warped mapped cores.
+Transition-shell rebuilding uses an aggregate preview because its compound
+coarsen/rebuild/refine transaction has no honest one-template-per-input
+decomposition. The final element count, changed-input count, and net quality
+summary are exact; the per-parent `plan` is empty in this mode.
 Structured section completion selects a logical transition axis whose other two
 grid dimensions are even. The GUI `2:1 axis` control and the
 `hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported
@@ -87,8 +97,9 @@ nonconforming mesh.
 
 The current 2:1 scope is intentionally limited to structured or recoverable
 mapped lattices and even full-section O-grid interfaces. Arbitrary unstructured
-Hex topology, odd-section topology compensation, and transition-shell
-intersection rebuilding remain outside the first contribution scope.
+Hex topology, odd-section topology compensation, and general transition-shell
+collision rebuilding across independently modified histories remain outside
+the first contribution scope.
 
 Set `hexTwoToOneSelectionMode: "local"` or choose `2:1 domain -> Local box` in
 the browser to retain a local core. Disable regularization when an explicit

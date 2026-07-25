@@ -10,6 +10,18 @@ Private/custom performance edition.
   atomic full-mesh conformance gate before nested `2:1` hierarchy mutation.
 - Added exact command replay, undo/redo, and cell/node set-remap regression
   coverage for second-level local `2:1` refinement.
+- Added transactional rebuilding for a nested local `2:1` patch that reaches
+  one untouched existing transition shell. Only the connected support
+  component and directly colliding transition parents are promoted; logical
+  block completion is a parity fallback rather than the default. The rebuild
+  is committed with the new level as one replayable undo command, with an
+  aggregate preview and net before/after quality audit. Affine and lightly
+  warped mapped-block collisions are covered. Strict rejection remains
+  available through `rebuildExistingTransitions: false`.
+- Added provenance and one-ring authorization guards for rebuilt support plans,
+  structured collision/quality error codes, and a final net-quality transaction
+  gate. Negative-orientation Hexes now use the shared per-corner oriented
+  Jacobian calculation.
 - Added atomic H1 session quality validation for positive oriented corner
   scaled Jacobians and signed-volume conservation before hierarchy mutation.
 - Added aggregate volume validation for multi-parent transition macros, while
