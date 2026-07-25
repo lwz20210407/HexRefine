@@ -162,7 +162,7 @@ export function minimumHexCornerScaledJacobian(
   return minimumOrientedHexCornerScaledJacobian(vertices, 1);
 }
 
-function minimumOrientedHexCornerScaledJacobian(
+export function minimumOrientedHexCornerScaledJacobian(
   vertices: readonly Point[],
   orientation: number
 ): number {

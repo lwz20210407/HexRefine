@@ -22,8 +22,12 @@ import {
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 import {
   auditHexRefinementPatchQuality,
-  auditHexRefinementQuality
+  auditHexRefinementQuality,
+  hexElementSignedVolume,
+  minimumOrientedHexCornerScaledJacobian
 } from "./hex-quality.js";
+import { inferHexElementLattice } from "./regularization.js";
+import { H1_FACES } from "./topology.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -48,6 +52,8 @@ export interface RefinementSessionCommand {
   kind: "refine";
   hiddenCellIds: CellId[];
   createdCellIds: CellId[];
+  activeCreatedCellIds?: CellId[];
+  reactivatedCellIds?: CellId[];
   createdNodeIds: number[];
   quality?: HexRefinementQualitySummary;
 }
@@ -144,6 +150,11 @@ export interface RefinementSessionPatchOptions {
   includeTransitions?: boolean;
   hexRefinementRatio?: 2 | 3;
   hexTwoToOneSelectionMode?: "section" | "local";
+  /**
+   * Rebuild one untouched supporting 2:1 shell when a nested local patch
+   * reaches it. Set false to preserve strict collision rejection.
+   */
+  rebuildExistingTransitions?: boolean;
   transitionSupportCellIds?: readonly CellId[];
   mergeTolerance?: number;
   activeBuild?: ActiveMeshBuildResult;
@@ -791,7 +802,22 @@ export function refineSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
-  const plan = buildRefinementSessionPatchPlan(session, cellIds, options);
+  let plan: RefinementSessionPatchPlan;
+  try {
+    plan = buildRefinementSessionPatchPlan(session, cellIds, options);
+  } catch (error) {
+    if (shouldRebuildExistingTransitionShell(session, cellIds, options, error)) {
+      return refineSessionPatchWithRebuiltTransitionShell(session, cellIds, options);
+    }
+    throw error;
+  }
+  return applyRefinementSessionPatchPlan(session, plan);
+}
+
+function applyRefinementSessionPatchPlan(
+  session: RefinementSession,
+  plan: RefinementSessionPatchPlan
+): RefinementSessionCommand {
   const {
     planningActive: active,
     replacements,
@@ -858,6 +884,657 @@ export function refineSessionPatch(
   return command;
 }
 
+const EXISTING_TRANSITION_COLLISION_ERROR =
+  "second-level local 2:1 refinement would create a nonconforming interface with an existing transition layer";
+
+class ExistingTransitionCollisionError extends Error {
+  readonly code = "EXISTING_TRANSITION_COLLISION";
+}
+
+class HexPatchQualityError extends Error {
+  constructor(
+    readonly code:
+      | "HEX_PATCH_PARENT_JACOBIAN"
+      | "HEX_PATCH_CHILD_JACOBIAN"
+      | "HEX_PATCH_VOLUME",
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function shouldRebuildExistingTransitionShell(
+  session: RefinementSession,
+  cellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions,
+  error: unknown
+): boolean {
+  if (
+    options.rebuildExistingTransitions === false
+    || options.hexRefinementRatio !== 2
+    || options.hexTwoToOneSelectionMode !== "local"
+    || !(error instanceof Error)
+  ) {
+    return false;
+  }
+  const validation = validateRefinementSessionSelection(session, [...cellIds]);
+  if (!validation.ok || validation.level === undefined || validation.level < 1) {
+    return false;
+  }
+  return error instanceof ExistingTransitionCollisionError
+    || (
+      error instanceof HexPatchQualityError
+      && error.code === "HEX_PATCH_VOLUME"
+      && selectionTouchesActiveTransitionCell(
+        session,
+        validation.cellIds,
+        validation.level
+      )
+    );
+}
+
+function selectionTouchesActiveTransitionCell(
+  session: RefinementSession,
+  selectedCellIds: readonly CellId[],
+  level: number
+): boolean {
+  const selectedFaceKeys = new Set(selectedCellIds.flatMap((cellId) =>
+    refinementCellFaceKeys(session, requiredCell(session, cellId))
+  ));
+  for (const cellId of session.activeLeafIds) {
+    const cell = requiredCell(session, cellId);
+    if (
+      cell.level === level
+      && isTransitionSessionCell(cell)
+      && refinementCellFaceKeys(session, cell).some((key) => selectedFaceKeys.has(key))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function refineSessionPatchWithRebuiltTransitionShell(
+  session: RefinementSession,
+  cellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions
+): RefinementSessionCommand {
+  const working = cloneRefinementSession(session);
+  const validation = validateRefinementSessionSelection(working, [...cellIds]);
+  if (!validation.ok || validation.level === undefined || validation.level < 1) {
+    throw new Error(validation.errors.join("; ") || "transition-shell rebuilding requires a refined selection");
+  }
+  const selectedLevel = validation.level;
+  const supportCommand = findSingleSupportCommand(working, validation.cellIds);
+  const allSupportLayerCellIds = supportCommand.createdCellIds.filter((cellId) => {
+    const cell = working.cells.get(cellId);
+    return cell?.level === selectedLevel && cell.parentId !== undefined;
+  });
+  if (allSupportLayerCellIds.length === 0) {
+    throw new Error("automatic transition-shell rebuilding could not find the supporting refinement layer");
+  }
+  const supportLayerCellIds = collectConnectedSupportLayerCells(
+    working,
+    allSupportLayerCellIds,
+    validation.cellIds
+  );
+  const collidingTransitionParentIds = findCollidingTransitionParentIds(
+    working,
+    validation.cellIds,
+    supportLayerCellIds,
+    selectedLevel,
+    options
+  );
+  if (collidingTransitionParentIds.length === 0) {
+    throw new Error("automatic transition-shell rebuilding could not isolate the colliding transition parents");
+  }
+  const nonLeafSupportCellIds = supportLayerCellIds.filter((cellId) => {
+    const cell = requiredCell(working, cellId);
+    return !cell.active || cell.hidden || !working.activeLeafIds.has(cellId);
+  });
+  if (nonLeafSupportCellIds.length > 0) {
+    throw new Error(
+      `automatic transition-shell rebuilding requires an untouched supporting layer: ${nonLeafSupportCellIds.join(", ")}`
+    );
+  }
+
+  const originalActiveLeafIds = new Set(session.activeLeafIds);
+  const originalCellIds = new Set(session.cells.keys());
+  const originalNodeCount = session.nodes.length;
+  const originalUndoStack = working.undoStack.slice();
+  const compoundCommandId = `cmd-${session.nextCommandId}`;
+  const selectedGeometryKeys = validation.cellIds.map((cellId) =>
+    refinementCellGeometryKey(working, requiredCell(working, cellId))
+  );
+  const originalSupportParentIds = [...new Set(supportLayerCellIds.map((cellId) => {
+    const parentId = requiredCell(working, cellId).parentId;
+    if (parentId === undefined) {
+      throw new Error(`supporting cell ${cellId} has no parent`);
+    }
+    return parentId;
+  }))].sort(compareCellIds);
+  const previousCoreParentIds = [...new Set(supportLayerCellIds
+    .filter((cellId) => requiredCell(working, cellId).role === "selected")
+    .map((cellId) => requiredCell(working, cellId).parentId)
+    .filter((parentId): parentId is CellId => parentId !== undefined))];
+  const rebuiltCoreParentIds = [...new Set([
+    ...previousCoreParentIds,
+    ...collidingTransitionParentIds
+  ])].sort(compareCellIds);
+
+  for (const cellId of supportLayerCellIds) {
+    const cell = requiredCell(working, cellId);
+    cell.active = false;
+    cell.hidden = true;
+    removeActiveLeafCellId(working, cellId);
+  }
+  for (const parentId of originalSupportParentIds) {
+    const parent = requiredCell(working, parentId);
+    parent.active = true;
+    parent.hidden = false;
+    addActiveLeafCellId(working, parentId);
+  }
+  const authorizedCompletionParentIds = collectAuthorizedCompletionParentIds(
+    working,
+    originalSupportParentIds,
+    supportCommand,
+    selectedLevel - 1
+  );
+
+  const retryOptions: RefinementSessionPatchOptions = {
+    ...options,
+    rebuildExistingTransitions: false
+  };
+  delete retryOptions.activeBuild;
+  delete retryOptions.transitionSupportCellIds;
+  const rebuiltSupportPlan = buildCompletedRebuiltSupportPlan(
+    working,
+    rebuiltCoreParentIds,
+    authorizedCompletionParentIds,
+    retryOptions
+  );
+  validateRebuiltSupportPlanOwnership(
+    working,
+    rebuiltSupportPlan.hiddenCellIds,
+    originalSupportParentIds,
+    supportCommand
+  );
+  const rebuiltSupportCommand = applyRefinementSessionPatchPlan(
+    working,
+    rebuiltSupportPlan
+  );
+  const rebuiltSelectedCellsByGeometry = new Map<string, CellId>();
+  for (const cellId of rebuiltSupportCommand.createdCellIds) {
+    const cell = requiredCell(working, cellId);
+    if (cell.level === selectedLevel && cell.role === "selected" && cell.active) {
+      rebuiltSelectedCellsByGeometry.set(refinementCellGeometryKey(working, cell), cellId);
+    }
+  }
+  const remappedCellIds = selectedGeometryKeys.map((key) => {
+    const cellId = rebuiltSelectedCellsByGeometry.get(key);
+    if (cellId === undefined) {
+      throw new Error("automatic transition-shell rebuilding could not preserve the selected fine-cell geometry");
+    }
+    return cellId;
+  });
+  refineSessionPatch(working, remappedCellIds, retryOptions);
+
+  const createdCellIds = [...working.cells.keys()]
+    .filter((cellId) => !originalCellIds.has(cellId))
+    .sort(compareCellIds);
+  const activeCreatedCellIds = createdCellIds.filter((cellId) => working.activeLeafIds.has(cellId));
+  const reactivatedCellIds = [...working.activeLeafIds]
+    .filter((cellId) => originalCellIds.has(cellId) && !originalActiveLeafIds.has(cellId))
+    .sort(compareCellIds);
+  const hiddenCellIds = [...originalActiveLeafIds]
+    .filter((cellId) => !working.activeLeafIds.has(cellId))
+    .sort(compareCellIds);
+  const quality = session.kind === "H1"
+    ? auditNetHexCellReplacementQuality(
+        session,
+        hiddenCellIds,
+        working,
+        [...activeCreatedCellIds, ...reactivatedCellIds]
+      )
+    : undefined;
+  if (quality && !quality.ok) {
+    throw new Error(
+      "automatic transition-shell rebuilding failed its net quality gate: " +
+      `parent minimum Jacobian ${quality.parentMinimumOrientedScaledJacobian}, ` +
+      `child minimum Jacobian ${quality.childMinimumOrientedScaledJacobian}, ` +
+      `relative volume error ${quality.relativeVolumeError}`
+    );
+  }
+  const createdNodeIds = Array.from(
+    { length: working.nodes.length - originalNodeCount },
+    (_, index) => originalNodeCount + index + 1
+  );
+  const command: RefinementSessionCommand = {
+    id: compoundCommandId,
+    kind: "refine",
+    hiddenCellIds,
+    createdCellIds,
+    activeCreatedCellIds,
+    reactivatedCellIds,
+    createdNodeIds,
+    ...(quality ? { quality } : {})
+  };
+  working.undoStack = [...originalUndoStack, command];
+  working.redoStack = [];
+  working.nextCommandId = session.nextCommandId + 1;
+  replaceRefinementSessionState(session, working);
+  return command;
+}
+
+function buildCompletedRebuiltSupportPlan(
+  session: RefinementSession,
+  initialCoreParentIds: readonly CellId[],
+  authorizedCompletionParentIds: ReadonlySet<CellId>,
+  options: RefinementSessionPatchOptions
+): RefinementSessionPatchPlan {
+  const selectedCellIds = [...initialCoreParentIds].sort(compareCellIds);
+  try {
+    return buildRefinementSessionPatchPlan(session, selectedCellIds, options);
+  } catch (error) {
+    if (
+      !(error instanceof Error)
+      || !(
+        error.message.includes("unsupported marked-corner signature")
+        || error.message.includes("pattern-3 elements have no partner")
+      )
+    ) {
+      throw error;
+    }
+  }
+  const validation = validateRefinementSessionSelection(session, selectedCellIds);
+  if (!validation.ok || validation.level === undefined) {
+    throw new Error(validation.errors.join("; "));
+  }
+  const completedCellIds = completeLogicalSupportParentBlock(
+    session,
+    selectedCellIds,
+    validation.level,
+    authorizedCompletionParentIds,
+    options
+  );
+  return buildRefinementSessionPatchPlan(session, completedCellIds, options);
+}
+
+function completeLogicalSupportParentBlock(
+  session: RefinementSession,
+  parentIds: readonly CellId[],
+  level: number,
+  authorizedCellIds: ReadonlySet<CellId>,
+  options: RefinementSessionPatchOptions
+): CellId[] {
+  const active = level > 0
+    ? buildSameLevelRefinementPlanningMesh(session, level, options)
+    : buildRefinementPatchActiveMesh(session, parentIds, options);
+  const elementIds = parentIds.map((cellId) => {
+    const elementId = activeBuildElementIdByCellId(session, active, cellId);
+    if (elementId === undefined) {
+      throw new Error(`supporting parent ${cellId} is outside the restored level-${level} mesh`);
+    }
+    return elementId;
+  });
+  const tolerance = options.mergeTolerance ?? minElementEdgeLength(active.mesh) * 0.000001;
+  const lattice = inferHexElementLattice(active.mesh, tolerance);
+  const indices = elementIds.map((elementId) => lattice.indicesByElementId.get(elementId));
+  if (indices.some((value) => value === undefined)) {
+    throw new Error("automatic transition-shell rebuilding requires a recoverable logical parent lattice");
+  }
+  const typedIndices = indices as Array<[number, number, number]>;
+  const min = ([0, 1, 2] as const).map((axis) =>
+    Math.min(...typedIndices.map((value) => value[axis]))
+  ) as [number, number, number];
+  const max = ([0, 1, 2] as const).map((axis) =>
+    Math.max(...typedIndices.map((value) => value[axis]))
+  ) as [number, number, number];
+  const completedParentIds: CellId[] = [];
+  for (let i = min[0]; i <= max[0]; i += 1) {
+    for (let j = min[1]; j <= max[1]; j += 1) {
+      for (let k = min[2]; k <= max[2]; k += 1) {
+        const elementId = lattice.elementIdByKey.get(`${i}:${j}:${k}`);
+        const cellId = elementId === undefined
+          ? undefined
+          : activeBuildCellIdByElementId(active, elementId);
+        if (cellId === undefined) {
+          throw new Error("automatic transition-shell rebuilding found a hole in the logical parent block");
+        }
+        const cell = requiredCell(session, cellId);
+        if (!isRefinableSessionCell(cell) || cell.level !== level) {
+          throw new Error(`logical support parent ${cellId} is not an active refinable level-${level} cell`);
+        }
+        if (!authorizedCellIds.has(cellId)) {
+          throw new Error(
+            `logical support completion would cross the authorized support component at ${cellId}`
+          );
+        }
+        completedParentIds.push(cellId);
+      }
+    }
+  }
+  return completedParentIds.sort(compareCellIds);
+}
+
+function collectAuthorizedCompletionParentIds(
+  session: RefinementSession,
+  originalSupportParentIds: readonly CellId[],
+  supportCommand: RefinementSessionCommand,
+  parentLevel: number
+): Set<CellId> {
+  const authorized = new Set(originalSupportParentIds);
+  const supportCreatedCellIds = new Set(supportCommand.createdCellIds);
+  const boundaryFaceKeys = new Set(originalSupportParentIds.flatMap((cellId) =>
+    refinementCellFaceKeys(session, requiredCell(session, cellId))
+  ));
+  for (const cellId of session.activeLeafIds) {
+    if (authorized.has(cellId)) {
+      continue;
+    }
+    const cell = requiredCell(session, cellId);
+    if (
+      cell.level !== parentLevel
+      || !isRefinableSessionCell(cell)
+      || !(
+        cell.parentId === undefined
+        || supportCreatedCellIds.has(cellId)
+      )
+    ) {
+      continue;
+    }
+    if (refinementCellFaceKeys(session, cell).some((faceKey) => boundaryFaceKeys.has(faceKey))) {
+      authorized.add(cellId);
+    }
+  }
+  return authorized;
+}
+
+function validateRebuiltSupportPlanOwnership(
+  session: RefinementSession,
+  replacementParentIds: readonly CellId[],
+  originalSupportParentIds: readonly CellId[],
+  supportCommand: RefinementSessionCommand
+): void {
+  const originalSupport = new Set(originalSupportParentIds);
+  const supportCreated = new Set(supportCommand.createdCellIds);
+  for (const cellId of replacementParentIds) {
+    const cell = requiredCell(session, cellId);
+    if (
+      originalSupport.has(cellId)
+      || cell.parentId === undefined
+      || supportCreated.has(cellId)
+    ) {
+      continue;
+    }
+    throw new Error(
+      `automatic transition-shell rebuilding would cross refinement-command provenance at ${cellId}`
+    );
+  }
+}
+
+function findCollidingTransitionParentIds(
+  session: RefinementSession,
+  selectedCellIds: readonly CellId[],
+  supportLayerCellIds: readonly CellId[],
+  level: number,
+  options: RefinementSessionPatchOptions
+): CellId[] {
+  const planningActive = buildSameLevelRefinementPlanningMesh(session, level, options);
+  const selectedElementIds = selectedCellIds.map((cellId) => {
+    const elementId = activeBuildElementIdByCellId(session, planningActive, cellId);
+    if (elementId === undefined) {
+      throw new Error(`selected cell ${cellId} is outside the level-${level} collision-planning mesh`);
+    }
+    return elementId;
+  });
+  const replacements = buildDefaultRefinementReplacements(
+    planningActive.mesh,
+    selectedElementIds,
+    {
+      includeTransitions: options.includeTransitions ?? true,
+      hexRefinementRatio: 2,
+      transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
+        .map((cellId) => activeBuildElementIdByCellId(session, planningActive, cellId))
+        .filter((elementId): elementId is number => elementId !== undefined),
+      regularizeHexSelection: false,
+      ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+    }
+  );
+  const replacementFaceKeys = new Set(replacements.flatMap((replacement) => {
+    const cellId = activeBuildCellIdByElementId(planningActive, replacement.elementId);
+    return cellId === undefined
+      ? []
+      : refinementCellFaceKeys(session, requiredCell(session, cellId));
+  }));
+  return [...new Set(supportLayerCellIds
+    .filter((cellId) => {
+      const cell = requiredCell(session, cellId);
+      return isTransitionSessionCell(cell)
+        && refinementCellFaceKeys(session, cell).some((faceKey) => replacementFaceKeys.has(faceKey));
+    })
+    .map((cellId) => requiredCell(session, cellId).parentId)
+    .filter((parentId): parentId is CellId => parentId !== undefined))]
+    .sort(compareCellIds);
+}
+
+function collectConnectedSupportLayerCells(
+  session: RefinementSession,
+  supportCellIds: readonly CellId[],
+  selectedCellIds: readonly CellId[]
+): CellId[] {
+  const supportSet = new Set(supportCellIds);
+  const selectedSupportCellIds = selectedCellIds.filter((cellId) => supportSet.has(cellId));
+  if (selectedSupportCellIds.length !== selectedCellIds.length) {
+    throw new Error("automatic transition-shell rebuilding selection is outside its supporting layer");
+  }
+  const cellIdsByFaceKey = new Map<string, CellId[]>();
+  const faceKeysByCellId = new Map<CellId, string[]>();
+  for (const cellId of supportCellIds) {
+    const cell = requiredCell(session, cellId);
+    const faceKeys = refinementCellFaceKeys(session, cell);
+    faceKeysByCellId.set(cellId, faceKeys);
+    for (const faceKey of faceKeys) {
+      const owners = cellIdsByFaceKey.get(faceKey) ?? [];
+      owners.push(cellId);
+      cellIdsByFaceKey.set(faceKey, owners);
+    }
+  }
+
+  const component = new Set<CellId>();
+  const queue = [selectedSupportCellIds[0]!];
+  while (queue.length > 0) {
+    const cellId = queue.pop()!;
+    if (component.has(cellId)) {
+      continue;
+    }
+    component.add(cellId);
+    for (const faceKey of faceKeysByCellId.get(cellId) ?? []) {
+      for (const neighborId of cellIdsByFaceKey.get(faceKey) ?? []) {
+        if (!component.has(neighborId)) {
+          queue.push(neighborId);
+        }
+      }
+    }
+  }
+  const outsideSelectedCellIds = selectedSupportCellIds.filter((cellId) => !component.has(cellId));
+  if (outsideSelectedCellIds.length > 0) {
+    throw new Error(
+      "automatic transition-shell rebuilding requires selected cells from one connected support component"
+    );
+  }
+  return [...component].sort(compareCellIds);
+}
+
+function refinementCellFaceKeys(
+  session: RefinementSession,
+  cell: RefinementSessionCell
+): string[] {
+  return H1_FACES.map((face) => face
+    .map((localNodeId) => {
+      const nodeId = cell.element[localNodeId - 1];
+      const point = nodeId === undefined ? undefined : session.nodes[nodeId - 1];
+      if (!point) {
+        throw new Error(`cell ${cell.id} has an invalid Hex face`);
+      }
+      return exactActiveMergeKey(point);
+    })
+    .sort()
+    .join("|"));
+}
+
+function auditNetHexCellReplacementQuality(
+  parentSession: RefinementSession,
+  parentCellIds: readonly CellId[],
+  childSession: RefinementSession,
+  childCellIds: readonly CellId[],
+  relativeVolumeTolerance = 1e-8
+): HexRefinementQualitySummary {
+  if (parentCellIds.length === 0 || childCellIds.length === 0) {
+    throw new Error("net Hex replacement quality audit requires parent and child cells");
+  }
+  const parent = summarizeHexSessionCells(parentSession, parentCellIds);
+  const child = summarizeHexSessionCells(childSession, childCellIds);
+  const parentOrientedVolume = parent.orientedVolume;
+  const childOrientedVolume = child.orientedVolume;
+  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
+    / Math.max(parentOrientedVolume, Number.EPSILON);
+  return {
+    ok: parent.minimumOrientedScaledJacobian > 0
+      && child.minimumOrientedScaledJacobian > 0
+      && relativeVolumeError <= relativeVolumeTolerance,
+    parentElementCount: parentCellIds.length,
+    childElementCount: childCellIds.length,
+    parentOrientedVolume,
+    childOrientedVolume,
+    relativeVolumeError,
+    parentMinimumOrientedScaledJacobian: parent.minimumOrientedScaledJacobian,
+    childMinimumOrientedScaledJacobian: child.minimumOrientedScaledJacobian
+  };
+}
+
+function summarizeHexSessionCells(
+  session: RefinementSession,
+  cellIds: readonly CellId[]
+): {
+  orientedVolume: number;
+  minimumOrientedScaledJacobian: number;
+} {
+  let orientedVolume = 0;
+  let minimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
+  for (const cellId of cellIds) {
+    const cell = requiredCell(session, cellId);
+    if (cell.kind !== "H1") {
+      throw new Error(`net Hex replacement quality audit received non-Hex cell ${cellId}`);
+    }
+    const vertices = elementVertices(sessionMeshView(session), cell.element);
+    const signedVolume = hexElementSignedVolume(vertices);
+    const orientation = signedVolume < 0 ? -1 : 1;
+    orientedVolume += orientation * signedVolume;
+    minimumOrientedScaledJacobian = Math.min(
+      minimumOrientedScaledJacobian,
+      minimumOrientedHexCornerScaledJacobian(vertices, orientation)
+    );
+  }
+  return {
+    orientedVolume,
+    minimumOrientedScaledJacobian
+  };
+}
+
+function findSingleSupportCommand(
+  session: RefinementSession,
+  cellIds: readonly CellId[]
+): RefinementSessionCommand {
+  const commands = new Set<RefinementSessionCommand>();
+  for (const cellId of cellIds) {
+    const command = [...session.undoStack]
+      .reverse()
+      .find((candidate) => candidate.createdCellIds.includes(cellId));
+    if (!command) {
+      throw new Error(`automatic transition-shell rebuilding cannot trace cell ${cellId} to a refinement command`);
+    }
+    commands.add(command);
+  }
+  if (commands.size !== 1) {
+    throw new Error("automatic transition-shell rebuilding requires cells from one supporting refinement command");
+  }
+  return [...commands][0]!;
+}
+
+function refinementCellGeometryKey(
+  session: RefinementSession,
+  cell: RefinementSessionCell
+): string {
+  return cell.element
+    .map((nodeId) => {
+      const point = session.nodes[nodeId - 1];
+      if (!point) {
+        throw new Error(`cell ${cell.id} references missing node ${nodeId}`);
+      }
+      return point.map((coordinate) => coordinate.toPrecision(17)).join(",");
+    })
+    .sort()
+    .join("|");
+}
+
+function cloneRefinementSession(session: RefinementSession): RefinementSession {
+  return {
+    baseMesh: cloneMesh(session.baseMesh),
+    kind: session.kind,
+    nodes: session.nodes.map((point) => [...point]),
+    cells: new Map([...session.cells].map(([cellId, cell]) => [cellId, {
+      ...cell,
+      element: [...cell.element],
+      children: [...cell.children]
+    }])),
+    activeLeafIds: new Set(session.activeLeafIds),
+    sortedActiveLeafIds: [...session.sortedActiveLeafIds],
+    sortedActiveLeafIdsDirty: session.sortedActiveLeafIdsDirty,
+    activeLeafIdsByNodeKey: new Map([...session.activeLeafIdsByNodeKey].map(([key, ownerIds]) => [
+      key,
+      [...ownerIds]
+    ])),
+    undoStack: session.undoStack.map(cloneRefinementSessionCommand),
+    redoStack: session.redoStack.map(cloneRefinementSessionCommand),
+    nextCommandId: session.nextCommandId,
+    nextCellOrdinal: session.nextCellOrdinal
+  };
+}
+
+function cloneRefinementSessionCommand(command: RefinementSessionCommand): RefinementSessionCommand {
+  return {
+    ...command,
+    hiddenCellIds: [...command.hiddenCellIds],
+    createdCellIds: [...command.createdCellIds],
+    ...(command.activeCreatedCellIds
+      ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
+      : {}),
+    ...(command.reactivatedCellIds
+      ? { reactivatedCellIds: [...command.reactivatedCellIds] }
+      : {}),
+    createdNodeIds: [...command.createdNodeIds]
+  };
+}
+
+function replaceRefinementSessionState(
+  target: RefinementSession,
+  source: RefinementSession
+): void {
+  target.baseMesh = source.baseMesh;
+  target.kind = source.kind;
+  target.nodes = source.nodes;
+  target.cells = source.cells;
+  target.activeLeafIds = source.activeLeafIds;
+  target.sortedActiveLeafIds = source.sortedActiveLeafIds;
+  target.sortedActiveLeafIdsDirty = source.sortedActiveLeafIdsDirty;
+  target.activeLeafIdsByNodeKey = source.activeLeafIdsByNodeKey;
+  target.undoStack = source.undoStack;
+  target.redoStack = source.redoStack;
+  target.nextCommandId = source.nextCommandId;
+  target.nextCellOrdinal = source.nextCellOrdinal;
+}
+
 export function previewSessionPatch(
   session: RefinementSession,
   cellIds: CellId[],
@@ -869,10 +1546,23 @@ export function previewSessionPatch(
     includeSessionNodeIdsByNodeId: false,
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
   });
-  const patch = buildRefinementSessionPatchPlan(session, cellIds, {
-    ...options,
-    activeBuild: sourceActive
-  });
+  let patch: RefinementSessionPatchPlan;
+  try {
+    patch = buildRefinementSessionPatchPlan(session, cellIds, {
+      ...options,
+      activeBuild: sourceActive
+    });
+  } catch (error) {
+    if (shouldRebuildExistingTransitionShell(session, cellIds, options, error)) {
+      return previewSessionPatchWithRebuiltTransitionShell(
+        session,
+        cellIds,
+        options,
+        sourceActive
+      );
+    }
+    throw error;
+  }
   const replacedIds = new Set(patch.sourceReplacements.map((replacement) => replacement.elementId));
   const plan = patch.sourceReplacements
     .map((replacement) => ({
@@ -901,6 +1591,45 @@ export function previewSessionPatch(
         + plan.reduce((total, item) => total + item.outputElementCount, 0)
     },
     ...(patch.quality ? { quality: patch.quality } : {})
+  };
+}
+
+function previewSessionPatchWithRebuiltTransitionShell(
+  session: RefinementSession,
+  cellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions,
+  sourceActive: ActiveMeshBuildResult
+): RefinementPreview {
+  const working = cloneRefinementSession(session);
+  const command = refineSessionPatch(working, [...cellIds], {
+    ...options,
+    activeBuild: sourceActive
+  });
+  const finalActive = buildActiveMeshWithMap(working, {
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+  });
+  const changedInputElementCount = command.hiddenCellIds.length;
+  const unchangedElementCount = sourceActive.mesh.elements.length - changedInputElementCount;
+  return {
+    kind: session.kind,
+    plan: [],
+    planMode: "aggregate",
+    compound: {
+      kind: "transition-shell-rebuild",
+      changedInputElementCount
+    },
+    summary: {
+      selectedElementCount: new Set(cellIds).size,
+      faceTransitionElementCount: 0,
+      edgeTransitionElementCount: 0,
+      cornerTransitionElementCount: 0,
+      unchangedElementCount,
+      estimatedOutputElementCount: finalActive.mesh.elements.length
+    },
+    ...(command.quality ? { quality: command.quality } : {})
   };
 }
 
@@ -965,9 +1694,6 @@ function buildRefinementSessionPatchPlan(
   const sourceReplacements = active === sourceActive
     ? replacements
     : mapPlanningReplacementsToSource(session, sourceActive, active, replacements);
-  const quality = session.kind === "H1" && sourceReplacements.length > 0
-    ? assertHexPatchQuality(sourceActive.mesh, sourceReplacements)
-    : undefined;
   if (usesSameLevelPlanning) {
     validateSameLevelPlanningConformance(
       sourceActive,
@@ -975,6 +1701,9 @@ function buildRefinementSessionPatchPlan(
       options.mergeTolerance
     );
   }
+  const quality = session.kind === "H1" && sourceReplacements.length > 0
+    ? assertHexPatchQuality(sourceActive.mesh, sourceReplacements)
+    : undefined;
 
   return {
     sourceActive,
@@ -1018,9 +1747,7 @@ function validateSameLevelPlanningConformance(
   const prospective = replaceElements(sourceActive.mesh, sourceReplacements, tolerance);
   const report = checkNoHangingNodes(prospective, tolerance);
   if (!report.ok) {
-    throw new Error(
-      "second-level local 2:1 refinement would create a nonconforming interface with an existing transition layer"
-    );
+    throw new ExistingTransitionCollisionError(EXISTING_TRANSITION_COLLISION_ERROR);
   }
 }
 
@@ -1160,6 +1887,12 @@ export function undoRefinementSession(session: RefinementSession): RefinementSes
     cell.hidden = true;
     removeActiveLeafCellId(session, cellId);
   }
+  for (const cellId of command.reactivatedCellIds ?? []) {
+    const cell = requiredCell(session, cellId);
+    cell.active = false;
+    cell.hidden = true;
+    removeActiveLeafCellId(session, cellId);
+  }
   for (const cellId of command.hiddenCellIds) {
     const cell = requiredCell(session, cellId);
     cell.active = true;
@@ -1181,7 +1914,13 @@ export function redoRefinementSession(session: RefinementSession): RefinementSes
     cell.hidden = true;
     removeActiveLeafCellId(session, cellId);
   }
-  for (const cellId of command.createdCellIds) {
+  for (const cellId of command.activeCreatedCellIds ?? command.createdCellIds) {
+    const cell = requiredCell(session, cellId);
+    cell.active = true;
+    cell.hidden = false;
+    addActiveLeafCellId(session, cellId);
+  }
+  for (const cellId of command.reactivatedCellIds ?? []) {
     const cell = requiredCell(session, cellId);
     cell.active = true;
     cell.hidden = false;
@@ -1411,19 +2150,22 @@ function assertHexPatchQuality(
 ): HexRefinementQualitySummary {
   const quality = auditHexRefinementPatchQuality(sourceMesh, replacements);
   if (quality.parentMinimumOrientedScaledJacobian <= 0) {
-    throw new Error(
+    throw new HexPatchQualityError(
+      "HEX_PATCH_PARENT_JACOBIAN",
       "refinement patch starts from a parent with non-positive scaled Jacobian " +
       `${quality.parentMinimumOrientedScaledJacobian}`
     );
   }
   if (quality.childMinimumOrientedScaledJacobian <= 0) {
-    throw new Error(
+    throw new HexPatchQualityError(
+      "HEX_PATCH_CHILD_JACOBIAN",
       "refinement patch produced a non-positive scaled Jacobian " +
       `${quality.childMinimumOrientedScaledJacobian}`
     );
   }
   if (quality.relativeVolumeError > 1e-8) {
-    throw new Error(
+    throw new HexPatchQualityError(
+      "HEX_PATCH_VOLUME",
       "refinement patch does not conserve parent volume; relative error is " +
       `${quality.relativeVolumeError}`
     );

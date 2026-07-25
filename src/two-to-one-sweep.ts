@@ -110,7 +110,8 @@ export function tryBuildLocalTwoToOneHexReplacements(
       currentMesh,
       currentLogical,
       normalizedMarks,
-      tolerance
+      tolerance,
+      lineage
     );
     const nextLineage = new Array<number>(pass.mesh.elements.length);
     pass.parentToChildren.forEach((childIndices, parentIndex) => {
@@ -578,7 +579,8 @@ function applyRegularSweepPass(
   mesh: Mesh,
   logical: readonly LogicalPoint[],
   markedNodes: ReadonlySet<number>,
-  tolerance: number
+  tolerance: number,
+  originalParentIds: readonly number[]
 ): SweepPassResult {
   const library = regularSweepTemplateLibrary();
   const pattern3Library = pattern3PairTemplateLibrary();
@@ -593,13 +595,14 @@ function applyRegularSweepPass(
       const plan = library.get(signature) ?? pattern3Library.get(signature);
       if (!plan) {
         throw new Error(
-          `local 2:1 sweep element ${elementIndex + 1} has unsupported marked-corner signature ` +
+          `local 2:1 sweep element ${elementIndex + 1} (source parent ${originalParentIds[elementIndex]}) ` +
+          "has unsupported marked-corner signature " +
           signature
         );
       }
       return plan;
     });
-  const unpairedFaces = new Map<string, number>();
+  const unpairedFaces = new Map<string, { elementId: number; sourceParentId: number }>();
   plans.forEach((plan, elementIndex) => {
     if (!isPattern3Half(plan)) {
       return;
@@ -612,13 +615,19 @@ function applyRegularSweepPass(
     if (unpairedFaces.has(faceKey)) {
       unpairedFaces.delete(faceKey);
     } else {
-      unpairedFaces.set(faceKey, elementIndex + 1);
+      unpairedFaces.set(faceKey, {
+        elementId: elementIndex + 1,
+        sourceParentId: originalParentIds[elementIndex]!
+      });
     }
   });
   if (unpairedFaces.size > 0) {
     throw new Error(
       "local 2:1 pattern-3 elements have no partner sharing their marked face: " +
-      [...unpairedFaces.values()].sort((a, b) => a - b).join(", ")
+      [...unpairedFaces.values()]
+        .sort((a, b) => a.elementId - b.elementId)
+        .map(({ elementId, sourceParentId }) => `${elementId} (source parent ${sourceParentId})`)
+        .join(", ")
     );
   }
 

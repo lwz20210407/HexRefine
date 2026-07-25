@@ -44,6 +44,7 @@ const {
   refineByBoxWithReport,
   defaultRefinementPlanner,
   meshToLsdynaKeyword,
+  minimumOrientedHexCornerScaledJacobian,
   replayHexRefineCommandScript,
   parseMeshText,
   refineHexTo13Hex,
@@ -306,6 +307,21 @@ test("Hex patch quality audit rejects an empty replacement set", () => {
     () => auditHexRefinementPatchQuality(createHexUnitCubeMesh(1, 1, 1), []),
     /at least one replacement/
   );
+});
+
+test("Hex oriented corner Jacobian detects inversion in a negative-orientation element", () => {
+  const vertices = [
+    [0.7291564621031285, -0.3900730879046023, -0.3567997058853507],
+    [2.6194058888591827, -0.7630019668489695, -1.7990245786495507],
+    [0.06306805890053513, 0.4105861154384911, 0.3036449566483498],
+    [-0.1286902033723891, 0.9890762763097882, 1.6386692524887623],
+    [-1.6126564409583808, 1.4874584536068143, -0.7676654154434801],
+    [1.774203643668443, 0.9698219172656536, 0.6766813143156469],
+    [1.014555954374373, 2.599799705389887, -0.7455411959439517],
+    [-0.9093339038081467, 2.033608446829021, 0.1498027783818543]
+  ];
+
+  assert.ok(minimumOrientedHexCornerScaledJacobian(vertices, -1) < 0);
 });
 
 test("Hierarchical refinement session rejects incomplete Hex replacement volume atomically", () => {
@@ -2764,7 +2780,248 @@ test("Hex 2:1 local refinement supports a second level in a warped mapped core",
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 });
 
-test("Hex 2:1 local refinement rejects a second-level core that reaches an existing transition", () => {
+test("Hex 2:1 local refinement rebuilds an existing transition shell reached by a second-level core", () => {
+  const mesh = createHexUnitCubeMesh(7, 7, 7);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session);
+  const firstCoreCellIds = idsInIndexBlock(7, 7, 7, [2, 2, 2], [4, 4, 4])
+    .map((elementId) => activeBuildCellIdByElementId(initial, elementId))
+    .filter(Boolean);
+  refineSessionPatch(session, firstCoreCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: initial
+  });
+
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const firstCoarseCellCount = [...session.activeLeafIds].filter((cellId) => {
+    const cell = session.cells.get(cellId);
+    return cell?.level === 0 && cell.role === "base";
+  }).length;
+  const protectedFarFieldCellIds = [...new Set([
+    ...idsInIndexBlock(7, 7, 7, [6, 0, 0], [6, 6, 6]),
+    ...idsInIndexBlock(7, 7, 7, [0, 6, 0], [6, 6, 6]),
+    ...idsInIndexBlock(7, 7, 7, [0, 0, 6], [6, 6, 6])
+  ])].map((elementId) => activeBuildCellIdByElementId(initial, elementId)).filter(Boolean);
+  assert.equal(protectedFarFieldCellIds.length, 127);
+  const boundaryCandidate = firstRefined.mesh.elements
+    .map((element, index) => {
+      const elementId = index + 1;
+      const cellId = activeBuildCellIdByElementId(firstRefined, elementId);
+      const cell = cellId ? session.cells.get(cellId) : undefined;
+      const centerTotal = element.reduce(
+        (total, nodeId) => total + firstRefined.mesh.nodes[nodeId - 1].reduce(
+          (sum, coordinate) => sum + coordinate,
+          0
+        ),
+        0
+      ) / element.length;
+      return cell?.level === 1 && cell.role === "selected"
+        ? { cellId, centerTotal }
+        : undefined;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.centerTotal - right.centerTotal)[0];
+  assert.ok(boundaryCandidate);
+
+  const beforePreview = {
+    activeLeafCount: session.activeLeafIds.size,
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  };
+  const patchOptions = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  };
+  const preview = previewSessionPatch(session, [boundaryCandidate.cellId], patchOptions);
+  assert.deepEqual({
+    activeLeafCount: session.activeLeafIds.size,
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  }, beforePreview);
+
+  const command = refineSessionPatch(session, [boundaryCandidate.cellId], {
+    ...patchOptions
+  });
+  const twiceRefined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  assert.equal(command.quality?.ok, true);
+  assert.equal(command.quality?.parentElementCount, command.hiddenCellIds.length);
+  assert.equal(
+    command.quality?.childElementCount,
+    (command.activeCreatedCellIds?.length ?? command.createdCellIds.length)
+      + (command.reactivatedCellIds?.length ?? 0)
+  );
+  assert.deepEqual(preview.quality, command.quality);
+  assert.equal(preview.planMode, "aggregate");
+  assert.deepEqual(preview.plan, []);
+  assert.deepEqual(preview.compound, {
+    kind: "transition-shell-rebuild",
+    changedInputElementCount: command.hiddenCellIds.length
+  });
+  assert.equal(preview.summary.selectedElementCount, 1);
+  assert.equal(preview.summary.faceTransitionElementCount, 0);
+  assert.equal(preview.summary.edgeTransitionElementCount, 0);
+  assert.equal(preview.summary.cornerTransitionElementCount, 0);
+  assert.equal(
+    preview.summary.unchangedElementCount,
+    firstRefined.mesh.elements.length - command.hiddenCellIds.length
+  );
+  assert.ok(twiceRefined.elements.length > firstRefined.mesh.elements.length);
+  assert.equal(preview.summary.estimatedOutputElementCount, twiceRefined.elements.length);
+  const twiceRefinedCoarseCellCount = [...session.activeLeafIds].filter((cellId) => {
+    const cell = session.cells.get(cellId);
+    return cell?.level === 0 && cell.role === "base";
+  }).length;
+  assert.ok(twiceRefinedCoarseCellCount > 100);
+  assert.ok(twiceRefinedCoarseCellCount < firstCoarseCellCount);
+  assert.equal(
+    protectedFarFieldCellIds.every((cellId) => session.activeLeafIds.has(cellId)),
+    true
+  );
+  assert.equal(checkNoHangingNodes(twiceRefined, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(twiceRefined) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
+
+  assert.equal(undoRefinementSession(session)?.id, command.id);
+  assert.deepEqual(buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }), firstRefined.mesh);
+  assert.equal(redoRefinementSession(session)?.id, command.id);
+  assert.deepEqual(buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }), twiceRefined);
+
+  const replayCommands = [
+    {
+      kind: "grid.generate",
+      payload: {
+        kind: "H1",
+        nx: 7,
+        ny: 7,
+        nz: 7,
+        bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+        mergeTolerance: 1e-9
+      }
+    },
+    {
+      kind: "refine.patch",
+      payload: {
+        cellIds: firstCoreCellIds,
+        options: {
+          hexRefinementRatio: 2,
+          hexTwoToOneSelectionMode: "local",
+          includeTransitions: true,
+          mergeTolerance: 1e-9
+        }
+      }
+    },
+    {
+      kind: "refine.patch",
+      payload: {
+        cellIds: [boundaryCandidate.cellId],
+        options: {
+          hexRefinementRatio: 2,
+          hexTwoToOneSelectionMode: "local",
+          includeTransitions: true,
+          mergeTolerance: 1e-9
+        }
+      }
+    }
+  ];
+  const replay = replayHexRefineCommandScript({
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: replayCommands
+  });
+  assert.deepEqual(replay.warnings, []);
+  assert.deepEqual(replay.mesh, twiceRefined);
+
+  const snapshotReplay = replayHexRefineCommandScript({
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: [
+      ...replayCommands,
+      {
+        kind: "delete.elements",
+        payload: {
+          mode: "delete",
+          elementIds: [1],
+          deletedElementCount: 1,
+          sourceElementCount: twiceRefined.elements.length
+        }
+      },
+      { kind: "undo.delete" },
+      { kind: "undo.refine" },
+      { kind: "redo.refine" }
+    ]
+  });
+  assert.deepEqual(snapshotReplay.warnings, []);
+  assert.deepEqual(snapshotReplay.mesh, twiceRefined);
+  assert.equal(checkNoHangingNodes(snapshotReplay.mesh, 1e-9).ok, true);
+
+  const secondRefinedBuild = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const thirdLevelCandidate = secondRefinedBuild.mesh.elements
+    .map((element, index) => {
+      const cellId = activeBuildCellIdByElementId(secondRefinedBuild, index + 1);
+      const cell = cellId ? session.cells.get(cellId) : undefined;
+      const centerTotal = element.reduce(
+        (total, nodeId) => total + secondRefinedBuild.mesh.nodes[nodeId - 1].reduce(
+          (sum, coordinate) => sum + coordinate,
+          0
+        ),
+        0
+      ) / element.length;
+      return cell?.level === 2 && cell.role === "selected"
+        ? { cellId, centerTotal }
+        : undefined;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.centerTotal - right.centerTotal)[0]?.cellId;
+  assert.ok(thirdLevelCandidate);
+  const thirdCommand = refineSessionPatch(session, [thirdLevelCandidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: secondRefinedBuild
+  });
+  const thirdRefined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  assert.equal(thirdCommand.quality?.ok, true);
+  assert.equal(checkNoHangingNodes(thirdRefined, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(thirdRefined) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(thirdRefined) > 0);
+  assert.equal(undoRefinementSession(session)?.id, thirdCommand.id);
+  assert.deepEqual(buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }), twiceRefined);
+  assert.equal(redoRefinementSession(session)?.id, thirdCommand.id);
+  assert.deepEqual(buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }), thirdRefined);
+});
+
+test("Hex 2:1 local refinement can reject rebuilding an existing transition shell", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
   const initial = buildActiveMeshWithMap(session);
@@ -2812,9 +3069,11 @@ test("Hex 2:1 local refinement rejects a second-level core that reaches an exist
       hexRefinementRatio: 2,
       hexTwoToOneSelectionMode: "local",
       includeTransitions: true,
+      rebuildExistingTransitions: false,
       activeBuild: firstRefined
     }),
-    /would create a nonconforming interface with an existing transition layer/
+    (error) => error?.code === "EXISTING_TRANSITION_COLLISION"
+      && /would create a nonconforming interface with an existing transition layer/.test(error.message)
   );
   assert.deepEqual({
     activeLeafCount: session.activeLeafIds.size,
@@ -2822,6 +3081,235 @@ test("Hex 2:1 local refinement rejects a second-level core that reaches an exist
     undoCount: session.undoStack.length
   }, before);
   assert.equal(checkNoHangingNodes(firstRefined.mesh, 1e-9).ok, true);
+
+  assert.throws(
+    () => replayHexRefineCommandScript({
+      format: "hexrefine-command-script",
+      version: 1,
+      app: "HexRefine",
+      commands: [
+        {
+          kind: "grid.generate",
+          payload: {
+            kind: "H1",
+            nx: 7,
+            ny: 7,
+            nz: 7,
+            bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+            mergeTolerance: 1e-9
+          }
+        },
+        {
+          kind: "refine.patch",
+          payload: {
+            cellIds: firstCoreCellIds,
+            options: {
+              hexRefinementRatio: 2,
+              hexTwoToOneSelectionMode: "local",
+              includeTransitions: true,
+              mergeTolerance: 1e-9
+            }
+          }
+        },
+        {
+          kind: "refine.patch",
+          payload: {
+            cellIds: [boundaryCandidate.cellId],
+            options: {
+              hexRefinementRatio: 2,
+              hexTwoToOneSelectionMode: "local",
+              includeTransitions: true,
+              rebuildExistingTransitions: false,
+              mergeTolerance: 1e-9
+            }
+          }
+        }
+      ]
+    }),
+    /would create a nonconforming interface with an existing transition layer/
+  );
+});
+
+test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () => {
+  const base = createHexUnitCubeMesh(7, 7, 7);
+  const mesh = {
+    ...base,
+    nodes: base.nodes.map(([x, y, z]) => [
+      x + 0.015 * y * z,
+      y + 0.010 * x * z,
+      z + 0.012 * x * y
+    ])
+  };
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session);
+  const firstCoreCellIds = idsInIndexBlock(7, 7, 7, [2, 2, 2], [4, 4, 4])
+    .map((elementId) => activeBuildCellIdByElementId(initial, elementId))
+    .filter(Boolean);
+  refineSessionPatch(session, firstCoreCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: initial
+  });
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const boundaryCellId = firstRefined.mesh.elements
+    .map((element, index) => {
+      const cellId = activeBuildCellIdByElementId(firstRefined, index + 1);
+      const cell = cellId ? session.cells.get(cellId) : undefined;
+      const centerTotal = element.reduce(
+        (total, nodeId) => total + firstRefined.mesh.nodes[nodeId - 1].reduce(
+          (sum, coordinate) => sum + coordinate,
+          0
+        ),
+        0
+      ) / element.length;
+      return cell?.level === 1 && cell.role === "selected"
+        ? { cellId, centerTotal }
+        : undefined;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.centerTotal - right.centerTotal)[0]?.cellId;
+  assert.ok(boundaryCellId);
+
+  assert.throws(
+    () => refineSessionPatch(session, [boundaryCellId], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      rebuildExistingTransitions: false,
+      activeBuild: firstRefined
+    }),
+    (error) => error?.code === "HEX_PATCH_VOLUME"
+      && /does not conserve parent volume/.test(error.message)
+  );
+  const boundaryCell = session.cells.get(boundaryCellId);
+  const perturbedPoint = [...session.nodes[boundaryCell.element[0] - 1]];
+  const coincidentSessionNodeIds = session.nodes
+    .map((point, index) => point.every(
+      (coordinate, axis) => Math.abs(coordinate - perturbedPoint[axis]) < 1e-14
+    ) ? index + 1 : undefined)
+    .filter(Boolean);
+  const originalCoincidentPoints = coincidentSessionNodeIds.map((nodeId) => [
+    nodeId,
+    [...session.nodes[nodeId - 1]]
+  ]);
+  for (const nodeId of coincidentSessionNodeIds) {
+    const point = session.nodes[nodeId - 1];
+    session.nodes[nodeId - 1] = [
+      point[0] + 0.03,
+      point[1] - 0.012,
+      point[2] + 0.0075
+    ];
+  }
+  const distortedActive = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const beforeRejectedDistortion = {
+    activeLeafCount: session.activeLeafIds.size,
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  };
+  assert.throws(
+    () => refineSessionPatch(session, [boundaryCellId], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: distortedActive
+    }),
+    /could not preserve the selected fine-cell geometry|failed its net quality gate/
+  );
+  assert.deepEqual({
+    activeLeafCount: session.activeLeafIds.size,
+    nodeCount: session.nodes.length,
+    undoCount: session.undoStack.length
+  }, beforeRejectedDistortion);
+  for (const [nodeId, point] of originalCoincidentPoints) {
+    session.nodes[nodeId - 1] = point;
+  }
+  const command = refineSessionPatch(session, [boundaryCellId], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  });
+  const twiceRefined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  assert.equal(command.quality?.ok, true);
+  assert.equal(checkNoHangingNodes(twiceRefined, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(twiceRefined) - hexMeshVolume(mesh)) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
+});
+
+test("Hex 2:1 transition-shell rebuilding leaves a disjoint support component untouched", () => {
+  const mesh = createHexUnitCubeMesh(9, 9, 9);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session);
+  const firstCoreCellIds = [
+    ...idsInIndexBlock(9, 9, 9, [1, 1, 2], [2, 2, 3]),
+    ...idsInIndexBlock(9, 9, 9, [6, 6, 2], [7, 7, 3])
+  ].map((elementId) => activeBuildCellIdByElementId(initial, elementId)).filter(Boolean);
+  const firstCommand = refineSessionPatch(session, firstCoreCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: initial
+  });
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const classified = firstCommand.createdCellIds
+    .map((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (!cell?.active || cell.level !== 1) {
+        return undefined;
+      }
+      const center = cell.element.reduce((total, nodeId) => {
+        const point = session.nodes[nodeId - 1];
+        return [
+          total[0] + point[0] / cell.element.length,
+          total[1] + point[1] / cell.element.length,
+          total[2] + point[2] / cell.element.length
+        ];
+      }, [0, 0, 0]);
+      return { cellId, cell, center };
+    })
+    .filter(Boolean);
+  const leftCandidate = classified
+    .filter(({ cell, center }) => cell.role === "selected" && center[0] < 0.5)
+    .sort((left, right) =>
+      left.center.reduce((sum, value) => sum + value, 0)
+      - right.center.reduce((sum, value) => sum + value, 0)
+    )[0];
+  assert.ok(leftCandidate);
+  const untouchedRightCellIds = classified
+    .filter(({ center }) => center[0] > 0.5 && center[1] > 0.5)
+    .map(({ cellId }) => cellId);
+  assert.ok(untouchedRightCellIds.length > 0);
+
+  const command = refineSessionPatch(session, [leftCandidate.cellId], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  });
+  const refined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  assert.equal(untouchedRightCellIds.every((cellId) => session.activeLeafIds.has(cellId)), true);
+  assert.equal(untouchedRightCellIds.every((cellId) => !command.hiddenCellIds.includes(cellId)), true);
+  assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
+  assert.ok(Math.abs(hexMeshVolume(refined) - 1) < 1e-10);
+  assert.ok(minimumCornerScaledJacobian(refined) > 0);
 });
 
 test("HexRefine command script replays a second-level local 2:1 patch exactly", () => {

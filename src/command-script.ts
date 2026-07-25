@@ -369,6 +369,10 @@ function replayRefinePatch(
   const hexTwoToOneSelectionMode = readHexTwoToOneSelectionMode(
     commandOptions.hexTwoToOneSelectionMode
   );
+  const rebuildExistingTransitions = readBoolean(
+    commandOptions.rebuildExistingTransitions,
+    true
+  );
   const mergeTolerance = readOptionalNumber(commandOptions.mergeTolerance) ?? state.mergeTolerance;
   const active = buildActiveMeshWithMap(session, {
     ...activeBuildOptions(state),
@@ -407,6 +411,7 @@ function replayRefinePatch(
     hexRefinementRatio,
     ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
     ...(hexTwoToOneSelectionMode === undefined ? {} : { hexTwoToOneSelectionMode }),
+    rebuildExistingTransitions,
     transitionSupportCellIds,
     activeBuild: active,
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})

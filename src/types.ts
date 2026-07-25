@@ -141,6 +141,15 @@ export interface RefinementPreview {
   kind: ElementKind;
   plan: RefinementPlanItem[];
   summary: RefinementPlanSummary;
+  /**
+   * Aggregate previews represent compound topology changes that cannot be
+   * decomposed honestly into one template assignment per active input element.
+   */
+  planMode?: "per-parent" | "aggregate";
+  compound?: {
+    kind: "transition-shell-rebuild";
+    changedInputElementCount: number;
+  };
   quality?: HexRefinementQualitySummary;
   regularization?: RegularizedHexSelection;
 }
