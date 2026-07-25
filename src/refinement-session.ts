@@ -173,7 +173,7 @@ interface RefinementSessionPatchPlan {
   sourceReplacements: ClassifiedReplacement[];
   hiddenCellIds: CellId[];
   quality?: HexRefinementQualitySummary;
-  twoToOne?: TwoToOneCapabilityReport<number>;
+  twoToOne?: TwoToOneCapabilityReport<CellId>;
 }
 
 export function createRefinementSession(mesh: Mesh): RefinementSession {
@@ -830,9 +830,6 @@ function applyRefinementSessionPatchPlan(
     replacements,
     hiddenCellIds
   } = plan;
-  const twoToOne = plan.twoToOne
-    ? mapTwoToOneReportToCellIds(plan.planningActive, plan.twoToOne)
-    : undefined;
   const createdCellIds: CellId[] = [];
   const createdNodeIds: number[] = [];
 
@@ -887,8 +884,8 @@ function applyRefinementSessionPatchPlan(
     createdCellIds,
     createdNodeIds,
     ...(plan.quality ? { quality: plan.quality } : {}),
-    ...(twoToOne
-      ? { twoToOne: cloneTwoToOneCapabilityReport(twoToOne) }
+    ...(plan.twoToOne
+      ? { twoToOne: cloneTwoToOneCapabilityReport(plan.twoToOne) }
       : {})
   };
   session.nextCommandId += 1;
@@ -1630,9 +1627,7 @@ export function previewSessionPatch(
     ...(patch.quality ? { quality: patch.quality } : {}),
     ...(patch.twoToOne
       ? {
-          twoToOne: cloneTwoToOneCapabilityReport(
-            mapTwoToOneReportToCellIds(patch.planningActive, patch.twoToOne)
-          )
+          twoToOne: cloneTwoToOneCapabilityReport(patch.twoToOne)
         }
       : {})
   };
@@ -1747,6 +1742,13 @@ function buildRefinementSessionPatchPlan(
   const quality = session.kind === "H1" && sourceReplacements.length > 0
     ? assertHexPatchQuality(sourceActive.mesh, sourceReplacements)
     : undefined;
+  const twoToOne = classifiedPlan.twoToOne
+    ? mapTwoToOneReportToCellIds(
+        active,
+        classifiedPlan.twoToOne,
+        session.activeLeafIds.size
+      )
+    : undefined;
 
   return {
     sourceActive,
@@ -1755,15 +1757,16 @@ function buildRefinementSessionPatchPlan(
     sourceReplacements,
     hiddenCellIds: [...parentIds].sort(compareCellIds),
     ...(quality ? { quality } : {}),
-    ...(classifiedPlan.twoToOne
-      ? { twoToOne: cloneTwoToOneCapabilityReport(classifiedPlan.twoToOne) }
+    ...(twoToOne
+      ? { twoToOne }
       : {})
   };
 }
 
 function mapTwoToOneReportToCellIds(
   active: ActiveMeshBuildResult,
-  report: TwoToOneCapabilityReport<number>
+  report: TwoToOneCapabilityReport<number>,
+  sourceActiveLeafCount: number
 ): TwoToOneCapabilityReport<CellId> {
   const mapElementId = (elementId: number): CellId => {
     const cellId = activeBuildCellIdByElementId(active, elementId);
@@ -1772,7 +1775,8 @@ function mapTwoToOneReportToCellIds(
     }
     return cellId;
   };
-  return cloneTwoToOneCapabilityReport({
+  const affectedComponentCellIds = report.affectedComponentCellIds.map(mapElementId);
+  return {
     status: report.status,
     topologyClass: report.topologyClass,
     originalSelectedCellIds: report.originalSelectedCellIds.map(mapElementId),
@@ -1784,9 +1788,10 @@ function mapTwoToOneReportToCellIds(
       replacedTransitionCellIds: action.replacedTransitionCellIds.map(mapElementId),
       ...(action.templateId === undefined ? {} : { templateId: action.templateId })
     })),
-    affectedComponentCellIds: report.affectedComponentCellIds.map(mapElementId),
-    preservedFarFieldCellCount: report.preservedFarFieldCellCount
-  });
+    affectedComponentCellIds,
+    preservedFarFieldCellCount:
+      sourceActiveLeafCount - new Set(affectedComponentCellIds).size
+  };
 }
 
 function mapPlanningReplacementsToSource(

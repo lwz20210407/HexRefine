@@ -34,6 +34,7 @@ interface TransitionCell {
   elementId: number;
   innerFace: number;
   outerFace: number;
+  selectedOwnerElementId: number;
 }
 
 interface Candidate {
@@ -207,18 +208,24 @@ function discoverTransitionCells(
     }
     const selectedOwner = selected.has(first.elementId) ? first : second;
     const transitionOwner = selected.has(first.elementId) ? second : first;
-    if (cellsByElement.has(transitionOwner.elementId)) {
+    const existing = cellsByElement.get(transitionOwner.elementId);
+    if (existing) {
       throw new DirectTwoToOnePlanningError(
         "valence",
         `2:1 transition columns overlap at element ${transitionOwner.elementId}; ` +
         "intersecting face-transition shells require dedicated edge/corner templates",
-        uniqueSorted([selectedOwner.elementId, transitionOwner.elementId])
+        uniqueSorted([
+          existing.selectedOwnerElementId,
+          selectedOwner.elementId,
+          transitionOwner.elementId
+        ])
       );
     }
     cellsByElement.set(transitionOwner.elementId, {
       elementId: transitionOwner.elementId,
       innerFace: transitionOwner.face,
-      outerFace: OPPOSITE_FACE[transitionOwner.face]!
+      outerFace: OPPOSITE_FACE[transitionOwner.face]!,
+      selectedOwnerElementId: selectedOwner.elementId
     });
   }
   if (cellsByElement.size === 0) {
