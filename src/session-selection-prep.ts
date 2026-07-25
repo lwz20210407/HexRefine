@@ -90,9 +90,14 @@ export function prepareSessionRefineSelection(
   }
 
   if (options.hexRefinementRatio === 2) {
-    const regularizationOptions = options.regularizationTolerance === undefined
-      ? {}
-      : { tolerance: options.regularizationTolerance };
+    const regularizationOptions = {
+      ...(options.regularizationTolerance === undefined
+        ? {}
+        : { tolerance: options.regularizationTolerance }),
+      ...(options.hexTransitionAxis === undefined
+        ? {}
+        : { transitionAxis: options.hexTransitionAxis })
+    };
     const regularization = regularizeTwoToOneHexSelection(
       active.mesh,
       filtered.elementIds,

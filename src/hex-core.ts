@@ -147,9 +147,7 @@ export function refineHexCandidateIdsWithReport(
   if (!shouldRegularize) {
     return refineHexByElementIdsWithReport(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineHexByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
@@ -166,9 +164,7 @@ export function previewHexCandidateIds(mesh: Mesh, candidateIds: readonly number
   if (!shouldRegularize) {
     return previewHexRefinementByElementIds(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewHexRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
@@ -197,6 +193,19 @@ function regularizeCandidateSelection(
   return options.hexRefinementRatio === 2
     ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
     : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
+}
+
+function refinementRegularizationOptions(
+  options: RefineOptions
+): HexSelectionRegularizationOptions {
+  return {
+    ...(options.regularizationTolerance === undefined
+      ? {}
+      : { tolerance: options.regularizationTolerance }),
+    ...(options.hexTransitionAxis === undefined
+      ? {}
+      : { transitionAxis: options.hexTransitionAxis })
+  };
 }
 
 export function assertHexMesh(mesh: Mesh): void {

@@ -38,6 +38,8 @@ customize for research, engineering experiments, and selected project work:
   `1 -> 8` core and TrueGrid-derived `1 -> 7` transition columns.
 - Automatic `2:1` completion of a local structured-Hex pick to an even,
   level-closed transverse section for box, preview, and GUI session workflows.
+- Optional logical `U`, `V`, or `W` transition-axis override in the API, command
+  script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
   each level again uses one uniform core pass and one transition-parent layer.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
@@ -53,8 +55,10 @@ multi-direction edge/corner closure, refinement across existing transition
 cells, irregular mixed-level domains, and automatic odd-section topology
 completion are not yet part of the TypeScript runtime.
 Structured section completion selects a logical transition axis whose other two
-grid dimensions are even; unsupported odd sections fail with an explicit
-diagnostic instead of producing a nonconforming mesh.
+grid dimensions are even. The GUI `2:1 axis` control and the
+`hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported
+transverse odd sections fail with an explicit diagnostic instead of producing a
+nonconforming mesh.
 
 ## Copyright And Version
 

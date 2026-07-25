@@ -125,7 +125,8 @@ export function regularizeTwoToOneHexSelection(
   const sourceRange = regularized.indexRange;
   const transitionAxis = selectTwoToOneTransitionAxis(
     sourceRange,
-    lattice.dimensions
+    lattice.dimensions,
+    options.transitionAxis
   );
   const min = [...sourceRange.min] as [number, number, number];
   const max = [...sourceRange.max] as [number, number, number];
@@ -166,7 +167,8 @@ export function regularizeTwoToOneHexSelection(
 
 function selectTwoToOneTransitionAxis(
   range: HexIndexRange,
-  gridDimensions: [number, number, number]
+  gridDimensions: [number, number, number],
+  requestedAxis?: HexAxis
 ): HexAxis {
   const candidates = ([0, 1, 2] as const).map((axis) => {
     const min = range.min[axis] === 1 ? 0 : range.min[axis];
@@ -185,6 +187,14 @@ function selectTwoToOneTransitionAxis(
   const eligible = candidates.filter(({ axis }) =>
     transverseAxes(axis).every((crossAxis) => gridDimensions[crossAxis] % 2 === 0)
   );
+  if (requestedAxis !== undefined) {
+    if (!eligible.some(({ axis }) => axis === requestedAxis)) {
+      throw new Error(
+        `2:1 logical transition axis ${requestedAxis + 1} requires even grid dimensions on both transverse axes`
+      );
+    }
+    return requestedAxis;
+  }
   if (eligible.length === 0) {
     throw new Error(
       "2:1 full-section completion requires two even transverse grid dimensions"

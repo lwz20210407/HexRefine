@@ -41,6 +41,11 @@ export interface RefineOptions {
    * the 2 option uses a uniform 1-to-8 core and a conforming 4-to-2 shell.
    */
   hexRefinementRatio?: 2 | 3;
+  /**
+   * Logical Hex lattice axis used by structured 2:1 full-section completion.
+   * Omit it to choose the least-expanding axis with even transverse counts.
+   */
+  hexTransitionAxis?: 0 | 1 | 2;
   transitionSupportElementIds?: readonly number[];
   regularizeHexSelection?: boolean;
   regularizeHexBoundaryShell?: boolean;
@@ -50,6 +55,7 @@ export interface RefineOptions {
 export interface HexSelectionRegularizationOptions {
   tolerance?: number;
   boundaryShellOnly?: boolean;
+  transitionAxis?: 0 | 1 | 2;
 }
 
 export interface HexIndexRange {

@@ -361,6 +361,7 @@ function replayRefinePatch(
   const includeTransitions = readBoolean(commandOptions.includeTransitions, true);
   const regularizeHexSelection = readBoolean(commandOptions.regularizeHexSelection, false);
   const hexRefinementRatio = readHexRefinementRatio(commandOptions.hexRefinementRatio);
+  const hexTransitionAxis = readHexTransitionAxis(commandOptions.hexTransitionAxis);
   const mergeTolerance = readOptionalNumber(commandOptions.mergeTolerance) ?? state.mergeTolerance;
   const active = buildActiveMeshWithMap(session, {
     ...activeBuildOptions(state),
@@ -372,6 +373,8 @@ function replayRefinePatch(
   const replaySelection = resolveReplayRefineSelection(state, payload, options, session, active, {
     includeTransitions,
     regularizeHexSelection,
+    hexRefinementRatio,
+    ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
   });
   const selectedCellIds = replaySelection.usedReplaySelectionSource
@@ -394,6 +397,7 @@ function replayRefinePatch(
   refineSessionPatch(session, selectedCellIds, {
     includeTransitions,
     hexRefinementRatio,
+    ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
     transitionSupportCellIds,
     activeBuild: active,
     ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
@@ -423,6 +427,8 @@ function resolveReplayRefineSelection(
   prepareOptions: {
     includeTransitions: boolean;
     regularizeHexSelection: boolean;
+    hexRefinementRatio: 2 | 3;
+    hexTransitionAxis?: 0 | 1 | 2;
     mergeTolerance?: number;
   }
 ): ReplayResolvedPatchSelection {
@@ -1995,6 +2001,17 @@ function readHexRefinementRatio(value: unknown): 2 | 3 {
     return ratio;
   }
   throw new Error("hexRefinementRatio must be 2 or 3");
+}
+
+function readHexTransitionAxis(value: unknown): 0 | 1 | 2 | undefined {
+  if (value === undefined || value === null || value === "auto") {
+    return undefined;
+  }
+  const axis = typeof value === "number" ? value : Number(value);
+  if (axis === 0 || axis === 1 || axis === 2) {
+    return axis;
+  }
+  throw new Error("hexTransitionAxis must be 0, 1, or 2");
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {

@@ -895,6 +895,15 @@
                 <option value="2">2:1</option>
               </select>
             </label>
+            <label class="inline-label">
+              <span>2:1 axis</span>
+              <select id="hex-transition-axis" disabled>
+                <option value="auto" selected>Auto</option>
+                <option value="0">U</option>
+                <option value="1">V</option>
+                <option value="2">W</option>
+              </select>
+            </label>
             <div class="actions">
               <button id="preview-refine" type="button">Preview</button>
               <button id="apply-refine" class="primary-action" type="button">Refine</button>
@@ -1282,6 +1291,7 @@
       const transitionsEl = document.querySelector("#transitions");
       const regularizeEl = document.querySelector("#regularize");
       const hexRefinementRatioEl = document.querySelector("#hex-refinement-ratio");
+      const hexTransitionAxisEl = document.querySelector("#hex-transition-axis");
       const selectToolButton = document.querySelector("#select-tool");
       const circleToolButton = document.querySelector("#circle-tool");
       const rotateToolButton = document.querySelector("#rotate-tool");
@@ -2350,10 +2360,14 @@
       }
 
       function refineOptions() {
+        const hexTransitionAxis = hexTransitionAxisEl.value === "auto"
+          ? undefined
+          : Number(hexTransitionAxisEl.value);
         return {
           includeTransitions: transitionsEl.value === "on",
           regularizeHexSelection: regularizeEl.value === "on",
-          hexRefinementRatio: Number(hexRefinementRatioEl.value)
+          hexRefinementRatio: Number(hexRefinementRatioEl.value),
+          ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis })
         };
       }
 
@@ -2804,9 +2818,11 @@
           await runWithBusyPause("Refining selected elements...");
           const cellIds = activeCellIdsFromElementIds(prepared.elementIds);
           const refineStart = performance.now();
+          const options = refineOptions();
           const command = refineSessionPatch(refinementSession, cellIds, {
-            includeTransitions: transitionsEl.value === "on",
-            hexRefinementRatio: Number(hexRefinementRatioEl.value),
+            includeTransitions: options.includeTransitions,
+            hexRefinementRatio: options.hexRefinementRatio,
+            ...(options.hexTransitionAxis === undefined ? {} : { hexTransitionAxis: options.hexTransitionAxis }),
             transitionSupportCellIds: prepared.outerCellIds ?? [],
             mergeTolerance: meshMergeTolerance,
             activeBuild
@@ -2818,9 +2834,7 @@
             transitionSupportElementIds: prepared.outerElementIds ?? [],
             replaySelection: selectionRankSelectionForElementIds(prepared.elementIds),
             options: {
-              includeTransitions: transitionsEl.value === "on",
-              regularizeHexSelection: regularizeEl.value === "on",
-              hexRefinementRatio: Number(hexRefinementRatioEl.value),
+              ...options,
               mergeTolerance: meshMergeTolerance
             },
             commandId: command.id,
@@ -8248,6 +8262,7 @@
       projectionToggleButton.addEventListener("click", toggleProjectionMode);
       kindH1Button.addEventListener("click", () => setElementKind("H1"));
       kindQ1Button.addEventListener("click", () => setElementKind("Q1"));
+      hexRefinementRatioEl.addEventListener("change", syncKindControls);
       kindEl.addEventListener("change", () => {
         setTool(kindEl.value === "Q1" ? "select" : "rotate");
         syncKindControls();
@@ -8278,9 +8293,11 @@
         }
         regularizeEl.disabled = isQ1;
         hexRefinementRatioEl.disabled = isQ1;
+        hexTransitionAxisEl.disabled = isQ1 || hexRefinementRatioEl.value !== "2";
         if (isQ1) {
           regularizeEl.value = "off";
           hexRefinementRatioEl.value = "3";
+          hexTransitionAxisEl.value = "auto";
           boxZMinEl.value = "0";
           boxZMaxEl.value = "0";
         } else if (boxZMinEl.value === "0" && boxZMaxEl.value === "0") {

@@ -2126,6 +2126,20 @@ test("Hex 2:1 section completion chooses an axis with even transverse counts", (
   assert.equal(regularized.selectedElementIds.length, 48);
 });
 
+test("Hex 2:1 section completion honors an explicit logical transition axis", () => {
+  const mesh = createHexUnitCubeMesh(8, 6, 6);
+  const selectedElementId = elementIdAt(8, 6, 6, 3, 2, 2);
+  const regularized = regularizeTwoToOneHexSelection(
+    mesh,
+    [selectedElementId],
+    { transitionAxis: 2 }
+  );
+
+  assert.deepEqual(regularized.indexRange?.dimensions, [8, 6, 1]);
+  assert.equal(regularized.selectedElementIds.length, 48);
+  assert.match(regularized.warnings.join("\n"), /logical axis 3 is the transition direction/);
+});
+
 test("Hex 2:1 section completion rejects grids without an even transverse pair", () => {
   const mesh = createHexUnitCubeMesh(4, 3, 7);
   const selectedElementId = elementIdAt(4, 3, 7, 1, 1, 3);

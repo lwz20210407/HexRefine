@@ -117,7 +117,8 @@ test("HexRefine command replay accepts the 2:1 Hex refinement ratio", () => {
           elementIds: [9, 10, 11, 12],
           options: {
             includeTransitions: true,
-            hexRefinementRatio: 2
+            hexRefinementRatio: 2,
+            hexTransitionAxis: 2
           }
         }
       }
@@ -126,6 +127,38 @@ test("HexRefine command replay accepts the 2:1 Hex refinement ratio", () => {
 
   assert.equal(replay.mesh.elements.length, 96);
   assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
+});
+
+test("HexRefine command replay rejects an invalid 2:1 transition axis", () => {
+  assert.throws(
+    () =>
+      replayHexRefineCommandScript({
+        commands: [
+          {
+            kind: "grid.generate",
+            payload: {
+              kind: "H1",
+              nx: 2,
+              ny: 2,
+              nz: 5,
+              bounds: { min: [0, 0, 0], max: [1, 1, 1] }
+            }
+          },
+          {
+            kind: "refine.patch",
+            payload: {
+              elementIds: [9, 10, 11, 12],
+              options: {
+                includeTransitions: true,
+                hexRefinementRatio: 2,
+                hexTransitionAxis: 3
+              }
+            }
+          }
+        ]
+      }),
+    /hexTransitionAxis must be 0, 1, or 2/
+  );
 });
 
 test("HexRefine project imports standard Quad and Hex meshes from JSON-like objects", () => {

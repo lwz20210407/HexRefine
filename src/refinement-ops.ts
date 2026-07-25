@@ -77,9 +77,7 @@ export function refineByBoxWithReport(mesh: Mesh, box: BoxRange, options: Refine
   if (!shouldRegularize) {
     return refineByElementIdsWithReport(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
@@ -112,9 +110,7 @@ export function refineByDistanceFunctionWithReport(
   if (!shouldRegularize) {
     return refineByElementIdsWithReport(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
@@ -140,9 +136,7 @@ export function previewRefinementByBox(mesh: Mesh, box: BoxRange, options: Refin
   if (!shouldRegularize) {
     return previewRefinementByElementIds(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
@@ -167,9 +161,7 @@ export function previewRefinementByDistanceFunction(
   if (!shouldRegularize) {
     return previewRefinementByElementIds(mesh, candidateIds, options);
   }
-  const regularizationOptions = options.regularizationTolerance === undefined
-    ? {}
-    : { tolerance: options.regularizationTolerance };
+  const regularizationOptions = refinementRegularizationOptions(options);
   const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
@@ -206,6 +198,19 @@ function regularizeCandidateSelection(
   return options.hexRefinementRatio === 2
     ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
     : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
+}
+
+function refinementRegularizationOptions(
+  options: RefineOptions
+): HexSelectionRegularizationOptions {
+  return {
+    ...(options.regularizationTolerance === undefined
+      ? {}
+      : { tolerance: options.regularizationTolerance }),
+    ...(options.hexTransitionAxis === undefined
+      ? {}
+      : { transitionAxis: options.hexTransitionAxis })
+  };
 }
 
 export function pointInBox(point: Point, box: BoxRange): boolean {
