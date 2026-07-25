@@ -38,6 +38,7 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.match(gui, /webgl world surface/);
   assert.match(gui, /parseMeshText/);
   assert.match(gui, /prepareSessionRefineSelection/);
+  assert.match(gui, /previewSessionPatch\(refinementSession/);
   assert.match(gui, /accept="application\/json,.json,.vtk,.vtu,.inp,.k,.key,text\/plain"/);
   assert.doesNotMatch(gui, /cellData:\s*\[\]/);
   assert.doesNotMatch(gui, /Regularized block rejected:/);
@@ -48,5 +49,6 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.equal(typeof runtime.parseMeshText, "function");
   assert.equal(typeof runtime.parseLegacyVtkMesh, "function");
   assert.equal(typeof runtime.prepareSessionRefineSelection, "function");
+  assert.equal(typeof runtime.previewSessionPatch, "function");
   assert.equal(typeof runtime.refineByElementIdsWithReport, "function");
 });

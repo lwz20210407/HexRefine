@@ -1,6 +1,23 @@
-import type { Element, ElementKind, LocalRefinement, Mesh, Point, RefinementRole } from "./types.js";
-import { elementVertices, inferMeshKind, mergeCoincidentNodesWithMap, minElementEdgeLength } from "./mesh.js";
-import { buildDefaultRefinementReplacements } from "./refinement-planner.js";
+import type {
+  Element,
+  ElementKind,
+  LocalRefinement,
+  Mesh,
+  Point,
+  RefinementPreview,
+  RefinementRole
+} from "./types.js";
+import {
+  elementVertices,
+  inferMeshKind,
+  mergeCoincidentNodesWithMap,
+  minElementEdgeLength,
+  replaceElements
+} from "./mesh.js";
+import {
+  buildDefaultRefinementReplacements,
+  type ClassifiedReplacement
+} from "./refinement-planner.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 
 export type CellId = string;
@@ -120,9 +137,18 @@ export type LocalRefinementFactory = (vertices: Point[]) => LocalRefinement;
 export interface RefinementSessionPatchOptions {
   includeTransitions?: boolean;
   hexRefinementRatio?: 2 | 3;
+  hexTwoToOneSelectionMode?: "section" | "local";
   transitionSupportCellIds?: readonly CellId[];
   mergeTolerance?: number;
   activeBuild?: ActiveMeshBuildResult;
+}
+
+interface RefinementSessionPatchPlan {
+  sourceActive: ActiveMeshBuildResult;
+  planningActive: ActiveMeshBuildResult;
+  replacements: ClassifiedReplacement[];
+  sourceReplacements: ClassifiedReplacement[];
+  hiddenCellIds: CellId[];
 }
 
 export function createRefinementSession(mesh: Mesh): RefinementSession {
@@ -738,47 +764,12 @@ export function refineSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
-  const validation = validateRefinementSessionSelection(session, cellIds);
-  if (!validation.ok) {
-    throw new Error(validation.errors.join("; "));
-  }
-
-  const active = options.activeBuild ?? buildRefinementPatchActiveMesh(session, validation.cellIds, options);
-  const selectedElementIds = validation.cellIds
-    .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
-    .filter((elementId): elementId is number => elementId !== undefined);
-  if (selectedElementIds.length !== validation.cellIds.length) {
-    throw new Error("refinement selection contains cells outside the active mesh");
-  }
-
-  const replacements = buildDefaultRefinementReplacements(active.mesh, selectedElementIds, {
-    includeTransitions: options.includeTransitions ?? true,
-    ...(options.hexRefinementRatio !== undefined
-      ? { hexRefinementRatio: options.hexRefinementRatio }
-      : {}),
-    transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
-      .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
-      .filter((elementId): elementId is number => elementId !== undefined),
-    regularizeHexSelection: false,
-    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
-  });
-  const parentIds = new Set<CellId>();
-  for (const replacement of replacements) {
-    const parentId = activeBuildCellIdByElementId(active, replacement.elementId);
-    if (parentId === undefined) {
-      throw new Error(`replacement parent element ${replacement.elementId} is outside the active mesh`);
-    }
-    const parent = requiredCell(session, parentId);
-    if (!isRefinableSessionCell(parent)) {
-      throw new Error(`transition layer cells cannot be refined: ${parentId}`);
-    }
-    if (parent.level !== validation.level) {
-      throw new Error(`refinement patch crosses levels: ${parentId}`);
-    }
-    parentIds.add(parentId);
-  }
-
-  const hiddenCellIds = [...parentIds].sort(compareCellIds);
+  const plan = buildRefinementSessionPatchPlan(session, cellIds, options);
+  const {
+    planningActive: active,
+    replacements,
+    hiddenCellIds
+  } = plan;
   const createdCellIds: CellId[] = [];
   const createdNodeIds: number[] = [];
 
@@ -839,12 +830,190 @@ export function refineSessionPatch(
   return command;
 }
 
+export function previewSessionPatch(
+  session: RefinementSession,
+  cellIds: CellId[],
+  options: RefinementSessionPatchOptions = {}
+): RefinementPreview {
+  const sourceActive = options.activeBuild ?? buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+  });
+  const patch = buildRefinementSessionPatchPlan(session, cellIds, {
+    ...options,
+    activeBuild: sourceActive
+  });
+  const replacedIds = new Set(patch.sourceReplacements.map((replacement) => replacement.elementId));
+  const plan = patch.sourceReplacements
+    .map((replacement) => ({
+      parentElementId: replacement.elementId,
+      role: replacement.role,
+      templateCode: replacement.templateCode,
+      outputElementCount: replacement.refinement.elements.length
+    }))
+    .sort((first, second) =>
+      first.parentElementId - second.parentElementId
+      || first.templateCode - second.templateCode
+    );
+  const countRole = (role: RefinementRole): number =>
+    plan.filter((item) => item.role === role).length;
+  const unchangedElementCount = sourceActive.mesh.elements.length - replacedIds.size;
+  return {
+    kind: session.kind,
+    plan,
+    summary: {
+      selectedElementCount: countRole("selected"),
+      faceTransitionElementCount: countRole("face-transition"),
+      edgeTransitionElementCount: countRole("edge-transition"),
+      cornerTransitionElementCount: countRole("corner-transition"),
+      unchangedElementCount,
+      estimatedOutputElementCount: unchangedElementCount
+        + plan.reduce((total, item) => total + item.outputElementCount, 0)
+    }
+  };
+}
+
+function buildRefinementSessionPatchPlan(
+  session: RefinementSession,
+  cellIds: CellId[],
+  options: RefinementSessionPatchOptions
+): RefinementSessionPatchPlan {
+  const validation = validateRefinementSessionSelection(session, cellIds);
+  if (!validation.ok) {
+    throw new Error(validation.errors.join("; "));
+  }
+
+  const usesSameLevelPlanning = options.hexRefinementRatio === 2
+    && options.hexTwoToOneSelectionMode === "local"
+    && validation.level !== undefined
+    && validation.level > 0;
+  const sourceActive = options.activeBuild ?? (usesSameLevelPlanning
+    ? buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        includeSessionNodeIdByNodeId: false,
+        includeSessionNodeIdsByNodeId: false,
+        ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+      })
+    : buildRefinementPatchActiveMesh(session, validation.cellIds, options));
+  const active = usesSameLevelPlanning
+    ? buildSameLevelRefinementPlanningMesh(session, validation.level!, options)
+    : sourceActive;
+  const selectedElementIds = validation.cellIds
+    .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
+    .filter((elementId): elementId is number => elementId !== undefined);
+  if (selectedElementIds.length !== validation.cellIds.length) {
+    throw new Error("refinement selection contains cells outside the active mesh");
+  }
+
+  const replacements = buildDefaultRefinementReplacements(active.mesh, selectedElementIds, {
+    includeTransitions: options.includeTransitions ?? true,
+    ...(options.hexRefinementRatio !== undefined
+      ? { hexRefinementRatio: options.hexRefinementRatio }
+      : {}),
+    transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
+      .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
+      .filter((elementId): elementId is number => elementId !== undefined),
+    regularizeHexSelection: false,
+    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+  });
+  const parentIds = new Set<CellId>();
+  for (const replacement of replacements) {
+    const parentId = activeBuildCellIdByElementId(active, replacement.elementId);
+    if (parentId === undefined) {
+      throw new Error(`replacement parent element ${replacement.elementId} is outside the active mesh`);
+    }
+    const parent = requiredCell(session, parentId);
+    if (!isRefinableSessionCell(parent)) {
+      throw new Error(`transition layer cells cannot be refined: ${parentId}`);
+    }
+    if (parent.level !== validation.level) {
+      throw new Error(`refinement patch crosses levels: ${parentId}`);
+    }
+    parentIds.add(parentId);
+  }
+  const sourceReplacements = active === sourceActive
+    ? replacements
+    : mapPlanningReplacementsToSource(session, sourceActive, active, replacements);
+  if (usesSameLevelPlanning) {
+    validateSameLevelPlanningConformance(
+      sourceActive,
+      sourceReplacements,
+      options.mergeTolerance
+    );
+  }
+
+  return {
+    sourceActive,
+    planningActive: active,
+    replacements,
+    sourceReplacements,
+    hiddenCellIds: [...parentIds].sort(compareCellIds)
+  };
+}
+
+function mapPlanningReplacementsToSource(
+  session: RefinementSession,
+  sourceActive: ActiveMeshBuildResult,
+  planningActive: ActiveMeshBuildResult,
+  replacements: readonly ClassifiedReplacement[]
+): ClassifiedReplacement[] {
+  return replacements.map((replacement) => {
+    const cellId = activeBuildCellIdByElementId(planningActive, replacement.elementId);
+    const sourceElementId = cellId === undefined
+      ? undefined
+      : activeBuildElementIdByCellId(session, sourceActive, cellId);
+    if (sourceElementId === undefined) {
+      throw new Error(
+        `same-level refinement parent ${replacement.elementId} is outside the complete active mesh`
+      );
+    }
+    return {
+      ...replacement,
+      elementId: sourceElementId
+    };
+  });
+}
+
+function validateSameLevelPlanningConformance(
+  sourceActive: ActiveMeshBuildResult,
+  sourceReplacements: readonly ClassifiedReplacement[],
+  mergeTolerance?: number
+): void {
+  const tolerance = mergeTolerance ?? minElementEdgeLength(sourceActive.mesh) * 0.000001;
+  const prospective = replaceElements(sourceActive.mesh, sourceReplacements, tolerance);
+  const report = checkNoHangingNodes(prospective, tolerance);
+  if (!report.ok) {
+    throw new Error(
+      "second-level local 2:1 refinement would create a nonconforming interface with an existing transition layer"
+    );
+  }
+}
+
 function buildRefinementPatchActiveMesh(
   session: RefinementSession,
   selectedCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): ActiveMeshBuildResult {
   const activeIds = collectRefinementPatchActiveCellIds(session, selectedCellIds);
+  return buildActiveMeshForCellIdsWithMap(session, activeIds, {
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+  });
+}
+
+function buildSameLevelRefinementPlanningMesh(
+  session: RefinementSession,
+  level: number,
+  options: RefinementSessionPatchOptions
+): ActiveMeshBuildResult {
+  const activeIds = sortedActiveLeafIds(session).filter((cellId) => {
+    const cell = session.cells.get(cellId);
+    return cell?.level === level && isRefinableSessionCell(cell);
+  });
   return buildActiveMeshForCellIdsWithMap(session, activeIds, {
     mergeNodes: true,
     includeSessionNodeIdByNodeId: false,

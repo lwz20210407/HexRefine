@@ -205,6 +205,15 @@ function logicalNodeCoordinates(
   lattice: HexElementLattice,
   tolerance: number
 ): LogicalPoint[] | undefined {
+  return logicalNodeCoordinatesFromConnectivity(mesh, lattice, tolerance)
+    ?? logicalNodeCoordinatesFromLatticeGeometry(mesh, lattice, tolerance);
+}
+
+function logicalNodeCoordinatesFromConnectivity(
+  mesh: Mesh,
+  lattice: HexElementLattice,
+  tolerance: number
+): LogicalPoint[] | undefined {
   const logical: Array<LogicalPoint | undefined> = new Array(mesh.nodes.length);
   const offsets: readonly Index3[] = [
     [0, 0, 0],
@@ -240,6 +249,127 @@ function logicalNodeCoordinates(
     return undefined;
   }
   return logical as LogicalPoint[];
+}
+
+function logicalNodeCoordinatesFromLatticeGeometry(
+  mesh: Mesh,
+  lattice: HexElementLattice,
+  tolerance: number
+): LogicalPoint[] | undefined {
+  const logical: Array<LogicalPoint | undefined> = new Array(mesh.nodes.length);
+  const centers = mesh.elements.map((element) =>
+    averagePoints(element.map((nodeId) => mesh.nodes[nodeId - 1]!))
+  );
+
+  for (const [elementId, origin] of lattice.indicesByElementId) {
+    const element = mesh.elements[elementId - 1];
+    const center = centers[elementId - 1];
+    if (!element || element.length !== 8 || !center) {
+      return undefined;
+    }
+    const directions = ([0, 1, 2] as const).map((axis) =>
+      logicalAxisDirection(center, origin, axis, lattice, centers)
+    );
+    if (directions.some((direction) => direction === undefined)) {
+      return undefined;
+    }
+    const typedDirections = directions as [Point, Point, Point];
+    const cornerKeys = new Set<string>();
+    for (const nodeId of element) {
+      const point = mesh.nodes[nodeId - 1];
+      if (!point) {
+        return undefined;
+      }
+      const local = solveDirectionCoordinates(
+        point.map((value, component) => value - center[component]!) as Point,
+        typedDirections,
+        tolerance
+      );
+      if (!local || local.some((value) => Math.abs(value) <= tolerance)) {
+        return undefined;
+      }
+      const offset = local.map((value) => value > 0 ? 1 : 0) as Index3;
+      const cornerKey = indexKey(offset);
+      if (cornerKeys.has(cornerKey)) {
+        return undefined;
+      }
+      cornerKeys.add(cornerKey);
+      const candidate: LogicalPoint = [
+        origin[0] + offset[0],
+        origin[1] + offset[1],
+        origin[2] + offset[2]
+      ];
+      const existing = logical[nodeId - 1];
+      if (existing && !pointsEqual(existing, candidate, tolerance)) {
+        return undefined;
+      }
+      logical[nodeId - 1] = candidate;
+    }
+    if (cornerKeys.size !== 8) {
+      return undefined;
+    }
+  }
+  return logical.some((point) => point === undefined)
+    ? undefined
+    : logical as LogicalPoint[];
+}
+
+function logicalAxisDirection(
+  center: Point,
+  origin: Index3,
+  axis: 0 | 1 | 2,
+  lattice: HexElementLattice,
+  centers: readonly Point[]
+): Point | undefined {
+  const minus = [...origin] as Index3;
+  const plus = [...origin] as Index3;
+  minus[axis] -= 1;
+  plus[axis] += 1;
+  const minusId = lattice.elementIdByKey.get(indexKey(minus));
+  const plusId = lattice.elementIdByKey.get(indexKey(plus));
+  const minusCenter = minusId === undefined ? undefined : centers[minusId - 1];
+  const plusCenter = plusId === undefined ? undefined : centers[plusId - 1];
+  if (minusCenter && plusCenter) {
+    return plusCenter.map((value, component) => value - minusCenter[component]!);
+  }
+  if (plusCenter) {
+    return plusCenter.map((value, component) => value - center[component]!);
+  }
+  if (minusCenter) {
+    return center.map((value, component) => value - minusCenter[component]!);
+  }
+  return undefined;
+}
+
+function solveDirectionCoordinates(
+  delta: Point,
+  directions: readonly [Point, Point, Point],
+  tolerance: number
+): LogicalPoint | undefined {
+  const [u, v, w] = directions;
+  const determinant = dot3(u, cross3(v, w));
+  if (Math.abs(determinant) <= tolerance * tolerance * tolerance) {
+    return undefined;
+  }
+  return [
+    dot3(delta, cross3(v, w)) / determinant,
+    dot3(u, cross3(delta, w)) / determinant,
+    dot3(u, cross3(v, delta)) / determinant
+  ];
+}
+
+function cross3(first: Point, second: Point): Point {
+  return [
+    first[1]! * second[2]! - first[2]! * second[1]!,
+    first[2]! * second[0]! - first[0]! * second[2]!,
+    first[0]! * second[1]! - first[1]! * second[0]!
+  ];
+}
+
+function dot3(first: Point, second: Point): number {
+  return first[0]! * second[0]!
+    + first[1]! * second[1]!
+    + first[2]! * second[2]!;
 }
 
 function sweepPatches(

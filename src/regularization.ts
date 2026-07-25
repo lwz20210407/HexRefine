@@ -31,6 +31,7 @@ const H1_FACE_DELTAS: readonly [number, number, number][] = [
 ];
 
 const topologyLatticeCache = new WeakMap<Mesh, HexElementLattice | null>();
+const geometricTopologyLatticeCache = new WeakMap<Mesh, HexElementLattice | null>();
 
 export function regularizeHexSelection(
   mesh: Mesh,
@@ -217,6 +218,16 @@ export function inferHexElementLattice(mesh: Mesh, tolerance: number): HexElemen
   if (topologyLattice) {
     return topologyLattice;
   }
+  const geometricTopologyLattice = inferHexGeometricTopologyLattice(mesh, tolerance);
+  if (geometricTopologyLattice) {
+    return {
+      ...geometricTopologyLattice,
+      warnings: [
+        ...geometricTopologyLattice.warnings,
+        "recovered the Hex lattice from shared-face center directions because local corner orientations differ"
+      ]
+    };
+  }
   const centerLattice = inferHexCenterLattice(mesh, tolerance);
   return {
     ...centerLattice,
@@ -225,6 +236,222 @@ export function inferHexElementLattice(mesh: Mesh, tolerance: number): HexElemen
       "falling back to coordinate-center lattice because topology lattice inference failed"
     ]
   };
+}
+
+function inferHexGeometricTopologyLattice(
+  mesh: Mesh,
+  tolerance: number
+): HexElementLattice | undefined {
+  if (geometricTopologyLatticeCache.has(mesh)) {
+    return geometricTopologyLatticeCache.get(mesh) ?? undefined;
+  }
+  const centers = mesh.elements.map((element) => elementCenter(mesh, element));
+  const faceOwners = new Map<string, HexFaceOwner[]>();
+  mesh.elements.forEach((element, index) => {
+    const elementId = index + 1;
+    H1_FACES.forEach((face, faceIndex) => {
+      const key = boundaryKey(face.map((localId) => element[localId - 1]!));
+      const owners = faceOwners.get(key) ?? [];
+      owners.push({ elementId, faceIndex });
+      faceOwners.set(key, owners);
+    });
+  });
+  const interfaces: Array<{
+    first: number;
+    second: number;
+    difference: [number, number, number];
+  }> = [];
+  for (const owners of faceOwners.values()) {
+    if (owners.length !== 2) {
+      continue;
+    }
+    const [first, second] = owners;
+    if (!first || !second) {
+      continue;
+    }
+    interfaces.push({
+      first: first.elementId,
+      second: second.elementId,
+      difference: subtract3(
+        centers[second.elementId - 1]!,
+        centers[first.elementId - 1]!
+      )
+    });
+  }
+  const basis = independentDirectionBasis(
+    interfaces.map((item) => item.difference),
+    tolerance
+  );
+  if (!basis) {
+    geometricTopologyLatticeCache.set(mesh, null);
+    return undefined;
+  }
+  const neighbors = new Map<number, HexNeighbor[]>();
+  for (const item of interfaces) {
+    const delta = classifyDirectionDelta(item.difference, basis, tolerance);
+    if (!delta) {
+      geometricTopologyLatticeCache.set(mesh, null);
+      return undefined;
+    }
+    addTopologyNeighbor(neighbors, item.first, item.second, delta);
+    addTopologyNeighbor(neighbors, item.second, item.first, negateIndex(delta));
+  }
+
+  const rawIndices = new Map<number, [number, number, number]>();
+  rawIndices.set(1, [0, 0, 0]);
+  const queue = [1];
+  let queueIndex = 0;
+  while (queueIndex < queue.length) {
+    const elementId = queue[queueIndex++]!;
+    const current = rawIndices.get(elementId)!;
+    for (const neighbor of neighbors.get(elementId) ?? []) {
+      const next = addIndex(current, neighbor.delta);
+      const existing = rawIndices.get(neighbor.elementId);
+      if (existing) {
+        if (!sameIndex(existing, next)) {
+          geometricTopologyLatticeCache.set(mesh, null);
+          return undefined;
+        }
+        continue;
+      }
+      rawIndices.set(neighbor.elementId, next);
+      queue.push(neighbor.elementId);
+    }
+  }
+  if (rawIndices.size !== mesh.elements.length) {
+    geometricTopologyLatticeCache.set(mesh, null);
+    return undefined;
+  }
+  const normalized = normalizeTopologyIndices(rawIndices);
+  if (normalized.warnings.length > 0) {
+    geometricTopologyLatticeCache.set(mesh, null);
+    return undefined;
+  }
+  geometricTopologyLatticeCache.set(mesh, normalized);
+  return normalized;
+}
+
+function independentDirectionBasis(
+  differences: readonly [number, number, number][],
+  tolerance: number
+): [[number, number, number], [number, number, number], [number, number, number]] | undefined {
+  const first = differences.find((difference) =>
+    normSquared3(difference) > tolerance * tolerance
+  );
+  if (!first) {
+    return undefined;
+  }
+  const second = differences
+    .map((difference) => ({
+      difference,
+      score: normSquared3(cross3(first, difference))
+        / Math.max(normSquared3(difference), tolerance * tolerance)
+    }))
+    .sort((a, b) => b.score - a.score)[0];
+  if (!second || second.score <= tolerance * tolerance) {
+    return undefined;
+  }
+  const third = differences
+    .map((difference) => ({
+      difference,
+      score: Math.abs(dot3(first, cross3(second.difference, difference)))
+        / Math.max(Math.sqrt(normSquared3(difference)), tolerance)
+    }))
+    .sort((a, b) => b.score - a.score)[0];
+  if (!third || third.score <= tolerance * tolerance) {
+    return undefined;
+  }
+  return [first, second.difference, third.difference];
+}
+
+function classifyDirectionDelta(
+  difference: [number, number, number],
+  basis: readonly [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number]
+  ],
+  tolerance: number
+): [number, number, number] | undefined {
+  const coordinates = solveBasisCoordinates(difference, basis, tolerance);
+  if (!coordinates) {
+    return undefined;
+  }
+  const ranked = coordinates
+    .map((value, axis) => ({ axis, value, magnitude: Math.abs(value) }))
+    .sort((first, second) => second.magnitude - first.magnitude);
+  const dominant = ranked[0];
+  const runnerUp = ranked[1];
+  if (
+    !dominant
+    || dominant.magnitude <= tolerance
+    || (runnerUp && dominant.magnitude <= runnerUp.magnitude * 1.5)
+  ) {
+    return undefined;
+  }
+  const delta = [0, 0, 0] as [number, number, number];
+  delta[dominant.axis] = dominant.value > 0 ? 1 : -1;
+  return delta;
+}
+
+function solveBasisCoordinates(
+  vector: [number, number, number],
+  basis: readonly [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number]
+  ],
+  tolerance: number
+): [number, number, number] | undefined {
+  const [u, v, w] = basis;
+  const determinant = dot3(u, cross3(v, w));
+  if (Math.abs(determinant) <= tolerance * tolerance * tolerance) {
+    return undefined;
+  }
+  return [
+    dot3(vector, cross3(v, w)) / determinant,
+    dot3(u, cross3(vector, w)) / determinant,
+    dot3(u, cross3(v, vector)) / determinant
+  ];
+}
+
+function subtract3(
+  second: readonly number[],
+  first: readonly number[]
+): [number, number, number] {
+  return [
+    second[0]! - first[0]!,
+    second[1]! - first[1]!,
+    second[2]! - first[2]!
+  ];
+}
+
+function negateIndex(
+  index: readonly [number, number, number]
+): [number, number, number] {
+  return [-index[0], -index[1], -index[2]];
+}
+
+function cross3(
+  first: readonly [number, number, number],
+  second: readonly [number, number, number]
+): [number, number, number] {
+  return [
+    first[1] * second[2] - first[2] * second[1],
+    first[2] * second[0] - first[0] * second[2],
+    first[0] * second[1] - first[1] * second[0]
+  ];
+}
+
+function dot3(
+  first: readonly [number, number, number],
+  second: readonly [number, number, number]
+): number {
+  return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+}
+
+function normSquared3(vector: readonly [number, number, number]): number {
+  return dot3(vector, vector);
 }
 
 function inferHexTopologyLattice(mesh: Mesh): HexElementLattice | undefined {

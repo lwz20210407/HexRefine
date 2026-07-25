@@ -1240,7 +1240,7 @@
         parseMeshText,
         meshToLegacyVtk,
         prepareSessionRefineSelection,
-        previewRefinementByElementIds,
+        previewSessionPatch,
         regularizeHexSelection,
         replayHexRefineCommandScript,
         growQ1BoundaryLayer,
@@ -2772,9 +2772,10 @@
             return;
           }
           preview = {
-            ...previewRefinementByElementIds(mesh, prepared.elementIds, {
+            ...previewSessionPatch(refinementSession, prepared.cellIds, {
               ...refineOptions(),
-              regularizeHexSelection: false
+              mergeTolerance: meshMergeTolerance,
+              activeBuild
             }),
             ...(prepared.regularization ? { regularization: prepared.regularization } : {}),
             ...(prepared.sourceElementCount !== undefined ? { sourceElementCount: prepared.sourceElementCount } : {}),

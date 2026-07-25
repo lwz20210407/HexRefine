@@ -100,7 +100,12 @@ export function prepareSessionRefineSelection(
     };
     const localMode = options.hexTwoToOneSelectionMode === "local";
     const regularization = localMode
-      ? regularizeHexSelection(active.mesh, filtered.elementIds, regularizationOptions)
+      ? regularizeLocalTwoToOneSessionLevel(
+          session,
+          active,
+          filtered,
+          regularizationOptions
+        )
       : regularizeTwoToOneHexSelection(active.mesh, filtered.elementIds, regularizationOptions);
     if (regularization.selectedElementIds.length === 0) {
       return {
@@ -189,6 +194,48 @@ export function prepareSessionRefineSelection(
         : grewAnyComponent
           ? "Expanded the user selection by one uvw layer, found a regular block, then refined its core."
           : "Found a regular uvw shell from the selection, then refined its core."
+  };
+}
+
+function regularizeLocalTwoToOneSessionLevel(
+  session: RefinementSession,
+  active: ActiveMeshBuildResult,
+  filtered: LevelFilterResult,
+  options: {
+    tolerance?: number;
+    transitionAxis?: 0 | 1 | 2;
+  }
+): StructuredRegularizedHexSelection {
+  if (filtered.level === undefined || filtered.domainElementIds.length === 0) {
+    return regularizeHexSelection(active.mesh, filtered.elementIds, options);
+  }
+  const domain = buildActiveRegularizationDomain(
+    session,
+    active,
+    filtered.level,
+    filtered.domainElementIds
+  );
+  const domainCandidateIds = filtered.elementIds
+    .map((elementId) => activeBuildCellIdByElementId(active, elementId))
+    .filter((cellId): cellId is CellId => cellId !== undefined)
+    .map((cellId) => domain.elementIdByCellId.get(cellId))
+    .filter((elementId): elementId is number => elementId !== undefined);
+  const domainRegularization = regularizeHexSelection(domain.mesh, domainCandidateIds, options);
+  const activeElementIds = (domainElementIds: readonly number[]): number[] =>
+    uniqueSorted(domainElementIds
+      .map((elementId) => domain.cellIdByElementId.get(elementId))
+      .filter((cellId): cellId is CellId => cellId !== undefined)
+      .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
+      .filter((elementId): elementId is number => elementId !== undefined));
+  return {
+    ...domainRegularization,
+    warnings: domainRegularization.selectedElementIds.length > 0
+      ? successfulRegularizationWarnings(domainRegularization.warnings)
+      : domainRegularization.warnings,
+    originalElementIds: activeElementIds(domainRegularization.originalElementIds),
+    selectedElementIds: activeElementIds(domainRegularization.selectedElementIds),
+    addedElementIds: activeElementIds(domainRegularization.addedElementIds),
+    removedElementIds: activeElementIds(domainRegularization.removedElementIds)
   };
 }
 
