@@ -114,7 +114,10 @@ Jacobian. Ordinary replacement batches conserve signed volume for each parent.
 Transition macros may redistribute volume among their participating parents,
 so patch plans use aggregate signed-volume conservation across the complete
 macro instead. Preview and execution share these checks because they share the
-same immutable patch plan.
+same immutable patch plan. The resulting quality summary is attached to the
+preview and successful session command; command replay carries successful H1
+summaries into offline export manifests without rescanning the complete output
+mesh.
 
 ## Session Flow
 

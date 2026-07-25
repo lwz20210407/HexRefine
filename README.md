@@ -53,6 +53,10 @@ customize for research, engineering experiments, and selected project work:
   conserve volume per parent; multi-parent transition macros conserve the
   aggregate patch volume while every generated Hex retains a positive oriented
   corner scaled Jacobian.
+- H1 preview and execution reports expose the audited parent/child counts,
+  minimum oriented corner scaled Jacobians, oriented volumes, and relative
+  volume error for the planned patch. Browser reports and offline job manifests
+  retain the same shared-kernel summary.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide

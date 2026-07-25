@@ -128,6 +128,15 @@ oriented, while signed volume is conserved across the complete patch. This
 distinction is required by the paired pattern-3 construction and must not be
 replaced with per-parent macro validation.
 
+The shared patch summary contains the audited parent and generated-child
+counts, minimum oriented corner scaled Jacobians, oriented parent/child volumes,
+and relative volume error. `RefinementPreview`, `RefinementResult`, and
+successful H1 `RefinementSessionCommand` objects expose this same structure.
+The browser report displays it before and after execution, while command replay
+collects successful summaries for the offline job manifest. These are
+operation-local metrics; the runtime does not rescan every unchanged Hex in a
+large output mesh for each preview.
+
 ## Replacing Elements and Merging Nodes
 
 `replaceElements` in `src/mesh.ts` builds a flat output mesh:

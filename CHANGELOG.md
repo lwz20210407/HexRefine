@@ -14,6 +14,9 @@ Private/custom performance edition.
   scaled Jacobians and signed-volume conservation before hierarchy mutation.
 - Added aggregate volume validation for multi-parent transition macros, while
   preserving per-parent validation for ordinary Hex replacement batches.
+- Exposed shared H1 patch-quality summaries through previews, refinement
+  results, session commands, browser reports, command replay, and offline job
+  manifests.
 - Added shared-kernel support for disconnected Hex selection regions, with
   per-region uvw regularization before refinement.
 - Improved large-mesh GUI rendering with cached WebGL surface/edge paths.
