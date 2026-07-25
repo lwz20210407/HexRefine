@@ -17,6 +17,9 @@ Private/custom performance edition.
 - Exposed shared H1 patch-quality summaries through previews, refinement
   results, session commands, browser reports, command replay, and offline job
   manifests.
+- Added LS-DYNA fixed-field node import with blank-zero coordinate support.
+- Added an anonymized real-deck O-grid gauge-slab 2:1 regression, and strengthened
+  the synthetic trivalent O-grid test with volume and scaled-Jacobian checks.
 - Added shared-kernel support for disconnected Hex selection regions, with
   per-region uvw regularization before refinement.
 - Improved large-mesh GUI rendering with cached WebGL surface/edge paths.

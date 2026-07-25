@@ -137,6 +137,12 @@ collects successful summaries for the offline job manifest. These are
 operation-local metrics; the runtime does not rescan every unchanged Hex in a
 large output mesh for each preview.
 
+The 2:1 section path is covered by both a synthetic butterfly O-grid and an
+anonymized mesh-only slab extracted from a real LS-DYNA engineering deck. Both
+tests require zero hanging nodes, conserved volume, and positive corner scaled
+Jacobians. The real-deck fixture also exercises fixed-field keyword parsing and
+the full import-to-refinement path.
+
 ## Replacing Elements and Merging Nodes
 
 `replaceElements` in `src/mesh.ts` builds a flat output mesh:

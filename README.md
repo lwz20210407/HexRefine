@@ -58,6 +58,9 @@ customize for research, engineering experiments, and selected project work:
   volume error for the planned patch. Browser reports and offline job manifests
   retain the same shared-kernel summary.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
+- LS-DYNA keyword import accepts comma/space records and standard fixed-field
+  `*NODE` records whose blank coordinate fields represent zero. An anonymized
+  real-deck O-grid gauge slab is exercised by the 2:1 regression suite.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide
 large cases, but for production-size exports the recommended path is GUI first,
@@ -81,6 +84,11 @@ grid dimensions are even. The GUI `2:1 axis` control and the
 `hexTransitionAxis: 0 | 1 | 2` option can override that choice; unsupported
 transverse odd sections fail with an explicit diagnostic instead of producing a
 nonconforming mesh.
+
+The current 2:1 scope is intentionally limited to structured or recoverable
+mapped lattices and even full-section O-grid interfaces. Arbitrary unstructured
+Hex topology, odd-section topology compensation, and transition-shell
+intersection rebuilding remain outside the first contribution scope.
 
 Set `hexTwoToOneSelectionMode: "local"` or choose `2:1 domain -> Local box` in
 the browser to retain a local core. Disable regularization when an explicit
