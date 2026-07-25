@@ -2,6 +2,15 @@ export type TwoToOneEntityId = number | string;
 
 export type TwoToOneCompensationMode = "none" | "selection" | "local-topology";
 
+export type TwoToOnePlanningStatus = "direct" | "compensated";
+
+export type TwoToOneTopologyClass =
+  | "structured"
+  | "mapped"
+  | "periodic-ogrid"
+  | "mixed-level"
+  | "unstructured";
+
 export interface TwoToOneCompensationOptions {
   mode?: TwoToOneCompensationMode;
   maxAddedParentLayers?: number;
@@ -19,7 +28,7 @@ export interface NormalizedTwoToOneCompensation {
   maxAddedParentCount: number;
 }
 
-export interface TwoToOneCompensationAction<TId extends TwoToOneEntityId = TwoToOneEntityId> {
+export interface TwoToOneCompensationAction<TId extends TwoToOneEntityId = number> {
   kind: "selection-expand" | "transition-shell-rebuild" | "local-template";
   reason: string;
   addedParentCellIds: TId[];
@@ -27,11 +36,11 @@ export interface TwoToOneCompensationAction<TId extends TwoToOneEntityId = TwoTo
   templateId?: string;
 }
 
-export interface TwoToOneCapabilityReport<TId extends TwoToOneEntityId = TwoToOneEntityId> {
-  status: "direct" | "compensated";
-  topologyClass: "structured" | "mapped" | "periodic-ogrid" | "mixed-level" | "unstructured";
-  originalSelectedParentCellIds: TId[];
-  effectiveSelectedParentCellIds: TId[];
+export interface TwoToOneCapabilityReport<TId extends TwoToOneEntityId = number> {
+  status: TwoToOnePlanningStatus;
+  topologyClass: TwoToOneTopologyClass;
+  originalSelectedCellIds: TId[];
+  effectiveSelectedCellIds: TId[];
   actions: TwoToOneCompensationAction<TId>[];
   affectedComponentCellIds: TId[];
   preservedFarFieldCellCount: number;
@@ -49,7 +58,7 @@ export type TwoToOnePlanningErrorCode =
   | "TWO_TO_ONE_CHILD_JACOBIAN"
   | "TWO_TO_ONE_VOLUME";
 
-export interface TwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId = TwoToOneEntityId> {
+export interface TwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId = number> {
   conflictingCellIds: TId[];
   conflictingInterfaces: Array<{
     firstCellId: TId;
@@ -65,7 +74,7 @@ export interface TwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId = TwoTo
   };
 }
 
-export class TwoToOnePlanningError<TId extends TwoToOneEntityId = TwoToOneEntityId> extends Error {
+export class TwoToOnePlanningError<TId extends TwoToOneEntityId = number> extends Error {
   readonly code: TwoToOnePlanningErrorCode;
   readonly diagnostic: TwoToOnePlanningDiagnostic<TId>;
 
