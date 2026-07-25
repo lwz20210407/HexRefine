@@ -20,7 +20,10 @@ import {
   selectElementsByPredicate
 } from "./mesh.js";
 import { buildDefaultRefinementReplacements } from "./refinement-planner.js";
-import { regularizeHexSelection as regularizeHexSelectionCore } from "./regularization.js";
+import {
+  regularizeHexSelection as regularizeHexSelectionCore,
+  regularizeTwoToOneHexSelection
+} from "./regularization.js";
 import {
   pointInBox as pointInBoxCore,
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
@@ -77,7 +80,7 @@ export function refineByBoxWithReport(mesh: Mesh, box: BoxRange, options: Refine
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -112,7 +115,7 @@ export function refineByDistanceFunctionWithReport(
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -140,7 +143,7 @@ export function previewRefinementByBox(mesh: Mesh, box: BoxRange, options: Refin
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -167,7 +170,7 @@ export function previewRefinementByDistanceFunction(
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -192,6 +195,17 @@ export function regularizeHexSelection(
   options: HexSelectionRegularizationOptions = {}
 ): RegularizedHexSelection {
   return regularizeHexSelectionCore(mesh, candidateElementIds, options);
+}
+
+function regularizeCandidateSelection(
+  mesh: Mesh,
+  candidateElementIds: readonly number[],
+  options: RefineOptions,
+  regularizationOptions: HexSelectionRegularizationOptions
+): RegularizedHexSelection {
+  return options.hexRefinementRatio === 2
+    ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
+    : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
 }
 
 export function pointInBox(point: Point, box: BoxRange): boolean {

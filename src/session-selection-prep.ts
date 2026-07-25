@@ -2,7 +2,10 @@ import type { ActiveMeshBuildResult, CellId, RefinementSession } from "./refinem
 import { activeBuildCellIdByElementId, activeBuildElementIdByCellId } from "./refinement-session.js";
 import type { HexIndexRange, Mesh, RefineOptions, RegularizedHexSelection } from "./types.js";
 import { previewRefinementByElementIds } from "./refinement-ops.js";
-import { regularizeHexSelection } from "./regularization.js";
+import {
+  regularizeHexSelection,
+  regularizeTwoToOneHexSelection
+} from "./regularization.js";
 import type { HexSessionRegularizationDomain, RegularizedHexSessionSelection } from "./session-regularization.js";
 import { regularizeHexSessionSelection } from "./session-regularization.js";
 
@@ -83,6 +86,40 @@ export function prepareSessionRefineSelection(
         ...filtered.warnings,
         filtered.warnings[0] ?? "Selection has no active non-transition Hex at a single refinement level."
       ]
+    };
+  }
+
+  if (options.hexRefinementRatio === 2) {
+    const regularizationOptions = options.regularizationTolerance === undefined
+      ? {}
+      : { tolerance: options.regularizationTolerance };
+    const regularization = regularizeTwoToOneHexSelection(
+      active.mesh,
+      filtered.elementIds,
+      regularizationOptions
+    );
+    if (regularization.selectedElementIds.length === 0) {
+      return {
+        elementIds: filtered.elementIds,
+        cellIds: mapCellIdsFromElementIds(active, filtered.elementIds),
+        sourceElementCount: rawElementIds.length,
+        expandedCandidateCount: 0,
+        warnings: [...filtered.warnings, ...regularization.warnings],
+        notice: "2:1 full-section completion was unavailable; falling back to the direct same-level selection."
+      };
+    }
+    const elementIds = regularization.selectedElementIds;
+    return {
+      elementIds,
+      cellIds: mapCellIdsFromElementIds(active, elementIds),
+      regularization,
+      outerElementIds: elementIds,
+      outerCellIds: mapCellIdsFromElementIds(active, elementIds),
+      sourceElementCount: rawElementIds.length,
+      expandedCandidateCount: elementIds.length,
+      boundedCoreCount: elementIds.length,
+      warnings: [...filtered.warnings, ...regularization.warnings],
+      notice: `Completed the 2:1 core to a ${elementIds.length}-cell full section before refinement.`
     };
   }
 

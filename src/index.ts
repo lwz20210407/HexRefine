@@ -26,6 +26,7 @@ export * from "./refinement-session.js";
 export * from "./session-selection-prep.js";
 export * from "./command-script.js";
 export * from "./export.js";
+export { regularizeTwoToOneHexSelection } from "./regularization.js";
 
 export {
   buildDefaultRefinementReplacements,

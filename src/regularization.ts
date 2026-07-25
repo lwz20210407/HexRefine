@@ -19,6 +19,8 @@ interface HexNeighbor {
   delta: [number, number, number];
 }
 
+type HexAxis = 0 | 1 | 2;
+
 const H1_FACE_DELTAS: readonly [number, number, number][] = [
   [0, 0, -1],
   [0, 0, 1],
@@ -98,6 +100,106 @@ export function regularizeHexSelection(
     indexRange: range,
     warnings: lattice.warnings
   };
+}
+
+/**
+ * Expand a structured Hex selection to the full transverse section required by
+ * the one-direction 2:1 transition planner.
+ */
+export function regularizeTwoToOneHexSelection(
+  mesh: Mesh,
+  candidateElementIds: readonly number[],
+  options: HexSelectionRegularizationOptions = {}
+): RegularizedHexSelection {
+  const regularized = regularizeHexSelection(mesh, candidateElementIds, options);
+  if (
+    regularized.selectedElementIds.length === 0
+    || !regularized.indexRange
+    || !regularized.gridDimensions
+  ) {
+    return regularized;
+  }
+
+  const tolerance = options.tolerance ?? minElementEdgeLength(mesh) * 0.000001;
+  const lattice = inferHexElementLattice(mesh, tolerance);
+  const sourceRange = regularized.indexRange;
+  const transitionAxis = selectTwoToOneTransitionAxis(
+    sourceRange,
+    lattice.dimensions
+  );
+  const min = [...sourceRange.min] as [number, number, number];
+  const max = [...sourceRange.max] as [number, number, number];
+
+  for (const axis of [0, 1, 2] as const) {
+    if (axis === transitionAxis) {
+      if (min[axis] === 1) {
+        min[axis] = 0;
+      }
+      if (max[axis] === lattice.dimensions[axis] - 2) {
+        max[axis] = lattice.dimensions[axis] - 1;
+      }
+      continue;
+    }
+    min[axis] = 0;
+    max[axis] = lattice.dimensions[axis] - 1;
+  }
+
+  const range = makeIndexRange(min, max);
+  const selectedElementIds = idsInRange(range, lattice);
+  const selectedSet = new Set(selectedElementIds);
+  const originalSet = new Set(regularized.originalElementIds);
+  return {
+    originalElementIds: regularized.originalElementIds,
+    selectedElementIds,
+    addedElementIds: selectedElementIds.filter((elementId) => !originalSet.has(elementId)),
+    removedElementIds: regularized.originalElementIds.filter((elementId) => !selectedSet.has(elementId)),
+    gridDimensions: lattice.dimensions,
+    indexRange: range,
+    warnings: uniqueStrings([
+      ...regularized.warnings,
+      `completed the 2:1 selection across logical axes ${transverseAxes(transitionAxis)
+        .map((axis) => axis + 1)
+        .join(" and ")}; logical axis ${transitionAxis + 1} is the transition direction`
+    ])
+  };
+}
+
+function selectTwoToOneTransitionAxis(
+  range: HexIndexRange,
+  gridDimensions: [number, number, number]
+): HexAxis {
+  const candidates = ([0, 1, 2] as const).map((axis) => {
+    const min = range.min[axis] === 1 ? 0 : range.min[axis];
+    const max = range.max[axis] === gridDimensions[axis] - 2
+      ? gridDimensions[axis] - 1
+      : range.max[axis];
+    const axialLength = max - min + 1;
+    const crossSectionSize = transverseAxes(axis)
+      .reduce<number>((total, crossAxis) => total * gridDimensions[crossAxis]!, 1);
+    return {
+      axis,
+      completedSize: axialLength * crossSectionSize,
+      normalizedLength: range.dimensions[axis]! / gridDimensions[axis]!
+    };
+  });
+  const eligible = candidates.filter(({ axis }) =>
+    transverseAxes(axis).every((crossAxis) => gridDimensions[crossAxis] % 2 === 0)
+  );
+  if (eligible.length === 0) {
+    throw new Error(
+      "2:1 full-section completion requires two even transverse grid dimensions"
+    );
+  }
+  eligible.sort((first, second) =>
+    first.completedSize - second.completedSize
+    || first.normalizedLength - second.normalizedLength
+    || first.axis - second.axis
+  );
+  return eligible[0]!.axis;
+}
+
+function transverseAxes(axis: HexAxis): HexAxis[] {
+  return ([0, 1, 2] as const).filter((candidate) => candidate !== axis);
 }
 
 function inferHexElementLattice(mesh: Mesh, tolerance: number): HexElementLattice {

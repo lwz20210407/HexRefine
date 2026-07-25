@@ -47,6 +47,7 @@ const {
   redoRefinementSession,
   regularizeHexSessionSelection,
   regularizeHexSelection,
+  regularizeTwoToOneHexSelection,
   remapSessionSetsToActiveMesh,
   refineQ1To3x3,
   refineQ1To4Q1,
@@ -2090,6 +2091,73 @@ test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () =>
   assert.equal(templateCounts.get(7), 168);
   assert.equal(templateCounts.get(0), 24);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+});
+
+test("Hex 2:1 box refinement completes a local pick to a full section", () => {
+  const mesh = createHexUnitCubeMesh(4, 4, 7);
+  const result = refineByBoxWithReport(mesh, {
+    min: [0.3, 0.3, 0.45],
+    max: [0.45, 0.45, 0.55]
+  }, {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: true
+  });
+
+  assert.ok(result.regularization);
+  assert.deepEqual(result.regularization.indexRange?.dimensions, [4, 4, 1]);
+  assert.equal(result.regularization.originalElementIds.length, 1);
+  assert.equal(result.regularization.selectedElementIds.length, 16);
+  assert.equal(result.regularization.addedElementIds.length, 15);
+  assert.equal(result.summary.selectedElementCount, 16);
+  assert.equal(result.summary.faceTransitionElementCount, 32);
+  assert.equal(result.mesh.elements.length, 416);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+});
+
+test("Hex 2:1 section completion chooses an axis with even transverse counts", () => {
+  const mesh = createHexUnitCubeMesh(8, 5, 6);
+  const selectedElementId = elementIdAt(8, 5, 6, 3, 2, 2);
+  const regularized = regularizeTwoToOneHexSelection(
+    mesh,
+    [selectedElementId]
+  );
+
+  assert.deepEqual(regularized.indexRange?.dimensions, [8, 1, 6]);
+  assert.equal(regularized.selectedElementIds.length, 48);
+});
+
+test("Hex 2:1 section completion rejects grids without an even transverse pair", () => {
+  const mesh = createHexUnitCubeMesh(4, 3, 7);
+  const selectedElementId = elementIdAt(4, 3, 7, 1, 1, 3);
+
+  assert.throws(
+    () => regularizeTwoToOneHexSelection(mesh, [selectedElementId]),
+    /requires two even transverse grid dimensions/
+  );
+});
+
+test("Hex 2:1 session preparation completes a local pick to a full section", () => {
+  const mesh = createHexUnitCubeMesh(4, 4, 7);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const selectedElementId = elementIdAt(4, 4, 7, 1, 1, 3);
+  const prepared = prepareSessionRefineSelection(session, active, [selectedElementId], {
+    hexRefinementRatio: 2,
+    regularizeHexSelection: true
+  });
+
+  assert.deepEqual(prepared.regularization?.indexRange?.dimensions, [4, 4, 1]);
+  assert.equal(prepared.elementIds.length, 16);
+  assert.equal(prepared.cellIds.length, 16);
+
+  refineSessionPatch(session, prepared.cellIds, {
+    hexRefinementRatio: 2,
+    includeTransitions: true,
+    activeBuild: active
+  });
+  const refined = buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 1e-9 });
+  assert.equal(refined.elements.length, 416);
+  assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
 });
 
 test("Hex refinement report identifies automatic transition templates", () => {

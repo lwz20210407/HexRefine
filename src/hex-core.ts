@@ -22,7 +22,10 @@ import {
   buildHexClassifiedReplacements as buildSharedHexClassifiedReplacements,
   type ClassifiedHexReplacement
 } from "./transitions.js";
-import { regularizeHexSelection as regularizeHexSelectionCore } from "./regularization.js";
+import {
+  regularizeHexSelection as regularizeHexSelectionCore,
+  regularizeTwoToOneHexSelection
+} from "./regularization.js";
 import {
   pointInBox as pointInBoxCore,
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
@@ -147,7 +150,7 @@ export function refineHexCandidateIdsWithReport(
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const result = refineHexByElementIdsWithReport(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -166,7 +169,7 @@ export function previewHexCandidateIds(mesh: Mesh, candidateIds: readonly number
   const regularizationOptions = options.regularizationTolerance === undefined
     ? {}
     : { tolerance: options.regularizationTolerance };
-  const regularization = regularizeHexSelection(mesh, candidateIds, regularizationOptions);
+  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
   const preview = previewHexRefinementByElementIds(mesh, regularization.selectedElementIds, {
     ...options,
     regularizeHexSelection: false
@@ -183,6 +186,17 @@ export function buildHexClassifiedReplacements(
   options: RefineOptions
 ): ClassifiedHexReplacement[] {
   return buildSharedHexClassifiedReplacements(mesh, selected, options);
+}
+
+function regularizeCandidateSelection(
+  mesh: Mesh,
+  candidateElementIds: readonly number[],
+  options: RefineOptions,
+  regularizationOptions: HexSelectionRegularizationOptions
+): RegularizedHexSelection {
+  return options.hexRefinementRatio === 2
+    ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
+    : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
 }
 
 export function assertHexMesh(mesh: Mesh): void {

@@ -36,6 +36,8 @@ customize for research, engineering experiments, and selected project work:
 - Selectable Hex refinement ratios: the established `3:1` transition and an
   experimental `2:1` (`4:2`) full-section transition based on a uniform
   `1 -> 8` core and TrueGrid-derived `1 -> 7` transition columns.
+- Automatic `2:1` completion of a local structured-Hex pick to an even,
+  level-closed transverse section for box, preview, and GUI session workflows.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
 
 Large-mesh workflows are still an active engineering area. The GUI can guide
@@ -47,6 +49,9 @@ transition sections on structured or mapped Hex meshes, including even O-grid
 sections with trivalent lines. Intersecting transition shells, arbitrary
 multi-direction edge/corner closure, multi-level `2:1` refinement, and automatic
 odd-section topology completion are not yet part of the TypeScript runtime.
+Structured section completion selects a logical transition axis whose other two
+grid dimensions are even; unsupported odd sections fail with an explicit
+diagnostic instead of producing a nonconforming mesh.
 
 ## Copyright And Version
 
