@@ -2,11 +2,57 @@ import type { BoundaryPair, Mesh, RefineOptions, RefinementRole, ReplaceElement 
 import { elementVertices, findBoundaryPairs, instantiateOnElement, minElementEdgeLength } from "./mesh.js";
 import { alignHexEdgeToVertical, alignHexFaceToBottom, sharedNodes } from "./topology.js";
 import { refineHexTo13Hex, refineHexTo27Hex, refineHexTo5Hex, refineHexTo8Hex } from "./templates.js";
-import { buildTwoToOneHexReplacements } from "./two-to-one.js";
+import { buildDirectTwoToOneHexPlan } from "./two-to-one.js";
+import type {
+  TwoToOneCapabilityReport,
+  TwoToOneTopologyClass
+} from "./two-to-one-capability.js";
 
 export interface ClassifiedHexReplacement extends ReplaceElement {
   role: RefinementRole;
   templateCode: number;
+}
+
+export interface ClassifiedHexPlan {
+  replacements: ClassifiedHexReplacement[];
+  twoToOne?: TwoToOneCapabilityReport<number>;
+}
+
+export function buildHexClassifiedPlan(
+  mesh: Mesh,
+  selected: readonly number[],
+  options: RefineOptions = {}
+): ClassifiedHexPlan {
+  const includeTransitions = options.includeTransitions ?? true;
+  const ratio = options.hexRefinementRatio ?? 3;
+  if (ratio === 2) {
+    if (!includeTransitions) {
+      const replacements = selected.map((elementId) =>
+        classifyHexReplacement(
+          instantiateOnElement(mesh, elementId, refineHexTo8Hex),
+          "selected",
+          8
+        )
+      );
+      return {
+        replacements,
+        twoToOne: buildDirectReport(mesh, selected, replacements, "mapped")
+      };
+    }
+    const direct = buildDirectTwoToOneHexPlan(mesh, selected);
+    return {
+      replacements: direct.replacements,
+      twoToOne: buildDirectReport(
+        mesh,
+        selected,
+        direct.replacements,
+        direct.strategy === "local-sweep" ? "mapped" : "periodic-ogrid"
+      )
+    };
+  }
+  return {
+    replacements: buildThreeToOneHexClassifiedReplacements(mesh, selected, options)
+  };
 }
 
 export function buildHexClassifiedReplacements(
@@ -14,20 +60,15 @@ export function buildHexClassifiedReplacements(
   selected: readonly number[],
   options: RefineOptions = {}
 ): ClassifiedHexReplacement[] {
+  return buildHexClassifiedPlan(mesh, selected, options).replacements;
+}
+
+export function buildThreeToOneHexClassifiedReplacements(
+  mesh: Mesh,
+  selected: readonly number[],
+  options: RefineOptions = {}
+): ClassifiedHexReplacement[] {
   const includeTransitions = options.includeTransitions ?? true;
-  const ratio = options.hexRefinementRatio ?? 3;
-  if (ratio === 2) {
-    if (!includeTransitions) {
-      return selected.map((elementId) =>
-        classifyHexReplacement(
-          instantiateOnElement(mesh, elementId, refineHexTo8Hex),
-          "selected",
-          8
-        )
-      );
-    }
-    return buildTwoToOneHexReplacements(mesh, selected);
-  }
   const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
   const replacements: ClassifiedHexReplacement[] = [];
 
@@ -41,6 +82,27 @@ export function buildHexClassifiedReplacements(
     replacements.push(...hexForcedSupportTransitionReplacements(mesh, selected, options.transitionSupportElementIds ?? [], replacements, mergeTolerance));
   }
   return replacements;
+}
+
+function buildDirectReport(
+  mesh: Mesh,
+  selected: readonly number[],
+  replacements: readonly ClassifiedHexReplacement[],
+  topologyClass: TwoToOneTopologyClass
+): TwoToOneCapabilityReport<number> {
+  const selectedElementIds = uniqueSorted(selected);
+  const affectedElementIds = uniqueSorted(
+    replacements.map((replacement) => replacement.elementId)
+  );
+  return {
+    status: "direct",
+    topologyClass,
+    originalSelectedCellIds: selectedElementIds,
+    effectiveSelectedCellIds: [...selectedElementIds],
+    actions: [],
+    affectedComponentCellIds: affectedElementIds,
+    preservedFarFieldCellCount: mesh.elements.length - affectedElementIds.length
+  };
 }
 
 export function hexFaceTransitionReplacements(

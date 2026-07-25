@@ -19,7 +19,10 @@ import {
   replaceElements,
   selectElementsByPredicate
 } from "./mesh.js";
-import { buildDefaultRefinementReplacements } from "./refinement-planner.js";
+import {
+  buildDefaultRefinementPlan,
+  buildDefaultRefinementReplacements
+} from "./refinement-planner.js";
 import {
   regularizeHexSelection as regularizeHexSelectionCore,
   regularizeTwoToOneHexSelection
@@ -29,6 +32,7 @@ import {
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
 import { auditHexRefinementPatchQuality } from "./hex-quality.js";
+import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -54,17 +58,19 @@ export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: rea
   }
 
   const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
-  const replacements = buildDefaultRefinementReplacements(mesh, selected, {
+  const plan = buildDefaultRefinementPlan(mesh, selected, {
     ...options,
     mergeTolerance
   });
+  const replacements = plan.replacements;
 
   const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
   return buildRefinementResult(
     mesh,
     refinedMesh,
     replacements,
-    selected.length
+    selected.length,
+    plan.twoToOne
   );
 }
 
@@ -126,8 +132,8 @@ export function refineByDistanceFunctionWithReport(
 export function previewRefinementByElementIds(mesh: Mesh, selectedElementIds: readonly number[], options: RefineOptions = {}): RefinementPreview {
   const kind = inferMeshKind(mesh);
   const selected = uniqueSorted(selectedElementIds);
-  const replacements = buildDefaultRefinementReplacements(mesh, selected, options);
-  return buildRefinementPreview(mesh, kind, replacements);
+  const plan = buildDefaultRefinementPlan(mesh, selected, options);
+  return buildRefinementPreview(mesh, kind, plan.replacements, plan.twoToOne);
 }
 
 export function previewRefinementByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): RefinementPreview {
@@ -219,7 +225,13 @@ export function pointInBox(point: Point, box: BoxRange): boolean {
   return pointInBoxCore(point, box);
 }
 
-function buildRefinementResult(inputMesh: Mesh, mesh: Mesh, replacements: readonly ClassifiedReplacement[], selectedElementCount: number): RefinementResult {
+function buildRefinementResult(
+  inputMesh: Mesh,
+  mesh: Mesh,
+  replacements: readonly ClassifiedReplacement[],
+  selectedElementCount: number,
+  twoToOne?: TwoToOneCapabilityReport<number>
+): RefinementResult {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const cellData: RefinementCellData[] = [];
   const quality = inferMeshKind(inputMesh) === "H1" && replacements.length > 0
@@ -260,11 +272,17 @@ function buildRefinementResult(inputMesh: Mesh, mesh: Mesh, replacements: readon
       outputNodeCount: mesh.nodes.length,
       outputElementCount: mesh.elements.length
     },
-    ...(quality ? { quality } : {})
+    ...(quality ? { quality } : {}),
+    ...(twoToOne ? { twoToOne } : {})
   };
 }
 
-function buildRefinementPreview(mesh: Mesh, kind: "Q1" | "H1", replacements: readonly ClassifiedReplacement[]): RefinementPreview {
+function buildRefinementPreview(
+  mesh: Mesh,
+  kind: "Q1" | "H1",
+  replacements: readonly ClassifiedReplacement[],
+  twoToOne?: TwoToOneCapabilityReport<number>
+): RefinementPreview {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const quality = kind === "H1" && replacements.length > 0
     ? auditHexRefinementPatchQuality(mesh, replacements)
@@ -291,7 +309,8 @@ function buildRefinementPreview(mesh: Mesh, kind: "Q1" | "H1", replacements: rea
       unchangedElementCount,
       estimatedOutputElementCount: unchangedElementCount + plan.reduce((total, item) => total + item.outputElementCount, 0)
     },
-    ...(quality ? { quality } : {})
+    ...(quality ? { quality } : {}),
+    ...(twoToOne ? { twoToOne } : {})
   };
 }
 

@@ -18,6 +18,7 @@ import {
   type Pattern3Symbol,
   type RegularSweepTemplate
 } from "./two-to-one-sweep-templates.js";
+import { DirectTwoToOnePlanningError } from "./two-to-one-capability.js";
 
 export interface LocalTwoToOneReplacement extends ReplaceElement {
   role: Exclude<RefinementRole, "unchanged">;
@@ -594,10 +595,13 @@ function applyRegularSweepPass(
       const signature = markedCornerSignature(marks);
       const plan = library.get(signature) ?? pattern3Library.get(signature);
       if (!plan) {
-        throw new Error(
+        const sourceParentId = originalParentIds[elementIndex]!;
+        throw new DirectTwoToOnePlanningError(
+          "selection-signature",
           `local 2:1 sweep element ${elementIndex + 1} (source parent ${originalParentIds[elementIndex]}) ` +
           "has unsupported marked-corner signature " +
-          signature
+          signature,
+          [sourceParentId]
         );
       }
       return plan;
@@ -622,12 +626,15 @@ function applyRegularSweepPass(
     }
   });
   if (unpairedFaces.size > 0) {
-    throw new Error(
+    const conflicts = [...unpairedFaces.values()]
+      .sort((a, b) => a.elementId - b.elementId);
+    throw new DirectTwoToOnePlanningError(
+      "selection-signature",
       "local 2:1 pattern-3 elements have no partner sharing their marked face: " +
-      [...unpairedFaces.values()]
-        .sort((a, b) => a.elementId - b.elementId)
+      conflicts
         .map(({ elementId, sourceParentId }) => `${elementId} (source parent ${sourceParentId})`)
-        .join(", ")
+        .join(", "),
+      uniqueSorted(conflicts.map(({ sourceParentId }) => sourceParentId))
     );
   }
 

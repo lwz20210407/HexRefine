@@ -31,8 +31,10 @@ export * from "./export.js";
 export { regularizeTwoToOneHexSelection } from "./regularization.js";
 
 export {
+  buildDefaultRefinementPlan,
   buildDefaultRefinementReplacements,
   defaultRefinementPlanner,
+  type ClassifiedRefinementPlan,
   type RefinementPlanner
 } from "./refinement-planner.js";
 
@@ -55,8 +57,10 @@ export {
 } from "./hex-core.js";
 
 export {
+  buildHexClassifiedPlan,
   hexEdgeTransitionReplacements,
-  hexFaceTransitionReplacements
+  hexFaceTransitionReplacements,
+  type ClassifiedHexPlan
 } from "./transitions.js";
 
 export {

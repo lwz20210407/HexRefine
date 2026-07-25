@@ -11,10 +11,18 @@ import {
   type TwoWay7ReferenceTemplate
 } from "./two-to-one-templates.js";
 import { tryBuildLocalTwoToOneHexReplacements } from "./two-to-one-sweep.js";
+import { DirectTwoToOnePlanningError } from "./two-to-one-capability.js";
 
 export interface TwoToOneReplacement extends ReplaceElement {
   role: "selected" | "face-transition" | "edge-transition" | "corner-transition";
   templateCode: number;
+}
+
+export type DirectTwoToOneStrategy = "local-sweep" | "seven-hex";
+
+export interface DirectTwoToOnePlan {
+  replacements: TwoToOneReplacement[];
+  strategy: DirectTwoToOneStrategy;
 }
 
 interface FaceOwner {
@@ -69,17 +77,21 @@ let candidateCache: readonly Candidate[] | undefined;
  * seven-hex 4-to-2 template. Candidate orientations are solved globally so
  * lateral wall partitions and exposed-boundary phases close around O-grids.
  */
-export function buildTwoToOneHexReplacements(
+export function buildDirectTwoToOneHexPlan(
   mesh: Mesh,
   selectedElementIds: readonly number[]
-): TwoToOneReplacement[] {
+): DirectTwoToOnePlan {
   const selected = uniqueSorted(selectedElementIds);
+  assertSelectedElementIds(mesh, selected);
+  const incidence = buildFaceIncidence(mesh);
   const localReplacements = tryBuildLocalTwoToOneHexReplacements(mesh, selected);
   if (localReplacements) {
-    return localReplacements;
+    return {
+      replacements: localReplacements,
+      strategy: "local-sweep"
+    };
   }
   const selectedSet = new Set(selected);
-  const incidence = buildFaceIncidence(mesh);
   const cells = discoverTransitionCells(mesh, selectedSet, incidence);
   const variables = cells.map((cell) => cell.elementId);
   const variableIndex = new Map(variables.map((elementId, index) => [elementId, index]));
@@ -139,9 +151,10 @@ export function buildTwoToOneHexReplacements(
     partition
   );
   if (!solution) {
-    throw new Error(
-      "no level-closed 2:1 seven-hex transition field exists; " +
-      "the interface may have odd periodic parity or unsupported topology"
+    throw new DirectTwoToOnePlanningError(
+      "parity",
+      "no level-closed 2:1 seven-hex transition field exists",
+      variables
     );
   }
 
@@ -165,7 +178,17 @@ export function buildTwoToOneHexReplacements(
       templateCode: 7
     });
   });
-  return replacements;
+  return {
+    replacements,
+    strategy: "seven-hex"
+  };
+}
+
+export function buildTwoToOneHexReplacements(
+  mesh: Mesh,
+  selectedElementIds: readonly number[]
+): TwoToOneReplacement[] {
+  return buildDirectTwoToOneHexPlan(mesh, selectedElementIds).replacements;
 }
 
 function discoverTransitionCells(
@@ -185,9 +208,11 @@ function discoverTransitionCells(
     const selectedOwner = selected.has(first.elementId) ? first : second;
     const transitionOwner = selected.has(first.elementId) ? second : first;
     if (cellsByElement.has(transitionOwner.elementId)) {
-      throw new Error(
+      throw new DirectTwoToOnePlanningError(
+        "valence",
         `2:1 transition columns overlap at element ${transitionOwner.elementId}; ` +
-        "intersecting face-transition shells require dedicated edge/corner templates"
+        "intersecting face-transition shells require dedicated edge/corner templates",
+        uniqueSorted([selectedOwner.elementId, transitionOwner.elementId])
       );
     }
     cellsByElement.set(transitionOwner.elementId, {
@@ -251,17 +276,21 @@ function buildTransitionConstraints(
         return;
       }
       const neighborKind = selected.has(other.elementId) ? "selected core" : "coarse far field";
-      throw new Error(
+      throw new DirectTwoToOnePlanningError(
+        "selection-signature",
         `2:1 seven-hex lateral face of element ${cell.elementId} meets ${neighborKind} ` +
-        `element ${other.elementId}; the transition layer must cover a full section or end on a model boundary`
+        `element ${other.elementId}; the transition layer must cover a full section or end on a model boundary`,
+        uniqueSorted([cell.elementId, other.elementId])
       );
     });
 
     const outerElementFace = H1_FACES[cell.outerFace]!.map((localId) => element[localId - 1]!);
     const outerOwners = incidence.get(boundaryKey(outerElementFace)) ?? [];
     if (outerOwners.length !== 2) {
-      throw new Error(
-        `2:1 transition element ${cell.elementId} reaches a free boundary on its coarse side`
+      throw new DirectTwoToOnePlanningError(
+        "selection-signature",
+        `2:1 transition element ${cell.elementId} reaches a free boundary on its coarse side`,
+        [cell.elementId]
       );
     }
   });
@@ -672,6 +701,21 @@ function buildFaceIncidence(mesh: Mesh): Map<string, FaceOwner[]> {
   const incidence = new Map<string, FaceOwner[]>();
   mesh.elements.forEach((element, index) => {
     const elementId = index + 1;
+    if (
+      element.length !== 8
+      || new Set(element).size !== 8
+      || element.some((nodeId) =>
+        !Number.isSafeInteger(nodeId)
+        || nodeId < 1
+        || nodeId > mesh.nodes.length
+      )
+    ) {
+      throw new DirectTwoToOnePlanningError(
+        "topology",
+        `element ${elementId} has invalid Hex connectivity`,
+        [elementId]
+      );
+    }
     H1_FACES.forEach((faceTemplate, face) => {
       const key = boundaryKey(faceTemplate.map((localId) => element[localId - 1]!));
       const owners = incidence.get(key) ?? [];
@@ -679,7 +723,32 @@ function buildFaceIncidence(mesh: Mesh): Map<string, FaceOwner[]> {
       incidence.set(key, owners);
     });
   });
+  for (const owners of incidence.values()) {
+    if (owners.length > 2) {
+      const conflictingElementIds = uniqueSorted(owners.map((owner) => owner.elementId));
+      throw new DirectTwoToOnePlanningError(
+        "topology",
+        `Hex face is nonmanifold across elements ${conflictingElementIds.join(", ")}`,
+        conflictingElementIds
+      );
+    }
+  }
   return incidence;
+}
+
+function assertSelectedElementIds(mesh: Mesh, selectedElementIds: readonly number[]): void {
+  const invalidElementIds = selectedElementIds.filter((elementId) =>
+    !Number.isSafeInteger(elementId)
+    || elementId < 1
+    || elementId > mesh.elements.length
+  );
+  if (invalidElementIds.length > 0) {
+    throw new DirectTwoToOnePlanningError(
+      "topology",
+      `selected Hex element ids are out of range: ${invalidElementIds.join(", ")}`,
+      invalidElementIds
+    );
+  }
 }
 
 function constraintComponents(

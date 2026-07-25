@@ -13,6 +13,10 @@ import {
   pattern3PairTemplateLibrary,
   regularSweepTemplateLibrary
 } from "../dist/two-to-one-sweep-templates.js";
+import {
+  buildDirectTwoToOneHexPlan,
+  buildTwoToOneHexReplacements
+} from "../dist/two-to-one.js";
 const {
   auditHexRefinementPatchQuality,
   findBoundaryPairs,
@@ -35,7 +39,9 @@ const {
   buildActiveMesh,
   buildActiveMeshWithMap,
   buildRefinementSessionExport,
+  buildDefaultRefinementPlan,
   buildDefaultRefinementReplacements,
+  buildHexClassifiedPlan,
   buildRefinementReplacements,
   checkRefinementSessionCommandConformance,
   validateRefinementSessionSelection,
@@ -67,6 +73,7 @@ const {
   refineSessionPatch,
   growQ1BoundaryLayer,
   replaceQ1BlockWithRectangleCircleTemplate,
+  DirectTwoToOnePlanningError,
   TwoToOnePlanningError,
   undoRefinementSession
 } = api;
@@ -146,6 +153,21 @@ test("Hex 2:1 capability reports deep-clone string id arrays and actions", () =>
     affectedComponentCellIds: ["e1/c1", "e2", "e3"],
     preservedFarFieldCellCount: 12
   });
+});
+
+test("Direct 2:1 planning errors copy conflicting element ids", () => {
+  const conflictingElementIds = [9, 4];
+  const error = new DirectTwoToOnePlanningError(
+    "selection-signature",
+    "selection cannot close",
+    conflictingElementIds
+  );
+  conflictingElementIds.push(12);
+
+  assert.equal(error.name, "DirectTwoToOnePlanningError");
+  assert.equal(error.kind, "selection-signature");
+  assert.equal(error.message, "selection cannot close");
+  assert.deepEqual(error.conflictingElementIds, [9, 4]);
 });
 
 test("Hex 2:1 compensation options have bounded deterministic defaults", () => {
@@ -2611,6 +2633,130 @@ test("Hex 2:1 refinement closes a genuinely local structured box in three direct
   }
 });
 
+test("Hex 2:1 direct flat plan reports a mapped local-sweep capability", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const preview = previewRefinementByElementIds(mesh, [selectedElementId], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false
+  });
+  const direct = buildDirectTwoToOneHexPlan(mesh, [selectedElementId]);
+  const affectedParentIds = [
+    ...new Set(preview.plan.map((item) => item.parentElementId))
+  ].sort((first, second) => first - second);
+
+  assert.equal(direct.strategy, "local-sweep");
+  assert.deepEqual(
+    buildTwoToOneHexReplacements(mesh, [selectedElementId]),
+    direct.replacements
+  );
+  assert.equal(preview.planMode, "per-parent");
+  assert.deepEqual(preview.twoToOne, {
+    status: "direct",
+    topologyClass: "mapped",
+    originalSelectedCellIds: [selectedElementId],
+    effectiveSelectedCellIds: [selectedElementId],
+    actions: [],
+    affectedComponentCellIds: affectedParentIds,
+    preservedFarFieldCellCount: mesh.elements.length - affectedParentIds.length
+  });
+});
+
+test("Hex 2:1 direct session plan maps and deep-copies capability ids", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const selectedCellId = activeBuildCellIdByElementId(active, selectedElementId);
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: active
+  };
+  const preview = previewSessionPatch(session, [selectedCellId], options);
+  const command = refineSessionPatch(session, [selectedCellId], options);
+
+  assert.equal(preview.twoToOne.status, "direct");
+  assert.equal(preview.twoToOne.topologyClass, "mapped");
+  assert.deepEqual(preview.twoToOne.originalSelectedCellIds, [selectedCellId]);
+  assert.deepEqual(preview.twoToOne.effectiveSelectedCellIds, [selectedCellId]);
+  assert.deepEqual(preview.twoToOne, command.twoToOne);
+  assert.notEqual(preview.twoToOne, command.twoToOne);
+  assert.notEqual(
+    preview.twoToOne.affectedComponentCellIds,
+    command.twoToOne.affectedComponentCellIds
+  );
+});
+
+test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const selected = [selectedElementId, selectedElementId, selectedElementId];
+  const hexPlan = buildHexClassifiedPlan(mesh, selected, {
+    hexRefinementRatio: 2,
+    includeTransitions: false
+  });
+  const defaultPlan = buildDefaultRefinementPlan(mesh, selected, {
+    hexRefinementRatio: 2,
+    includeTransitions: false
+  });
+  const preview = previewRefinementByElementIds(mesh, selected, {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  });
+  const result = refineByElementIdsWithReport(mesh, selected, {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  });
+
+  assert.deepEqual(hexPlan.twoToOne, defaultPlan.twoToOne);
+  assert.deepEqual(
+    buildDefaultRefinementReplacements(mesh, selected, {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }),
+    defaultPlan.replacements
+  );
+  assert.deepEqual(preview.twoToOne, {
+    status: "direct",
+    topologyClass: "mapped",
+    originalSelectedCellIds: [selectedElementId],
+    effectiveSelectedCellIds: [selectedElementId],
+    actions: [],
+    affectedComponentCellIds: [selectedElementId],
+    preservedFarFieldCellCount: mesh.elements.length - 1
+  });
+  assert.deepEqual(result.twoToOne, preview.twoToOne);
+});
+
+test("Hex 3:1 and Q1 preview/result omit twoToOne", () => {
+  const hex = createHexUnitCubeMesh(3, 3, 3);
+  const hexElementId = elementIdAt(3, 3, 3, 1, 1, 1);
+  const hexOptions = {
+    hexRefinementRatio: 3,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  };
+  const hexPreview = previewRefinementByElementIds(hex, [hexElementId], hexOptions);
+  const hexResult = refineByElementIdsWithReport(hex, [hexElementId], hexOptions);
+  const q1 = createQ1UnitSquareMesh(2, 2);
+  const q1Options = {
+    hexRefinementRatio: 2,
+    includeTransitions: true
+  };
+  const q1Preview = previewRefinementByElementIds(q1, [1], q1Options);
+  const q1Result = refineByElementIdsWithReport(q1, [1], q1Options);
+
+  assert.equal(Object.hasOwn(hexPreview, "twoToOne"), false);
+  assert.equal(Object.hasOwn(hexResult, "twoToOne"), false);
+  assert.equal(Object.hasOwn(q1Preview, "twoToOne"), false);
+  assert.equal(Object.hasOwn(q1Result, "twoToOne"), false);
+});
+
 test("Hex 2:1 local sweep uniformly refines a mixed odd-even rectangular core", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const selected = idsInIndexBlock(7, 7, 7, [2, 2, 2], [4, 3, 4]);
@@ -2711,21 +2857,28 @@ test("Hex 2:1 local sweep refines two disjoint logical cores in one operation", 
   assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);
 });
 
-test("Hex 2:1 refinement closes around a butterfly O-grid trivalent line", () => {
+test("Hex 2:1 O-grid direct plan reports periodic strategy capability", () => {
   const mesh = createButterflyOgridBar(6);
   const selected = Array.from({ length: 24 }, (_, index) => 25 + index);
+  const direct = buildDirectTwoToOneHexPlan(mesh, selected);
   const result = refineByElementIdsWithReport(mesh, selected, {
     hexRefinementRatio: 2,
     regularizeHexSelection: false
   });
   const templateCounts = countBy(result.cellData.map((cell) => cell.templateCode));
 
+  assert.equal(direct.strategy, "seven-hex");
   assert.equal(result.mesh.elements.length, 384);
   assert.equal(result.summary.selectedElementCount, 24);
   assert.equal(result.summary.faceTransitionElementCount, 24);
   assert.equal(templateCounts.get(8), 192);
   assert.equal(templateCounts.get(7), 168);
   assert.equal(templateCounts.get(0), 24);
+  assert.equal(result.twoToOne.status, "direct");
+  assert.equal(result.twoToOne.topologyClass, "periodic-ogrid");
+  assert.deepEqual(result.twoToOne.originalSelectedCellIds, selected);
+  assert.deepEqual(result.twoToOne.effectiveSelectedCellIds, selected);
+  assert.deepEqual(result.twoToOne.actions, []);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
   assert.ok(Math.abs(hexMeshVolume(result.mesh) - hexMeshVolume(mesh)) < 1e-10);
   assert.ok(minimumCornerScaledJacobian(result.mesh) > 0);

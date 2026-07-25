@@ -8,6 +8,30 @@ export type TwoToOneCompensationMode = "none" | "selection" | "local-topology";
 
 export type TwoToOnePlanningStatus = "direct" | "compensated";
 
+export type DirectTwoToOneFailureKind =
+  | "selection-signature"
+  | "parity"
+  | "valence"
+  | "topology";
+
+export class DirectTwoToOnePlanningError extends Error {
+  override readonly message: string;
+  readonly kind: DirectTwoToOneFailureKind;
+  readonly conflictingElementIds: number[];
+
+  constructor(
+    kind: DirectTwoToOneFailureKind,
+    message: string,
+    conflictingElementIds: readonly number[] = []
+  ) {
+    super(message);
+    this.name = "DirectTwoToOnePlanningError";
+    this.message = message;
+    this.kind = kind;
+    this.conflictingElementIds = [...conflictingElementIds];
+  }
+}
+
 export type TwoToOneTopologyClass =
   | "structured"
   | "mapped"

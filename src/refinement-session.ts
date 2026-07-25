@@ -16,7 +16,7 @@ import {
   replaceElements
 } from "./mesh.js";
 import {
-  buildDefaultRefinementReplacements,
+  buildDefaultRefinementPlan,
   type ClassifiedReplacement
 } from "./refinement-planner.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
@@ -30,6 +30,7 @@ import { inferHexElementLattice } from "./regularization.js";
 import { H1_FACES } from "./topology.js";
 import {
   cloneTwoToOneCapabilityReport,
+  DirectTwoToOnePlanningError,
   type TwoToOneCapabilityReport
 } from "./two-to-one-capability.js";
 
@@ -172,6 +173,7 @@ interface RefinementSessionPatchPlan {
   sourceReplacements: ClassifiedReplacement[];
   hiddenCellIds: CellId[];
   quality?: HexRefinementQualitySummary;
+  twoToOne?: TwoToOneCapabilityReport<number>;
 }
 
 export function createRefinementSession(mesh: Mesh): RefinementSession {
@@ -828,6 +830,9 @@ function applyRefinementSessionPatchPlan(
     replacements,
     hiddenCellIds
   } = plan;
+  const twoToOne = plan.twoToOne
+    ? mapTwoToOneReportToCellIds(plan.planningActive, plan.twoToOne)
+    : undefined;
   const createdCellIds: CellId[] = [];
   const createdNodeIds: number[] = [];
 
@@ -881,7 +886,10 @@ function applyRefinementSessionPatchPlan(
     hiddenCellIds,
     createdCellIds,
     createdNodeIds,
-    ...(plan.quality ? { quality: plan.quality } : {})
+    ...(plan.quality ? { quality: plan.quality } : {}),
+    ...(twoToOne
+      ? { twoToOne: cloneTwoToOneCapabilityReport(twoToOne) }
+      : {})
   };
   session.nextCommandId += 1;
   session.undoStack.push(command);
@@ -1165,11 +1173,8 @@ function buildCompletedRebuiltSupportPlan(
     return buildRefinementSessionPatchPlan(session, selectedCellIds, options);
   } catch (error) {
     if (
-      !(error instanceof Error)
-      || !(
-        error.message.includes("unsupported marked-corner signature")
-        || error.message.includes("pattern-3 elements have no partner")
-      )
+      !(error instanceof DirectTwoToOnePlanningError)
+      || error.kind !== "selection-signature"
     ) {
       throw error;
     }
@@ -1316,7 +1321,7 @@ function findCollidingTransitionParentIds(
     }
     return elementId;
   });
-  const replacements = buildDefaultRefinementReplacements(
+  const replacements = buildDefaultRefinementPlan(
     planningActive.mesh,
     selectedElementIds,
     {
@@ -1328,7 +1333,7 @@ function findCollidingTransitionParentIds(
       regularizeHexSelection: false,
       ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
     }
-  );
+  ).replacements;
   const replacementFaceKeys = new Set(replacements.flatMap((replacement) => {
     const cellId = activeBuildCellIdByElementId(planningActive, replacement.elementId);
     return cellId === undefined
@@ -1622,7 +1627,14 @@ export function previewSessionPatch(
       estimatedOutputElementCount: unchangedElementCount
         + plan.reduce((total, item) => total + item.outputElementCount, 0)
     },
-    ...(patch.quality ? { quality: patch.quality } : {})
+    ...(patch.quality ? { quality: patch.quality } : {}),
+    ...(patch.twoToOne
+      ? {
+          twoToOne: cloneTwoToOneCapabilityReport(
+            mapTwoToOneReportToCellIds(patch.planningActive, patch.twoToOne)
+          )
+        }
+      : {})
   };
 }
 
@@ -1695,7 +1707,7 @@ function buildRefinementSessionPatchPlan(
     throw new Error("refinement selection contains cells outside the active mesh");
   }
 
-  const replacements = buildDefaultRefinementReplacements(active.mesh, selectedElementIds, {
+  const classifiedPlan = buildDefaultRefinementPlan(active.mesh, selectedElementIds, {
     includeTransitions: options.includeTransitions ?? true,
     ...(options.hexRefinementRatio !== undefined
       ? { hexRefinementRatio: options.hexRefinementRatio }
@@ -1706,6 +1718,7 @@ function buildRefinementSessionPatchPlan(
     regularizeHexSelection: false,
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
   });
+  const replacements = classifiedPlan.replacements;
   const parentIds = new Set<CellId>();
   for (const replacement of replacements) {
     const parentId = activeBuildCellIdByElementId(active, replacement.elementId);
@@ -1741,8 +1754,39 @@ function buildRefinementSessionPatchPlan(
     replacements,
     sourceReplacements,
     hiddenCellIds: [...parentIds].sort(compareCellIds),
-    ...(quality ? { quality } : {})
+    ...(quality ? { quality } : {}),
+    ...(classifiedPlan.twoToOne
+      ? { twoToOne: cloneTwoToOneCapabilityReport(classifiedPlan.twoToOne) }
+      : {})
   };
+}
+
+function mapTwoToOneReportToCellIds(
+  active: ActiveMeshBuildResult,
+  report: TwoToOneCapabilityReport<number>
+): TwoToOneCapabilityReport<CellId> {
+  const mapElementId = (elementId: number): CellId => {
+    const cellId = activeBuildCellIdByElementId(active, elementId);
+    if (cellId === undefined) {
+      throw new Error(`2:1 capability element ${elementId} is outside the active mesh`);
+    }
+    return cellId;
+  };
+  return cloneTwoToOneCapabilityReport({
+    status: report.status,
+    topologyClass: report.topologyClass,
+    originalSelectedCellIds: report.originalSelectedCellIds.map(mapElementId),
+    effectiveSelectedCellIds: report.effectiveSelectedCellIds.map(mapElementId),
+    actions: report.actions.map((action) => ({
+      kind: action.kind,
+      reason: action.reason,
+      addedParentCellIds: action.addedParentCellIds.map(mapElementId),
+      replacedTransitionCellIds: action.replacedTransitionCellIds.map(mapElementId),
+      ...(action.templateId === undefined ? {} : { templateId: action.templateId })
+    })),
+    affectedComponentCellIds: report.affectedComponentCellIds.map(mapElementId),
+    preservedFarFieldCellCount: report.preservedFarFieldCellCount
+  });
 }
 
 function mapPlanningReplacementsToSource(

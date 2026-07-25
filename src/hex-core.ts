@@ -19,6 +19,7 @@ import {
 } from "./mesh.js";
 import { type DistanceFunction, type DistanceSelection } from "./distance.js";
 import {
+  buildHexClassifiedPlan as buildSharedHexClassifiedPlan,
   buildHexClassifiedReplacements as buildSharedHexClassifiedReplacements,
   type ClassifiedHexReplacement
 } from "./transitions.js";
@@ -30,6 +31,7 @@ import {
   pointInBox as pointInBoxCore,
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
+import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
 
 export {
   regularizeHexSessionSelection,
@@ -55,12 +57,19 @@ export function refineHexByElementIdsWithReport(
   }
 
   const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
-  const replacements = buildHexClassifiedReplacements(mesh, selected, {
+  const plan = buildSharedHexClassifiedPlan(mesh, selected, {
     ...options,
     mergeTolerance
   });
+  const replacements = plan.replacements;
   const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
-  return buildHexRefinementResult(mesh, refinedMesh, replacements, selected.length);
+  return buildHexRefinementResult(
+    mesh,
+    refinedMesh,
+    replacements,
+    selected.length,
+    plan.twoToOne
+  );
 }
 
 export function refineHexByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): Mesh {
@@ -100,7 +109,8 @@ export function previewHexRefinementByElementIds(
 ): RefinementPreview {
   assertHexMesh(mesh);
   const selected = uniqueSorted(selectedElementIds);
-  return buildHexRefinementPreview(mesh, buildHexClassifiedReplacements(mesh, selected, options));
+  const plan = buildSharedHexClassifiedPlan(mesh, selected, options);
+  return buildHexRefinementPreview(mesh, plan.replacements, plan.twoToOne);
 }
 
 export function previewHexRefinementByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): RefinementPreview {
@@ -219,7 +229,8 @@ function buildHexRefinementResult(
   inputMesh: Mesh,
   mesh: Mesh,
   replacements: readonly ClassifiedHexReplacement[],
-  selectedElementCount: number
+  selectedElementCount: number,
+  twoToOne?: TwoToOneCapabilityReport<number>
 ): RefinementResult {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const cellData: RefinementCellData[] = [];
@@ -257,13 +268,15 @@ function buildHexRefinementResult(
       unchangedElementCount: cellData.filter((cell) => cell.role === "unchanged").length,
       outputNodeCount: mesh.nodes.length,
       outputElementCount: mesh.elements.length
-    }
+    },
+    ...(twoToOne ? { twoToOne } : {})
   };
 }
 
 function buildHexRefinementPreview(
   mesh: Mesh,
-  replacements: readonly ClassifiedHexReplacement[]
+  replacements: readonly ClassifiedHexReplacement[],
+  twoToOne?: TwoToOneCapabilityReport<number>
 ): RefinementPreview {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const plan: RefinementPlanItem[] = replacements
@@ -287,7 +300,8 @@ function buildHexRefinementPreview(
       cornerTransitionElementCount: countRole("corner-transition"),
       unchangedElementCount,
       estimatedOutputElementCount: unchangedElementCount + plan.reduce((total, item) => total + item.outputElementCount, 0)
-    }
+    },
+    ...(twoToOne ? { twoToOne } : {})
   };
 }
 

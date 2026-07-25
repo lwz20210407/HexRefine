@@ -2,11 +2,17 @@ import type { BoundaryPair, Mesh, RefineOptions, RefinementRole, ReplaceElement 
 import { elementVertices, findBoundaryPairs, inferMeshKind, instantiateOnElement, minElementEdgeLength } from "./mesh.js";
 import { alignQuadCornerToSecond, alignQuadEdgeToFirst, sharedNodes } from "./topology.js";
 import { refineQ1To3x3, refineQ1To4Q1, refineQ1To5Q1 } from "./templates.js";
-import { buildHexClassifiedReplacements } from "./transitions.js";
+import { buildHexClassifiedPlan } from "./transitions.js";
+import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
   templateCode: number;
+}
+
+export interface ClassifiedRefinementPlan {
+  replacements: ClassifiedReplacement[];
+  twoToOne?: TwoToOneCapabilityReport<number>;
 }
 
 export interface RefinementPlanner {
@@ -22,13 +28,23 @@ export function buildDefaultRefinementReplacements(
   selectedElementIds: readonly number[],
   options: RefineOptions = {}
 ): ClassifiedReplacement[] {
+  return buildDefaultRefinementPlan(mesh, selectedElementIds, options).replacements;
+}
+
+export function buildDefaultRefinementPlan(
+  mesh: Mesh,
+  selectedElementIds: readonly number[],
+  options: RefineOptions = {}
+): ClassifiedRefinementPlan {
   const kind = inferMeshKind(mesh);
   const selected = uniqueSorted(selectedElementIds);
   if (selected.length === 0) {
-    return [];
+    return kind === "H1" && options.hexRefinementRatio === 2
+      ? buildHexClassifiedPlan(mesh, selected, options)
+      : { replacements: [] };
   }
   if (kind === "H1") {
-    return buildHexClassifiedReplacements(mesh, selected, options);
+    return buildHexClassifiedPlan(mesh, selected, options);
   }
 
   const includeTransitions = options.includeTransitions ?? true;
@@ -39,7 +55,7 @@ export function buildDefaultRefinementReplacements(
   if (includeTransitions) {
     replacements.push(...q1TransitionReplacements(mesh, findBoundaryPairs(mesh, selected)));
   }
-  return replacements;
+  return { replacements };
 }
 
 function q1TransitionReplacements(mesh: Mesh, boundaryPairs: readonly BoundaryPair[]): ClassifiedReplacement[] {
