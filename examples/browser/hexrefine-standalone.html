@@ -1268,6 +1268,7 @@
         buildRefinementSessionExport,
         checkNoHangingNodes,
         checkRefinementSessionCommandConformance,
+        cloneTwoToOneCapabilityReport,
         iterateLegacyVtkLines,
         iteratePreparedInpLines,
         createRefinementSession,
@@ -1277,7 +1278,7 @@
         parseMeshText,
         prepareExportMesh,
         prepareSessionRefineSelection,
-        previewRefinementByElementIds,
+        previewSessionPatch,
         growQ1BoundaryLayer,
         replaceQ1BlockWithRectangleCircleTemplate,
         refineSessionPatch,
@@ -2230,7 +2231,16 @@
           ...command,
           hiddenCellIds: [...command.hiddenCellIds],
           createdCellIds: [...command.createdCellIds],
-          createdNodeIds: [...command.createdNodeIds]
+          ...(command.activeCreatedCellIds
+            ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
+            : {}),
+          ...(command.reactivatedCellIds
+            ? { reactivatedCellIds: [...command.reactivatedCellIds] }
+            : {}),
+          createdNodeIds: [...command.createdNodeIds],
+          ...(command.twoToOne
+            ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
+            : {})
         };
       }
 

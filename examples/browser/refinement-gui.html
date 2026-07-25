@@ -1234,6 +1234,7 @@
         buildActiveMeshWithMap,
         buildRefinementSessionExport,
         checkRefinementSessionCommandConformance,
+        cloneTwoToOneCapabilityReport,
         createRefinementSession,
         createHexUnitCubeMesh,
         createQ1UnitSquareMesh,
@@ -2087,7 +2088,16 @@
           ...command,
           hiddenCellIds: [...command.hiddenCellIds],
           createdCellIds: [...command.createdCellIds],
-          createdNodeIds: [...command.createdNodeIds]
+          ...(command.activeCreatedCellIds
+            ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
+            : {}),
+          ...(command.reactivatedCellIds
+            ? { reactivatedCellIds: [...command.reactivatedCellIds] }
+            : {}),
+          createdNodeIds: [...command.createdNodeIds],
+          ...(command.twoToOne
+            ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
+            : {})
         };
       }
 

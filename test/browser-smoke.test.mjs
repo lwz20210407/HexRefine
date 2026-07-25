@@ -22,6 +22,17 @@ function extractNamedFunction(source, name) {
   assert.fail(`unterminated function ${name}`);
 }
 
+function standaloneRuntimeImportNames(source) {
+  const importBlock = source.match(
+    /import\s*\{([\s\S]*?)\}\s*from\s*"hexrefine\/index\.js";/
+  );
+  assert.ok(importBlock, "missing standalone runtime import block");
+  return importBlock[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
 test("HexRefine browser GUI imports the project-local runtime build", async () => {
   const redirect = await readFile(new URL("examples/browser/hexrefine.html", projectRoot), "utf8");
   const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
@@ -73,6 +84,39 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.equal(typeof runtime.refineByElementIdsWithReport, "function");
 });
 
+test("HexRefine standalone binds and executes the session preview runtime entry", async () => {
+  const standalone = await readFile(
+    new URL("examples/browser/hexrefine-standalone.html", projectRoot),
+    "utf8"
+  );
+  const standaloneBuilder = await readFile(
+    new URL("scripts/build-standalone-lite.mjs", projectRoot),
+    "utf8"
+  );
+  const importNames = standaloneRuntimeImportNames(standalone);
+  const builderImportNames = standaloneRuntimeImportNames(standaloneBuilder);
+  const runtime = await import("../dist/index.js");
+
+  assert.match(standalone, /previewSessionPatch\(refinementSession/);
+  for (const names of [builderImportNames, importNames]) {
+    assert.ok(names.includes("previewSessionPatch"));
+    assert.ok(names.includes("cloneTwoToOneCapabilityReport"));
+    assert.equal(names.includes("previewRefinementByElementIds"), false);
+  }
+  assert.equal(typeof runtime.previewSessionPatch, "function");
+  assert.equal(typeof runtime.cloneTwoToOneCapabilityReport, "function");
+
+  const session = runtime.createRefinementSession(runtime.createHexUnitCubeMesh(2, 2, 2));
+  const active = runtime.buildActiveMeshWithMap(session);
+  const cellId = runtime.activeBuildCellIdByElementId(active, 1);
+  assert.ok(cellId);
+  const preview = runtime.previewSessionPatch(session, [cellId], {
+    activeBuild: active
+  });
+  assert.equal(preview.planMode, "per-parent");
+  assert.ok(preview.plan.length > 0);
+});
+
 test("HexRefine browser reports aggregate refinement previews without per-parent placeholders", async () => {
   const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
   const standalone = await readFile(
@@ -121,4 +165,79 @@ test("HexRefine browser reports aggregate refinement previews without per-parent
     "unchanged parents: 1",
     "estimated elements: 82"
   ]);
+});
+
+test("HexRefine browser command snapshots isolate optional arrays and capability reports", async () => {
+  const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
+  const standalone = await readFile(
+    new URL("examples/browser/hexrefine-standalone.html", projectRoot),
+    "utf8"
+  );
+  const functionSource = extractNamedFunction(gui, "cloneRefinementSessionCommand");
+  assert.equal(
+    extractNamedFunction(standalone, "cloneRefinementSessionCommand"),
+    functionSource
+  );
+  const runtime = await import("../dist/index.js");
+  const cloneRefinementSessionCommand = Function(
+    "cloneTwoToOneCapabilityReport",
+    `${functionSource}; return cloneRefinementSessionCommand;`
+  )(runtime.cloneTwoToOneCapabilityReport);
+  const command = {
+    id: "cmd-2",
+    kind: "refine",
+    hiddenCellIds: ["e1"],
+    createdCellIds: ["e1/1"],
+    activeCreatedCellIds: ["e1/1"],
+    reactivatedCellIds: ["e2"],
+    createdNodeIds: [9],
+    twoToOne: {
+      status: "compensated",
+      topologyClass: "mixed-level",
+      originalSelectedCellIds: ["e1"],
+      effectiveSelectedCellIds: ["e1/1"],
+      actions: [{
+        kind: "transition-shell-rebuild",
+        reason: "test",
+        addedParentCellIds: ["e2"],
+        replacedTransitionCellIds: ["e3"]
+      }],
+      affectedComponentCellIds: ["e1", "e1/1", "e2"],
+      preservedFarFieldCellCount: 4
+    }
+  };
+  const snapshot = cloneRefinementSessionCommand(command);
+
+  command.hiddenCellIds.push("mutated-hidden");
+  command.createdCellIds.push("mutated-created");
+  command.activeCreatedCellIds.push("mutated-active");
+  command.reactivatedCellIds.push("mutated-reactivated");
+  command.createdNodeIds.push(10);
+  command.twoToOne.originalSelectedCellIds.push("mutated-original");
+  command.twoToOne.actions[0].addedParentCellIds.push("mutated-added");
+  command.twoToOne.affectedComponentCellIds.push("mutated-affected");
+
+  assert.deepEqual(snapshot, {
+    id: "cmd-2",
+    kind: "refine",
+    hiddenCellIds: ["e1"],
+    createdCellIds: ["e1/1"],
+    activeCreatedCellIds: ["e1/1"],
+    reactivatedCellIds: ["e2"],
+    createdNodeIds: [9],
+    twoToOne: {
+      status: "compensated",
+      topologyClass: "mixed-level",
+      originalSelectedCellIds: ["e1"],
+      effectiveSelectedCellIds: ["e1/1"],
+      actions: [{
+        kind: "transition-shell-rebuild",
+        reason: "test",
+        addedParentCellIds: ["e2"],
+        replacedTransitionCellIds: ["e3"]
+      }],
+      affectedComponentCellIds: ["e1", "e1/1", "e2"],
+      preservedFarFieldCellCount: 4
+    }
+  });
 });
