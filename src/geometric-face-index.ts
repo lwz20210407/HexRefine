@@ -123,6 +123,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
 
     this.bucketOrigin = bucketOrigin;
     this.registrations.set(face, stored);
+    this.registrations.set(stored, stored);
     this.canonicalOrders.set(stored, canonicalOrder);
   }
 
@@ -406,12 +407,17 @@ function geometricallySameFace(
   if (correspondence === "none") {
     return false;
   }
-  if (correspondence === "exact") {
-    return isValidExactCoordinateFace(first, firstOrder, tolerance);
-  }
   const secondOrder = getSecondOrder();
-  if (firstOrder === null || secondOrder === null) {
+  if (
+    firstOrder === null
+    || secondOrder === null
+    || !isValidSingleFace(first, firstOrder, tolerance)
+    || !isValidSingleFace(second, secondOrder, tolerance)
+  ) {
     return false;
+  }
+  if (correspondence === "exact") {
+    return true;
   }
 
   const normalized = normalizeFacePair(first, second, tolerance);
@@ -493,19 +499,16 @@ function pointCorrespondence(
   return hasApproximateCorrespondence ? "approximate" : "none";
 }
 
-function isValidExactCoordinateFace(
+function isValidSingleFace(
   points: readonly Point[],
-  order: QuadOrder | null,
+  order: QuadOrder,
   tolerance: number
 ): boolean {
-  if (order === null) {
+  if (!hasNoExactDuplicateCorners(points)) {
     return false;
   }
   const normalized = normalizeSingleFace(points);
-  if (
-    normalized === undefined
-    || !hasFourDistinctCorners(normalized.points)
-  ) {
+  if (normalized === undefined) {
     return false;
   }
   const geometry = faceGeometry(normalized.points, order);
@@ -530,11 +533,16 @@ function isValidExactCoordinateFace(
   return true;
 }
 
-function hasFourDistinctCorners(points: readonly Vector3[]): boolean {
+function hasNoExactDuplicateCorners(points: readonly Point[]): boolean {
   for (let first = 0; first < 4; first += 1) {
     for (let second = first + 1; second < 4; second += 1) {
-      const distance = pointDistance(points[first]!, points[second]!);
-      if (!Number.isFinite(distance) || distance <= 0) {
+      const firstPoint = points[first]!;
+      const secondPoint = points[second]!;
+      if (
+        firstPoint[0] === secondPoint[0]
+        && firstPoint[1] === secondPoint[1]
+        && firstPoint[2] === secondPoint[2]
+      ) {
         return false;
       }
     }

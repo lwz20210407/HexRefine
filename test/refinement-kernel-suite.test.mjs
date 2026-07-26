@@ -501,6 +501,49 @@ test("geometric face identity rejects exact-coordinate collapsed-corner fallback
   }), []);
 });
 
+test("geometric face identity rejects approximate collapsed faces in both directions", () => {
+  const tolerance = 1e-8;
+  const collapsed = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0]
+  ];
+  const perturbed = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1e-10, 0],
+    [0, 1, 0]
+  ];
+  const directions = [
+    {
+      label: "stored-collapsed",
+      storedPoints: collapsed,
+      queryPoints: perturbed
+    },
+    {
+      label: "query-collapsed",
+      storedPoints: perturbed,
+      queryPoints: collapsed
+    }
+  ];
+
+  for (const { label, storedPoints, queryPoints } of directions) {
+    const index = new GeometricFaceIndex(tolerance);
+    index.add({
+      owner: label,
+      nodeIds: [1, 2, 3, 4],
+      points: storedPoints
+    });
+
+    assert.deepEqual(index.matches({
+      owner: `${label}-query`,
+      nodeIds: [11, 12, 13, 14],
+      points: queryPoints
+    }), [], `${label} must be rejected`);
+  }
+});
+
 test("geometric face identity rejects all 24 exact orders of an over-warped face", () => {
   const tolerance = 1e-8;
   const points = [
@@ -806,6 +849,34 @@ test("geometric face identity deduplicates repeated exact face registrations by 
   assert.equal(matches.length, 1);
   assert.equal(matches[0]?.owner, "a");
   assert.equal(index.uniqueMatch(query), matches[0]);
+});
+
+test("geometric face identity treats returned stored snapshots as registered identities", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const points = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]];
+  index.add({
+    owner: "stored",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+  const stored = index.uniqueMatch({
+    owner: "geometry-query",
+    nodeIds: [11, 12, 13, 14],
+    points
+  });
+  assert.notEqual(stored, undefined);
+
+  for (let repeat = 0; repeat < 1000; repeat += 1) {
+    index.add(stored);
+  }
+
+  const exactMatches = index.matches({
+    owner: "exact-query",
+    nodeIds: [4, 3, 2, 1],
+    points
+  });
+  assert.equal(exactMatches.length, 1);
+  assert.equal(exactMatches[0], stored);
 });
 
 test("geometric face identity stores immutable snapshots and rejects mutated re-adds", () => {
