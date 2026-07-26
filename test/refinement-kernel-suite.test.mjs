@@ -17,6 +17,7 @@ import {
   buildDirectTwoToOneHexPlan,
   buildTwoToOneHexReplacements
 } from "../dist/two-to-one.js";
+import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
 const {
@@ -114,6 +115,251 @@ function captureError(operation) {
   }
   assert.fail("expected operation to throw");
 }
+
+test("geometric face identity prefers exact ids and tolerates duplicate nodes", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  index.add({
+    owner: "a",
+    nodeIds: [1, 2, 3, 4],
+    points: square
+  });
+
+  assert.deepEqual(
+    index.matches({
+      owner: "b",
+      nodeIds: [1, 2, 3, 4],
+      points: square
+    }).map((face) => face.owner),
+    ["a"]
+  );
+  assert.deepEqual(
+    index.matches({
+      owner: "c",
+      nodeIds: [11, 12, 13, 14],
+      points: [
+        [0, 0, 3e-9],
+        [1, 0, -2e-9],
+        [1, 1, 1e-9],
+        [0, 1, -1e-9]
+      ]
+    }).map((face) => face.owner),
+    ["a"]
+  );
+});
+
+test("geometric face identity rejects near and ambiguous faces", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  index.add({
+    owner: "a",
+    nodeIds: [1, 2, 3, 4],
+    points: square
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "near",
+    nodeIds: [21, 22, 23, 24],
+    points: square.map(([x, y]) => [x, y, 2e-8])
+  }), []);
+
+  index.add({
+    owner: "duplicate",
+    nodeIds: [11, 12, 13, 14],
+    points: square
+  });
+  const query = {
+    owner: "query",
+    nodeIds: [21, 22, 23, 24],
+    points: square
+  };
+  const error = captureError(() => index.uniqueMatch(query));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+  assert.equal(error.message, "face owned by query has 2 matches");
+  assert.deepEqual(error.diagnostic, {
+    conflictingCellIds: ["query", "a", "duplicate"],
+    conflictingInterfaces: [],
+    attemptedActions: []
+  });
+
+  error.diagnostic.conflictingCellIds.push("mutated");
+  const secondError = captureError(() => index.uniqueMatch(query));
+  assert.notEqual(secondError.diagnostic, error.diagnostic);
+  assert.deepEqual(secondError.diagnostic.conflictingCellIds, ["query", "a", "duplicate"]);
+});
+
+test("geometric face identity rejects invalid tolerances and malformed quads", () => {
+  for (const tolerance of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => new GeometricFaceIndex(tolerance), RangeError);
+  }
+
+  const index = new GeometricFaceIndex(1e-8);
+  assert.throws(() => index.add({
+    owner: 1,
+    nodeIds: [1, 2, 3],
+    points: [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+  }), TypeError);
+  assert.throws(() => index.add({
+    owner: 1,
+    nodeIds: [1, 2, 3, 4],
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0]]
+  }), TypeError);
+  assert.throws(() => index.matches({
+    owner: 1,
+    nodeIds: [1, 2, 3, 4],
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1]]
+  }), TypeError);
+
+  for (const invalidNodeId of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => index.add({
+      owner: 1,
+      nodeIds: [1, 2, 3, invalidNodeId],
+      points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+    }), TypeError);
+  }
+  for (const invalidCoordinate of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => index.add({
+      owner: 1,
+      nodeIds: [1, 2, 3, 4],
+      points: [[invalidCoordinate, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+    }), TypeError);
+  }
+});
+
+test("geometric face identity accepts rotated and flipped point order", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  index.add({
+    owner: "a",
+    nodeIds: [1, 2, 3, 4],
+    points: square
+  });
+
+  assert.equal(index.uniqueMatch({
+    owner: "rotated",
+    nodeIds: [11, 12, 13, 14],
+    points: [square[1], square[2], square[3], square[0]]
+  })?.owner, "a");
+  assert.equal(index.uniqueMatch({
+    owner: "flipped",
+    nodeIds: [21, 22, 23, 24],
+    points: [square[0], square[3], square[2], square[1]]
+  })?.owner, "a");
+});
+
+test("geometric face identity distinguishes degenerate and valid micro-scale quads", () => {
+  const degenerateIndex = new GeometricFaceIndex(1e-8);
+  const line = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [2, 0, 0],
+    [3, 0, 0]
+  ];
+  degenerateIndex.add({
+    owner: "line",
+    nodeIds: [1, 2, 3, 4],
+    points: line
+  });
+  assert.deepEqual(degenerateIndex.matches({
+    owner: "line-copy",
+    nodeIds: [11, 12, 13, 14],
+    points: line
+  }), []);
+
+  const microIndex = new GeometricFaceIndex(1e-8);
+  const side = 1e-4;
+  const microSquare = [
+    [0, 0, 0],
+    [side, 0, 0],
+    [side, side, 0],
+    [0, side, 0]
+  ];
+  microIndex.add({
+    owner: "micro",
+    nodeIds: [1, 2, 3, 4],
+    points: microSquare
+  });
+  assert.equal(microIndex.uniqueMatch({
+    owner: "micro-copy",
+    nodeIds: [11, 12, 13, 14],
+    points: microSquare.map(([x, y]) => [x, y, 1e-9])
+  })?.owner, "micro");
+});
+
+test("geometric face identity returns fresh match arrays", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "a",
+    nodeIds: [1, 2, 3, 4],
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+  });
+  const query = {
+    owner: "query",
+    nodeIds: [1, 2, 3, 4],
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+  };
+
+  const firstMatches = index.matches(query);
+  firstMatches.splice(0, firstMatches.length);
+  const secondMatches = index.matches(query);
+
+  assert.notEqual(secondMatches, firstMatches);
+  assert.deepEqual(secondMatches.map((face) => face.owner), ["a"]);
+});
+
+test("geometric face identity keeps exact node ids authoritative over geometry", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const farSquare = square.map(([x, y, z]) => [x + 100, y, z]);
+  index.add({
+    owner: "exact",
+    nodeIds: [1, 2, 3, 4],
+    points: square
+  });
+  index.add({
+    owner: "near-geometry",
+    nodeIds: [11, 12, 13, 14],
+    points: square.map(([x, y]) => [x, y, 1e-9])
+  });
+  index.add({
+    owner: "far-geometry",
+    nodeIds: [21, 22, 23, 24],
+    points: farSquare
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "near-query",
+    nodeIds: [4, 3, 2, 1],
+    points: square.map(([x, y]) => [x, y, 1e-9])
+  }).map((face) => face.owner), ["exact"]);
+  assert.deepEqual(index.matches({
+    owner: "far-query",
+    nodeIds: [4, 3, 2, 1],
+    points: farSquare
+  }).map((face) => face.owner), ["exact"]);
+});
 
 test("Hex 2:1 capability reports deep-clone string id arrays and actions", () => {
   const report = {
