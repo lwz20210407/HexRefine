@@ -75,7 +75,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
 
     const exactFaces = this.exact.get(nodeIdKey(face.nodeIds));
     if (exactFaces !== undefined) {
-      return [...exactFaces];
+      return [...new Set(exactFaces)];
     }
 
     const center = minimumBucket(face.points, this.tolerance);

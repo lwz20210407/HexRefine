@@ -324,6 +324,60 @@ test("geometric face identity returns fresh match arrays", () => {
   assert.deepEqual(secondMatches.map((face) => face.owner), ["a"]);
 });
 
+test("geometric face identity deduplicates repeated exact face registrations by identity", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const face = {
+    owner: "a",
+    nodeIds: [1, 2, 3, 4],
+    points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+  };
+  index.add(face);
+  index.add(face);
+  const query = {
+    owner: "query",
+    nodeIds: [1, 2, 3, 4],
+    points: face.points
+  };
+
+  const matches = index.matches(query);
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0]?.owner, "a");
+  assert.equal(index.uniqueMatch(query), matches[0]);
+});
+
+test("geometric face identity retains distinct exact faces with identical values", () => {
+  const index = new GeometricFaceIndex(1e-8);
+  const points = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]];
+  const first = {
+    owner: "same",
+    nodeIds: [1, 2, 3, 4],
+    points
+  };
+  const second = {
+    owner: "same",
+    nodeIds: [1, 2, 3, 4],
+    points
+  };
+  index.add(first);
+  index.add(second);
+  const query = {
+    owner: "query",
+    nodeIds: [1, 2, 3, 4],
+    points
+  };
+
+  const matches = index.matches(query);
+
+  assert.equal(matches.length, 2);
+  assert.equal(matches[0], first);
+  assert.equal(matches[1], second);
+  assert.equal(
+    captureError(() => index.uniqueMatch(query)).code,
+    "TWO_TO_ONE_AMBIGUOUS_FACE"
+  );
+});
+
 test("geometric face identity keeps exact node ids authoritative over geometry", () => {
   const index = new GeometricFaceIndex(1e-8);
   const square = [
