@@ -31,6 +31,7 @@ import { H1_FACES } from "./topology.js";
 import {
   cloneTwoToOneCapabilityReport,
   DirectTwoToOnePlanningError,
+  TwoToOnePlanningError,
   type TwoToOneCapabilityReport
 } from "./two-to-one-capability.js";
 import {
@@ -97,6 +98,10 @@ export interface BuildActiveMeshOptions {
 
 export interface ActiveMeshBuildResult {
   mesh: Mesh;
+  /** Actual node-merge tolerance used to construct `mesh`; absent when nodes were not merged. */
+  readonly mergeTolerance?: number;
+  /** Lazily measured and cached geometric resolution of `mesh`. */
+  readonly geometryResolution?: ActiveMeshGeometryResolution;
   cellIdByElementId: Map<number, CellId>;
   elementIdByCellId: Map<CellId, number>;
   cellIdsByElementIdArray?: CellId[];
@@ -105,6 +110,11 @@ export interface ActiveMeshBuildResult {
   sessionNodeIdByNodeId: Map<number, number>;
   sessionNodeIdsByNodeId: Map<number, number[]>;
   elementIdsByNodeId?: Map<number, number[]>;
+}
+
+export interface ActiveMeshGeometryResolution {
+  coordinateScale: number;
+  minimumElementEdgeLength: number;
 }
 
 export type RefinementSessionNamedSets<T extends string | number> =
@@ -318,10 +328,13 @@ function buildActiveMeshForCellIdsWithMap(
     if (options.includeElementIdsByNodeId) {
       result.elementIdsByNodeId = buildElementIdsByNodeId(mesh.elements);
     }
-    return result;
+    return attachActiveMeshBuildMetadata(result);
   }
 
-  const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
+  const measuredMinimumEdge = options.mergeTolerance === undefined
+    ? minElementEdgeLength(mesh)
+    : undefined;
+  const mergeTolerance = options.mergeTolerance ?? measuredMinimumEdge! * 0.0005;
   const merged = mergeCoincidentNodesWithMap(mesh, mergeTolerance);
   const nodeIdBySessionNodeId = new Map<number, number>();
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
@@ -367,7 +380,11 @@ function buildActiveMeshForCellIdsWithMap(
   if (options.includeElementIdsByNodeId) {
     result.elementIdsByNodeId = buildElementIdsByNodeId(merged.mesh.elements);
   }
-  return result;
+  return attachActiveMeshBuildMetadata(
+    result,
+    mergeTolerance,
+    measuredMinimumEdge
+  );
 }
 
 function buildMergedActiveMeshDirect(
@@ -475,7 +492,60 @@ function buildMergedActiveMeshDirect(
   if (options.includeElementIdsByNodeId) {
     result.elementIdsByNodeId = buildElementIdsByNodeId(elements);
   }
+  return attachActiveMeshBuildMetadata(result, tolerance);
+}
+
+function attachActiveMeshBuildMetadata(
+  result: ActiveMeshBuildResult,
+  mergeTolerance?: number,
+  measuredMinimumEdge?: number
+): ActiveMeshBuildResult {
+  let resolution: ActiveMeshGeometryResolution | undefined;
+  if (mergeTolerance !== undefined) {
+    Object.defineProperty(result, "mergeTolerance", {
+      configurable: true,
+      enumerable: true,
+      value: mergeTolerance,
+      writable: false
+    });
+  }
+  Object.defineProperty(result, "geometryResolution", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      resolution ??= measureActiveMeshGeometryResolution(
+        result.mesh,
+        measuredMinimumEdge
+      );
+      return resolution;
+    }
+  });
   return result;
+}
+
+function measureActiveMeshGeometryResolution(
+  mesh: Mesh,
+  measuredMinimumEdge?: number
+): ActiveMeshGeometryResolution {
+  let coordinateScale = 1;
+  for (const point of mesh.nodes) {
+    for (const coordinate of point) {
+      if (!Number.isFinite(coordinate)) {
+        throw new Error(
+          "cannot compute effective session face tolerance from a non-finite coordinate"
+        );
+      }
+      coordinateScale = Math.max(coordinateScale, Math.abs(coordinate));
+    }
+  }
+  return {
+    coordinateScale,
+    minimumElementEdgeLength: measuredMinimumEdge ?? (
+      mesh.elements.length === 0
+        ? Number.POSITIVE_INFINITY
+        : minElementEdgeLength(mesh)
+    )
+  };
 }
 
 function findMergedActiveNodeIndex(
@@ -818,8 +888,19 @@ export function refineSessionPatch(
   try {
     plan = buildRefinementSessionPatchPlan(session, cellIds, options);
   } catch (error) {
-    if (shouldRebuildExistingTransitionShell(session, cellIds, options, error)) {
-      return refineSessionPatchWithRebuiltTransitionShell(session, cellIds, options);
+    const faceResolution = resolveExistingTransitionShellRebuild(
+      session,
+      cellIds,
+      options,
+      error
+    );
+    if (faceResolution !== undefined) {
+      return refineSessionPatchWithRebuiltTransitionShell(
+        session,
+        cellIds,
+        options,
+        faceResolution
+      );
     }
     throw error;
   }
@@ -918,40 +999,53 @@ class HexPatchQualityError extends Error {
   }
 }
 
-function shouldRebuildExistingTransitionShell(
+interface SessionFaceResolution {
+  tolerance: number;
+  minimumElementEdgeLength: number;
+  coordinateScale: number;
+  mergeTolerance?: number;
+}
+
+function resolveExistingTransitionShellRebuild(
   session: RefinementSession,
   cellIds: readonly CellId[],
   options: RefinementSessionPatchOptions,
   error: unknown
-): boolean {
+): SessionFaceResolution | undefined {
   if (
     options.rebuildExistingTransitions === false
     || options.hexRefinementRatio !== 2
     || options.hexTwoToOneSelectionMode !== "local"
     || !(error instanceof Error)
   ) {
-    return false;
+    return undefined;
   }
   const validation = validateRefinementSessionSelection(session, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
-    return false;
+    return undefined;
   }
+  const mayRebuild = error instanceof ExistingTransitionCollisionError
+    || (error instanceof HexPatchQualityError && error.code === "HEX_PATCH_VOLUME");
+  if (!mayRebuild) {
+    return undefined;
+  }
+  const faceResolution = resolveSessionFaceResolution(
+    session,
+    sortedActiveLeafIds(session),
+    validation.cellIds,
+    options
+  );
   if (error instanceof ExistingTransitionCollisionError) {
-    return true;
-  }
-  if (!(error instanceof HexPatchQualityError) || error.code !== "HEX_PATCH_VOLUME") {
-    return false;
+    return faceResolution;
   }
   return selectionTouchesActiveTransitionCell(
     session,
     validation.cellIds,
     validation.level,
-    effectiveSessionFaceTolerance(
-      session,
-      sortedActiveLeafIds(session),
-      options.mergeTolerance
-    )
-  );
+    faceResolution.tolerance
+  )
+    ? faceResolution
+    : undefined;
 }
 
 function selectionTouchesActiveTransitionCell(
@@ -984,18 +1078,22 @@ function selectionTouchesActiveTransitionCell(
 function refineSessionPatchWithRebuiltTransitionShell(
   session: RefinementSession,
   cellIds: readonly CellId[],
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  faceResolution: SessionFaceResolution
 ): RefinementSessionCommand & { twoToOne: TwoToOneCapabilityReport<CellId> } {
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
     throw new Error(validation.errors.join("; ") || "transition-shell rebuilding requires a refined selection");
   }
-  const faceTolerance = effectiveSessionFaceTolerance(
-    working,
-    sortedActiveLeafIds(working),
-    options.mergeTolerance
-  );
+  const faceTolerance = faceResolution.tolerance;
+  const resolvedOptions: RefinementSessionPatchOptions =
+    faceResolution.mergeTolerance === undefined
+      ? options
+      : {
+          ...options,
+          mergeTolerance: faceResolution.mergeTolerance
+        };
   const selectedLevel = validation.level;
   const supportCommand = findSingleSupportCommand(working, validation.cellIds);
   const allSupportLayerCellIds = supportCommand.createdCellIds.filter((cellId) => {
@@ -1016,7 +1114,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
     validation.cellIds,
     supportLayerCellIds,
     selectedLevel,
-    options,
+    resolvedOptions,
     faceTolerance
   );
   if (collidingTransitionParentIds.length === 0) {
@@ -1077,7 +1175,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
   );
 
   const retryOptions: RefinementSessionPatchOptions = {
-    ...options,
+    ...resolvedOptions,
     rebuildExistingTransitions: false
   };
   delete retryOptions.activeBuild;
@@ -1452,27 +1550,76 @@ function collectConnectedSupportLayerCells(
   return [...component].sort(compareCellIds);
 }
 
-function effectiveSessionFaceTolerance(
+function resolveSessionFaceResolution(
   session: RefinementSession,
   cellIds: readonly CellId[],
+  diagnosticCellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions
+): SessionFaceResolution {
+  assertValidSessionFaceTolerance(options.mergeTolerance);
+  let geometryResolution: ActiveMeshGeometryResolution;
+  let mergeTolerance = options.mergeTolerance;
+  if (options.activeBuild !== undefined) {
+    assertActiveBuildCoversSessionCells(
+      session,
+      options.activeBuild,
+      cellIds,
+      diagnosticCellIds
+    );
+    const recordedTolerance = options.activeBuild.mergeTolerance;
+    if (recordedTolerance === undefined) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        "external activeBuild does not record a merge tolerance, so transition face tolerance consistency cannot be proven"
+      );
+    }
+    if (
+      options.mergeTolerance !== undefined
+      && options.mergeTolerance !== recordedTolerance
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${options.mergeTolerance}`
+      );
+    }
+    const recordedResolution = options.activeBuild.geometryResolution;
+    if (recordedResolution === undefined) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        "external activeBuild does not expose a geometry resolution for transition face matching"
+      );
+    }
+    geometryResolution = recordedResolution;
+    mergeTolerance = recordedTolerance;
+  } else {
+    const build = buildActiveMeshForCellIdsWithMap(session, cellIds);
+    geometryResolution = build.geometryResolution
+      ?? measureActiveMeshGeometryResolution(build.mesh);
+  }
+  const tolerance = effectiveSessionFaceTolerance(
+    geometryResolution.minimumElementEdgeLength,
+    geometryResolution.coordinateScale,
+    mergeTolerance
+  );
+  assertSessionFaceGeometryResolution(
+    diagnosticCellIds,
+    tolerance,
+    geometryResolution.minimumElementEdgeLength,
+    cellIds.length > 0
+  );
+  return {
+    tolerance,
+    minimumElementEdgeLength: geometryResolution.minimumElementEdgeLength,
+    coordinateScale: geometryResolution.coordinateScale,
+    ...(mergeTolerance === undefined ? {} : { mergeTolerance })
+  };
+}
+
+function effectiveSessionFaceTolerance(
+  edge: number,
+  scale: number,
   requested?: number
 ): number {
-  assertValidSessionFaceTolerance(requested);
-  const mesh = buildActiveMeshForCellIdsWithMap(session, cellIds).mesh;
-  let scale = 1;
-  for (const point of mesh.nodes) {
-    for (const coordinate of point) {
-      if (!Number.isFinite(coordinate)) {
-        throw new Error(
-          "cannot compute effective session face tolerance from a non-finite coordinate"
-        );
-      }
-      scale = Math.max(scale, Math.abs(coordinate));
-    }
-  }
-  const edge = mesh.elements.length === 0
-    ? Number.POSITIVE_INFINITY
-    : minElementEdgeLength(mesh);
   const edgeTolerance = Number.isFinite(edge) && edge >= 0
     ? edge * 1e-8
     : 0;
@@ -1480,6 +1627,64 @@ function effectiveSessionFaceTolerance(
     requested ?? 0,
     Number.isFinite(edgeTolerance) ? edgeTolerance : 0,
     scale * Number.EPSILON * 64
+  );
+}
+
+function assertActiveBuildCoversSessionCells(
+  session: RefinementSession,
+  build: ActiveMeshBuildResult,
+  cellIds: readonly CellId[],
+  diagnosticCellIds: readonly CellId[]
+): void {
+  if (
+    build.mesh.elements.length !== cellIds.length
+    || cellIds.some((cellId) =>
+      activeBuildElementIdByCellId(session, build, cellId) === undefined
+    )
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "external activeBuild does not cover the active session cells required for transition face matching"
+    );
+  }
+}
+
+function assertSessionFaceGeometryResolution(
+  diagnosticCellIds: readonly CellId[],
+  tolerance: number,
+  minimumEdge: number,
+  hasElements: boolean
+): void {
+  if (!hasElements) {
+    return;
+  }
+  if (
+    !Number.isFinite(minimumEdge)
+    || minimumEdge <= 0
+    || tolerance >= minimumEdge / 2
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `effective face tolerance ${tolerance} reaches the minimum edge ${minimumEdge} resolution limit; distinct vertex neighborhoods would overlap`
+    );
+  }
+}
+
+function sessionFaceResolutionError(
+  cellIds: readonly CellId[],
+  message: string
+): TwoToOnePlanningError<CellId> {
+  return new TwoToOnePlanningError<CellId>(
+    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+    message,
+    {
+      conflictingCellIds: stableCellIds(cellIds),
+      conflictingInterfaces: [],
+      attemptedActions: [],
+      suggestion: {
+        kind: "remesh-source"
+      }
+    }
   );
 }
 
@@ -1697,12 +1902,23 @@ export function previewSessionPatch(
       activeBuild: sourceActive
     });
   } catch (error) {
-    if (shouldRebuildExistingTransitionShell(session, cellIds, options, error)) {
+    const resolvedOptions = {
+      ...options,
+      activeBuild: sourceActive
+    };
+    const faceResolution = resolveExistingTransitionShellRebuild(
+      session,
+      cellIds,
+      resolvedOptions,
+      error
+    );
+    if (faceResolution !== undefined) {
       return previewSessionPatchWithRebuiltTransitionShell(
         session,
         cellIds,
-        options,
-        sourceActive
+        resolvedOptions,
+        sourceActive,
+        faceResolution
       );
     }
     throw error;
@@ -1748,18 +1964,21 @@ function previewSessionPatchWithRebuiltTransitionShell(
   session: RefinementSession,
   cellIds: readonly CellId[],
   options: RefinementSessionPatchOptions,
-  sourceActive: ActiveMeshBuildResult
+  sourceActive: ActiveMeshBuildResult,
+  faceResolution: SessionFaceResolution
 ): RefinementPreview<CellId> {
   const working = cloneRefinementSession(session);
   const command = refineSessionPatchWithRebuiltTransitionShell(working, [...cellIds], {
     ...options,
     activeBuild: sourceActive
-  });
+  }, faceResolution);
   const finalActive = buildActiveMeshWithMap(working, {
     mergeNodes: true,
     includeSessionNodeIdByNodeId: false,
     includeSessionNodeIdsByNodeId: false,
-    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
+    ...(faceResolution.mergeTolerance !== undefined
+      ? { mergeTolerance: faceResolution.mergeTolerance }
+      : {})
   });
   const changedInputElementCount = command.hiddenCellIds.length;
   const inputElementCount = sourceActive.mesh.elements.length;

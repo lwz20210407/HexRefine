@@ -163,13 +163,18 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
     if (matches.length === 0) {
       return undefined;
     }
-    if (matches.length === 1) {
+    const soleMatch = matches[0];
+    const distinctSameOwnerFace = matches.length === 1
+      && soleMatch !== query
+      && soleMatch?.owner === query.owner;
+    if (matches.length === 1 && !distinctSameOwnerFace) {
       return matches[0];
     }
 
+    const matchCount = matches.length + (distinctSameOwnerFace ? 1 : 0);
     throw new TwoToOnePlanningError<T>(
       "TWO_TO_ONE_AMBIGUOUS_FACE",
-      `face owned by ${query.owner} has ${matches.length} matches`,
+      `face owned by ${query.owner} has ${matchCount} matches`,
       {
         conflictingCellIds: uniqueOwners([
           query.owner,
@@ -213,14 +218,12 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
       }
       const geometricMatches = this.geometricMatchesResolved(face);
       const exactFaceSet = new Set(exactFaces);
-      const exactOwners = new Set(exactFaces.map((candidate) => candidate.owner));
-      const competingOwners = geometricMatches.filter((candidate) =>
+      const competingFaces = geometricMatches.filter((candidate) =>
         !exactFaceSet.has(candidate)
-        && !exactOwners.has(candidate.owner)
       );
-      return competingOwners.length === 0
+      return competingFaces.length === 0
         ? [...exactFaces]
-        : [...exactFaces, ...competingOwners];
+        : [...exactFaces, ...competingFaces];
     }
     return this.geometricMatchesResolved(face);
   }
@@ -922,5 +925,17 @@ function point3(point: Point): Vector3 {
 }
 
 function uniqueOwners<T extends TwoToOneEntityId>(owners: readonly T[]): T[] {
-  return [...new Set(owners)];
+  return [...new Set(owners)].sort((first, second) => {
+    const firstKey = String(first);
+    const secondKey = String(second);
+    const stringComparison = firstKey < secondKey
+      ? -1
+      : firstKey > secondKey
+        ? 1
+        : 0;
+    if (stringComparison !== 0 || typeof first === typeof second) {
+      return stringComparison;
+    }
+    return typeof first === "number" ? -1 : 1;
+  });
 }

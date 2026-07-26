@@ -216,7 +216,7 @@ test("geometric face identity rejects near and ambiguous faces", () => {
   assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
   assert.equal(error.message, "face owned by query has 2 matches");
   assert.deepEqual(error.diagnostic, {
-    conflictingCellIds: ["query", "a", "duplicate"],
+    conflictingCellIds: ["a", "duplicate", "query"],
     conflictingInterfaces: [],
     attemptedActions: []
   });
@@ -224,7 +224,7 @@ test("geometric face identity rejects near and ambiguous faces", () => {
   error.diagnostic.conflictingCellIds.push("mutated");
   const secondError = captureError(() => index.uniqueMatch(query));
   assert.notEqual(secondError.diagnostic, error.diagnostic);
-  assert.deepEqual(secondError.diagnostic.conflictingCellIds, ["query", "a", "duplicate"]);
+  assert.deepEqual(secondError.diagnostic.conflictingCellIds, ["a", "duplicate", "query"]);
 });
 
 test("geometric face identity rejects warped quads outside the corner-anchored plane", () => {
@@ -908,7 +908,7 @@ test("geometric face identity includes a corrected face in ambiguity after bucke
   assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
   assert.deepEqual(
     error.diagnostic.conflictingCellIds,
-    ["retried-query", "retried", "origin"]
+    ["origin", "retried", "retried-query"]
   );
 });
 
@@ -1130,9 +1130,99 @@ test("geometric face identity detects ambiguity behind exact hits in either inse
     assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
     assert.deepEqual(
       error.diagnostic.conflictingCellIds,
-      ["query", "exact", "near"]
+      ["exact", "near", "query"]
     );
   }
+});
+
+test("geometric face identity counts same-owner geometric records at face level", () => {
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const faces = {
+    first: {
+      owner: "shared-owner",
+      nodeIds: [1, 2, 3, 4],
+      points: square
+    },
+    second: {
+      owner: "shared-owner",
+      nodeIds: [11, 12, 13, 14],
+      points: square
+    }
+  };
+
+  for (const insertionOrder of [
+    ["first", "second"],
+    ["second", "first"]
+  ]) {
+    const index = new GeometricFaceIndex(1e-8);
+    for (const key of insertionOrder) {
+      index.add(faces[key]);
+    }
+    for (const query of [
+      {
+        owner: "exact-query",
+        nodeIds: [4, 3, 2, 1],
+        points: square
+      },
+      {
+        owner: "geometry-query",
+        nodeIds: [21, 22, 23, 24],
+        points: square
+      }
+    ]) {
+      assert.equal(index.matches(query).length, 2);
+      const error = captureError(() => index.uniqueMatch(query));
+      assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+      assert.deepEqual(
+        error.diagnostic.conflictingCellIds,
+        [query.owner, "shared-owner"].sort()
+      );
+    }
+  }
+});
+
+test("geometric face ambiguity diagnostics are sorted independently of insertion order", () => {
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const faces = [
+    {
+      owner: "z-owner",
+      nodeIds: [1, 2, 3, 4],
+      points: square
+    },
+    {
+      owner: "a-owner",
+      nodeIds: [11, 12, 13, 14],
+      points: square
+    }
+  ];
+  const diagnostics = [];
+  for (const insertionOrder of [faces, [...faces].reverse()]) {
+    const index = new GeometricFaceIndex(1e-8);
+    for (const face of insertionOrder) {
+      index.add(face);
+    }
+    const error = captureError(() => index.uniqueMatch({
+      owner: "m-query",
+      nodeIds: [21, 22, 23, 24],
+      points: square
+    }));
+    diagnostics.push(error.diagnostic.conflictingCellIds);
+  }
+
+  assert.deepEqual(diagnostics, [
+    ["a-owner", "m-query", "z-owner"],
+    ["a-owner", "m-query", "z-owner"]
+  ]);
 });
 
 test("geometric face identity keeps unique exact ids authoritative over unrelated geometry", () => {
@@ -4963,6 +5053,79 @@ test("Hex 2:1 transition-shell rebuilding recognizes near-coincident duplicate i
   assert.ok(minimumCornerScaledJacobian(refined) > 0);
 });
 
+test("Hex 2:1 transition-shell rebuilding inherits an external activeBuild merge tolerance", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const perturbedOwner = duplicateOneNearCoincidentNeighborFace(
+    session,
+    candidate,
+    [5e-7, -2.5e-7, 2.5e-7]
+  );
+  const perturbedParent = session.cells.get(perturbedOwner).parentId;
+  assert.ok(perturbedParent);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-6
+  });
+
+  const command = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: active
+  });
+
+  assert.equal(active.mergeTolerance, 1e-6);
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(
+    command.twoToOne.actions[0].replacedTransitionCellIds.includes(
+      perturbedParent
+    ),
+    true
+  );
+  assert.equal(
+    command.twoToOne.affectedComponentCellIds.includes(perturbedOwner),
+    true
+  );
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects inconsistent or unproven activeBuild tolerance atomically", () => {
+  for (const mode of ["inconsistent", "unproven"]) {
+    const {
+      session,
+      candidate
+    } = createTransitionShellRegressionFixture();
+    duplicateOneNearCoincidentNeighborFace(
+      session,
+      candidate,
+      [5e-7, -2.5e-7, 2.5e-7]
+    );
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-6
+    });
+    if (mode === "unproven") {
+      delete active.mergeTolerance;
+    }
+    const before = structuredClone(session);
+
+    const error = captureError(() => refineSessionPatch(session, [candidate], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      ...(mode === "inconsistent" ? { mergeTolerance: 1e-8 } : {}),
+      activeBuild: active
+    }));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*merge tolerance/i);
+    assert.deepEqual(session, before);
+  }
+});
+
 test("Hex 2:1 transition-shell rebuilding does not connect faces beyond the effective tolerance", () => {
   const {
     session,
@@ -5016,7 +5179,7 @@ test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomi
 
     assert.equal(error instanceof TwoToOnePlanningError, true);
     assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
-    assert.equal(error.diagnostic.conflictingCellIds[0], ambiguousOwner);
+    assert.equal(error.diagnostic.conflictingCellIds.includes(ambiguousOwner), true);
     assert.equal(error.diagnostic.conflictingCellIds.length, 3);
     assert.deepEqual(session, before);
     diagnostics.push(error.diagnostic.conflictingCellIds);
@@ -5027,10 +5190,13 @@ test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomi
 test("Hex 2:1 connected support detects ambiguity hidden behind exact node IDs atomically", () => {
   const {
     session,
-    candidate,
-    firstRefined
+    candidate
   } = createTransitionShellRegressionFixture();
   const owners = addExactFirstSupportAmbiguity(session, candidate);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
   const before = structuredClone(session);
 
   const error = captureError(() => refineSessionPatch(session, [candidate], {
@@ -5038,71 +5204,69 @@ test("Hex 2:1 connected support detects ambiguity hidden behind exact node IDs a
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
     mergeTolerance: 1e-8,
-    activeBuild: firstRefined
+    activeBuild: active
   }));
 
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
   assert.deepEqual(error.diagnostic.conflictingCellIds, [
-    owners.exactQuery,
     owners.exactStored,
-    owners.nearStored
+    owners.nearStored,
+    owners.exactQuery
   ]);
   assert.deepEqual(session, before);
 });
 
-test("Hex 2:1 replacement ownership detects ambiguity hidden behind exact node IDs atomically", () => {
+test("Hex 2:1 connected support rejects a collapsed same-owner face pair atomically", () => {
   const {
     session,
     candidate,
     firstRefined
   } = createTransitionShellRegressionFixture();
+  const collapsedOwner = addCollapsedSupportCell(session, candidate);
   const before = structuredClone(session);
-  const injectedOwner = "ownership-near-owner";
-  const originalAdd = GeometricFaceIndex.prototype.add;
-  const originalUniqueMatch = GeometricFaceIndex.prototype.uniqueMatch;
-  let injected = false;
-  GeometricFaceIndex.prototype.uniqueMatch =
-    function matchWithOwnershipCompetitor(face) {
-      const match = originalUniqueMatch.call(this, face);
-      const hasExactIdentity = match !== undefined
-        && [...match.nodeIds].sort((first, second) => first - second).join(":")
-          === [...face.nodeIds].sort((first, second) => first - second).join(":");
-      if (
-        !injected
-        && hasExactIdentity
-        && new Error().stack?.includes("validateRebuiltSupportPlanOwnership")
-      ) {
-        injected = true;
-        originalAdd.call(this, {
-          owner: injectedOwner,
-          nodeIds: [900000001, 900000002, 900000003, 900000004],
-          points: face.points.map((point) => [...point])
-        });
-        return originalUniqueMatch.call(this, face);
-      }
-      return match;
-    };
-  let error;
-  try {
-    error = captureError(() => refineSessionPatch(session, [candidate], {
-      hexRefinementRatio: 2,
-      hexTwoToOneSelectionMode: "local",
-      includeTransitions: true,
-      activeBuild: firstRefined
-    }));
-  } finally {
-    GeometricFaceIndex.prototype.uniqueMatch = originalUniqueMatch;
-  }
 
-  assert.equal(injected, true);
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  }));
+
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
-  assert.equal(
-    error.diagnostic.conflictingCellIds.includes(injectedOwner),
-    true
-  );
+  assert.deepEqual(error.diagnostic.conflictingCellIds, [collapsedOwner]);
   assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 transition-shell rebuilding reads a precomputed active geometry resolution once", () => {
+  const {
+    session,
+    candidate,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const resolution = firstRefined.geometryResolution;
+  assert.ok(resolution);
+  let resolutionReadCount = 0;
+  Object.defineProperty(firstRefined, "geometryResolution", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      resolutionReadCount += 1;
+      return resolution;
+    }
+  });
+
+  const command = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  });
+
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(resolutionReadCount, 1);
+  assert.ok(command.twoToOne.affectedComponentCellIds.length > 0);
 });
 
 test("Hex 2:1 transition-shell rebuilding geometrically matches valid coincident faces with distinct node IDs", () => {
@@ -5136,28 +5300,31 @@ test("Hex 2:1 transition-shell rebuilding geometrically matches valid coincident
 
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
-  assert.equal(error.diagnostic.conflictingCellIds[0], ambiguousOwner);
+  assert.equal(error.diagnostic.conflictingCellIds.includes(ambiguousOwner), true);
   assert.deepEqual(session, before);
 });
 
 test("Hex 2:1 transition-shell rebuilding rejects degenerate coincident faces before exact matching", () => {
   const {
     session,
-    candidate,
-    firstRefined
+    candidate
   } = createTransitionShellRegressionFixture();
   const degenerateOwners = addCoincidentDegenerateSupportCells(
     session,
     candidate,
     3
   );
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
 
   const command = refineSessionPatch(session, [candidate], {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
     mergeTolerance: 1e-8,
-    activeBuild: firstRefined
+    activeBuild: active
   });
   const refined = buildActiveMesh(session, {
     mergeNodes: true,
@@ -5197,6 +5364,82 @@ test("Hex 2:1 transition-shell rebuilding rejects invalid requested merge tolera
     );
     assert.deepEqual(session, before);
   }
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects a precision floor wider than tiny edges", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  addActiveResolutionProbeCell(session, [-1e-12, -1e-12, -1e-12], 1e-16);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-20
+  });
+  const before = structuredClone(session);
+
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-20,
+    activeBuild: active
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /face tolerance.*minimum edge.*resolution/i);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects a large-coordinate precision floor wider than edges", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  addActiveResolutionProbeCell(session, [1e12, 1e12, 1e12], 0.01);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-6
+  });
+  const before = structuredClone(session);
+
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-6,
+    activeBuild: active
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /face tolerance.*minimum edge.*resolution/i);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects a requested tolerance that overlaps edge resolution", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-2
+  });
+  const before = structuredClone(session);
+
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: active
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /face tolerance.*minimum edge.*resolution/i);
+  assert.deepEqual(session, before);
 });
 
 test("Hex 2:1 local refinement can reject rebuilding an existing transition shell", () => {
@@ -6173,6 +6416,76 @@ function addExactFirstSupportAmbiguity(session, selectedCellId) {
   }
   supportCommand.createdNodeIds.push(...sharedNodeIds, ...nearNodeIds);
   return owners;
+}
+
+function addCollapsedSupportCell(session, selectedCellId) {
+  const selected = session.cells.get(selectedCellId);
+  const supportCommand = [...session.undoStack]
+    .reverse()
+    .find((command) => command.createdCellIds.includes(selectedCellId));
+  assert.ok(selected);
+  assert.ok(supportCommand);
+  const points = [
+    [10, 20, 30],
+    [11, 20, 30],
+    [11, 21, 30],
+    [10, 21, 30],
+    [10, 20, 30],
+    [11, 20, 30],
+    [11, 21, 30],
+    [10, 21, 30]
+  ];
+  const nodeIds = points.map((point) => {
+    session.nodes.push(point);
+    return session.nodes.length;
+  });
+  const cellId = "e999996/1";
+  session.cells.set(cellId, {
+    ...selected,
+    id: cellId,
+    ordinal: session.nextCellOrdinal,
+    element: nodeIds,
+    children: [],
+    active: false,
+    hidden: true
+  });
+  session.nextCellOrdinal += 1;
+  supportCommand.createdCellIds.push(cellId);
+  supportCommand.createdNodeIds.push(...nodeIds);
+  return cellId;
+}
+
+function addActiveResolutionProbeCell(session, origin, edge) {
+  const [x, y, z] = origin;
+  const nodeIds = [
+    [x, y, z],
+    [x + edge, y, z],
+    [x + edge, y + edge, z],
+    [x, y + edge, z],
+    [x, y, z + edge],
+    [x + edge, y, z + edge],
+    [x + edge, y + edge, z + edge],
+    [x, y + edge, z + edge]
+  ].map((point) => {
+    session.nodes.push(point);
+    return session.nodes.length;
+  });
+  const cellId = "e999999";
+  session.cells.set(cellId, {
+    id: cellId,
+    ordinal: session.nextCellOrdinal,
+    level: 0,
+    role: "base",
+    kind: "H1",
+    element: nodeIds,
+    children: [],
+    active: true,
+    hidden: false,
+    template: "resolution-probe"
+  });
+  session.nextCellOrdinal += 1;
+  session.activeLeafIds.add(cellId);
+  session.sortedActiveLeafIdsDirty = true;
 }
 
 function warpedShellBaselineDiagnostics(session, selectedCellId) {
