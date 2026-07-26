@@ -12,6 +12,8 @@ export interface GeometricFace<T> {
 
 type BucketCoordinate = readonly [number, number, number];
 type Vector3 = readonly [number, number, number];
+type QuadOrder = readonly [number, number, number, number];
+type PointCorrespondence = "none" | "approximate" | "exact";
 
 interface NormalizedFacePair {
   first: readonly Vector3[];
@@ -71,6 +73,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
   private readonly exact = new Map<string, GeometricFace<T>[]>();
   private readonly buckets = new Map<string, GeometricFace<T>[]>();
   private readonly registrations = new WeakMap<GeometricFace<T>, GeometricFace<T>>();
+  private readonly canonicalOrders = new WeakMap<GeometricFace<T>, QuadOrder | null>();
   private bucketOrigin: Vector3 | undefined;
 
   constructor(readonly tolerance: number) {
@@ -83,14 +86,13 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
     assertFaceObject(face);
     const registered = this.registrations.get(face);
     if (registered !== undefined) {
-      if (!sameStoredValues(face, registered)) {
-        throw new TypeError("face was modified after it was added");
-      }
+      assertStoredValuesUnchanged(face, registered);
       return;
     }
 
     assertQuad(face);
     const stored = snapshotFace(face);
+    const canonicalOrder = canonicalPointOrder(stored.points) ?? null;
     const minimum = minimumPoint(stored.points);
     const bucketOrigin = this.bucketOrigin ?? minimum;
     const bucketKey = coordinateKey(bucketCoordinate(
@@ -116,6 +118,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
 
     this.bucketOrigin = bucketOrigin;
     this.registrations.set(face, stored);
+    this.canonicalOrders.set(stored, canonicalOrder);
   }
 
   /**
@@ -155,6 +158,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
     assertFaceObject(face);
     const registered = this.registrations.get(face);
     if (registered !== undefined) {
+      assertStoredValuesUnchanged(face, registered);
       return registered;
     }
     assertQuad(face);
@@ -176,6 +180,13 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
       this.bucketOrigin,
       this.tolerance
     );
+    let queryOrder = this.canonicalOrders.get(face);
+    const getQueryOrder = (): QuadOrder | null => {
+      if (queryOrder === undefined) {
+        queryOrder = canonicalPointOrder(face.points) ?? null;
+      }
+      return queryOrder;
+    };
     const seen = new Set<GeometricFace<T>>();
     const matches: GeometricFace<T>[] = [];
     for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
@@ -194,7 +205,14 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
               continue;
             }
             seen.add(candidate);
-            if (geometricallySameFace(candidate.points, face.points, this.tolerance)) {
+            const candidateOrder = this.canonicalOrders.get(candidate) ?? null;
+            if (geometricallySameFace(
+              candidate.points,
+              candidateOrder,
+              face.points,
+              getQueryOrder,
+              this.tolerance
+            )) {
               matches.push(candidate);
             }
           }
@@ -213,6 +231,7 @@ function assertFaceObject(face: unknown): asserts face is object {
 
 function assertQuad<T>(face: GeometricFace<T>): void {
   assertFaceObject(face);
+  assertOwner(face.owner);
   if (!Array.isArray(face.nodeIds) || !Array.isArray(face.points)) {
     throw new TypeError("face nodeIds and points must be arrays");
   }
@@ -241,6 +260,15 @@ function assertQuad<T>(face: GeometricFace<T>): void {
   }
 }
 
+function assertOwner(owner: unknown): asserts owner is TwoToOneEntityId {
+  if (
+    typeof owner !== "string"
+    && !(typeof owner === "number" && Number.isSafeInteger(owner))
+  ) {
+    throw new TypeError("face owner must be a string or safe integer");
+  }
+}
+
 function snapshotFace<T>(face: GeometricFace<T>): GeometricFace<T> {
   const nodeIds = Object.freeze([...face.nodeIds]);
   const points = Object.freeze(face.points.map((point) => Object.freeze([
@@ -253,6 +281,15 @@ function snapshotFace<T>(face: GeometricFace<T>): GeometricFace<T> {
     nodeIds,
     points
   });
+}
+
+function assertStoredValuesUnchanged<T>(
+  face: GeometricFace<T>,
+  stored: GeometricFace<T>
+): void {
+  if (!sameStoredValues(face, stored)) {
+    throw new TypeError("face was modified after it was added");
+  }
 }
 
 function sameStoredValues<T>(
@@ -355,10 +392,20 @@ function coordinateKey(coordinate: BucketCoordinate): string {
 
 function geometricallySameFace(
   first: readonly Point[],
+  firstOrder: QuadOrder | null,
   second: readonly Point[],
+  getSecondOrder: () => QuadOrder | null,
   tolerance: number
 ): boolean {
-  if (!hasPointCorrespondence(first, second, tolerance)) {
+  const correspondence = pointCorrespondence(first, second, tolerance);
+  if (correspondence === "none") {
+    return false;
+  }
+  if (correspondence === "exact") {
+    return true;
+  }
+  const secondOrder = getSecondOrder();
+  if (firstOrder === null || secondOrder === null) {
     return false;
   }
 
@@ -366,8 +413,8 @@ function geometricallySameFace(
   if (normalized === undefined) {
     return false;
   }
-  const firstGeometry = faceGeometry(normalized.first);
-  const secondGeometry = faceGeometry(normalized.second);
+  const firstGeometry = faceGeometry(normalized.first, firstOrder);
+  const secondGeometry = faceGeometry(normalized.second, secondOrder);
   if (firstGeometry === undefined || secondGeometry === undefined) {
     return false;
   }
@@ -405,17 +452,40 @@ function geometricallySameFace(
   return true;
 }
 
-function hasPointCorrespondence(
+function pointCorrespondence(
   first: readonly Point[],
   second: readonly Point[],
   tolerance: number
-): boolean {
-  return QUAD_PERMUTATIONS.some((permutation) => permutation.every(
-    (secondIndex, firstIndex) => {
-      const distance = pointDistance(first[firstIndex]!, second[secondIndex]!);
-      return Number.isFinite(distance) && distance <= tolerance;
+): PointCorrespondence {
+  let hasApproximateCorrespondence = false;
+  for (const permutation of QUAD_PERMUTATIONS) {
+    let permutationMatches = true;
+    let permutationIsExact = true;
+    for (let firstIndex = 0; firstIndex < 4; firstIndex += 1) {
+      const secondIndex = permutation[firstIndex]!;
+      const firstPoint = first[firstIndex]!;
+      const secondPoint = second[secondIndex]!;
+      const deltaX = firstPoint[0]! - secondPoint[0]!;
+      const deltaY = firstPoint[1]! - secondPoint[1]!;
+      const deltaZ = firstPoint[2]! - secondPoint[2]!;
+      const cornerIsExact = deltaX === 0 && deltaY === 0 && deltaZ === 0;
+      if (!cornerIsExact) {
+        permutationIsExact = false;
+        const distance = Math.hypot(deltaX, deltaY, deltaZ);
+        if (!Number.isFinite(distance) || distance > tolerance) {
+          permutationMatches = false;
+          break;
+        }
+      }
     }
-  ));
+    if (permutationMatches && permutationIsExact) {
+      return "exact";
+    }
+    if (permutationMatches) {
+      hasApproximateCorrespondence = true;
+    }
+  }
+  return hasApproximateCorrespondence ? "approximate" : "none";
 }
 
 function normalizeFacePair(
@@ -494,30 +564,19 @@ function normalizeOffsets(
   return normalized;
 }
 
-function faceGeometry(points: readonly Vector3[]): FaceGeometry | undefined {
+function canonicalPointOrder(points: readonly Point[]): QuadOrder | undefined {
+  const normalized = normalizeSingleFace(points);
+  if (normalized === undefined) {
+    return undefined;
+  }
+
   let best: GeometryCandidate | undefined;
+  let bestOrder: QuadOrder | undefined;
   for (const permutation of QUAD_PERMUTATIONS) {
-    const orderedPoints = permutation.map((index) => points[index]!);
-    const normal = newellNormal(orderedPoints);
-    const normalLength = Math.hypot(normal[0], normal[1], normal[2]);
-    const area = normalLength * 0.5;
-    const perimeter = facePerimeter(orderedPoints);
-    if (
-      !normal.every(Number.isFinite)
-      || !Number.isFinite(normalLength)
-      || !Number.isFinite(area)
-      || !Number.isFinite(perimeter)
-    ) {
+    const candidate = geometryCandidate(normalized, permutation);
+    if (candidate === undefined) {
       return undefined;
     }
-
-    const candidate: GeometryCandidate = {
-      normal,
-      normalLength,
-      area,
-      perimeter,
-      orderedPoints
-    };
     if (
       best === undefined
       || candidate.normalLength > best.normalLength
@@ -527,25 +586,82 @@ function faceGeometry(points: readonly Vector3[]): FaceGeometry | undefined {
       )
     ) {
       best = candidate;
+      bestOrder = permutation;
     }
   }
 
-  if (best === undefined || best.normalLength <= 0) {
+  return best !== undefined && best.normalLength > 0 ? bestOrder : undefined;
+}
+
+function normalizeSingleFace(points: readonly Point[]): Vector3[] | undefined {
+  const origin = point3(points[0]!);
+  const offsets: Vector3[] = [];
+  let span = 0;
+  for (const point of points) {
+    const offset = finiteOffset(point, origin);
+    if (offset === undefined) {
+      return undefined;
+    }
+    const distance = Math.hypot(offset[0], offset[1], offset[2]);
+    if (!Number.isFinite(distance)) {
+      return undefined;
+    }
+    span = Math.max(span, distance);
+    offsets.push(offset);
+  }
+  if (!Number.isFinite(span) || span <= 0) {
+    return undefined;
+  }
+  return normalizeOffsets(offsets, span);
+}
+
+function faceGeometry(
+  points: readonly Vector3[],
+  order: QuadOrder
+): FaceGeometry | undefined {
+  const candidate = geometryCandidate(points, order);
+  if (candidate === undefined || candidate.normalLength <= 0) {
     return undefined;
   }
   const unitNormal: Vector3 = [
-    best.normal[0] / best.normalLength,
-    best.normal[1] / best.normalLength,
-    best.normal[2] / best.normalLength
+    candidate.normal[0] / candidate.normalLength,
+    candidate.normal[1] / candidate.normalLength,
+    candidate.normal[2] / candidate.normalLength
   ];
   if (!unitNormal.every(Number.isFinite)) {
     return undefined;
   }
   return {
-    normalLength: best.normalLength,
+    normalLength: candidate.normalLength,
     unitNormal,
-    area: best.area,
-    perimeter: best.perimeter
+    area: candidate.area,
+    perimeter: candidate.perimeter
+  };
+}
+
+function geometryCandidate(
+  points: readonly Vector3[],
+  order: QuadOrder
+): GeometryCandidate | undefined {
+  const orderedPoints = order.map((index) => points[index]!);
+  const normal = newellNormal(orderedPoints);
+  const normalLength = Math.hypot(normal[0], normal[1], normal[2]);
+  const area = normalLength * 0.5;
+  const perimeter = facePerimeter(orderedPoints);
+  if (
+    !normal.every(Number.isFinite)
+    || !Number.isFinite(normalLength)
+    || !Number.isFinite(area)
+    || !Number.isFinite(perimeter)
+  ) {
+    return undefined;
+  }
+  return {
+    normal,
+    normalLength,
+    area,
+    perimeter,
+    orderedPoints
   };
 }
 

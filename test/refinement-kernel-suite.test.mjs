@@ -245,7 +245,7 @@ test("geometric face identity rejects warped quads outside the corner-anchored p
   assert.deepEqual(index.matches({
     owner: "warped-query",
     nodeIds: [11, 12, 13, 14],
-    points: warpedQuad
+    points: [[1e-9, 0, 0], warpedQuad[1], warpedQuad[2], warpedQuad[3]]
   }), []);
 });
 
@@ -339,6 +339,83 @@ test("geometric face identity matches all 24 orders of a non-cyclic micro trapez
   }
 });
 
+test("geometric face identity exact-matches a unit face with overflow-scale tolerance", () => {
+  const points = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const index = new GeometricFaceIndex(1e200);
+  index.add({
+    owner: "unit",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  for (const order of ALL_QUAD_PERMUTATIONS) {
+    assert.equal(index.uniqueMatch({
+      owner: "unit-query",
+      nodeIds: [11, 12, 13, 14],
+      points: order.map((pointIndex) => points[pointIndex])
+    })?.owner, "unit", `permutation ${order.join(":")} must exact-match`);
+  }
+});
+
+test("geometric face identity exact-matches a 1e-200 face in every order", () => {
+  const edge = 1e-200;
+  const points = [
+    [0, 0, 0],
+    [edge, 0, 0],
+    [edge, edge, 0],
+    [0, edge, 0]
+  ];
+  const index = new GeometricFaceIndex(1);
+  index.add({
+    owner: "micro",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  for (const order of ALL_QUAD_PERMUTATIONS) {
+    assert.equal(index.uniqueMatch({
+      owner: "micro-query",
+      nodeIds: [11, 12, 13, 14],
+      points: order.map((pointIndex) => points[pointIndex])
+    })?.owner, "micro", `permutation ${order.join(":")} must exact-match`);
+  }
+});
+
+test("geometric face identity matches all 24 orders of a warped noisy face", () => {
+  const tolerance = 1e-8;
+  const storedPoints = [
+    [0, 0, 0],
+    [2, 0, 2e-9],
+    [1.8, 1, -1e-9],
+    [0, 1, 1e-9]
+  ];
+  const noisyPoints = [
+    [1e-10, 0, 1e-9],
+    [2, 0, 1e-9],
+    [1.8, 1, 0],
+    [0, 1, 0]
+  ];
+  const index = new GeometricFaceIndex(tolerance);
+  index.add({
+    owner: "warped-noisy",
+    nodeIds: [1, 2, 3, 4],
+    points: [storedPoints[0], storedPoints[2], storedPoints[1], storedPoints[3]]
+  });
+
+  for (const order of ALL_QUAD_PERMUTATIONS) {
+    assert.equal(index.uniqueMatch({
+      owner: "warped-noisy-query",
+      nodeIds: [11, 12, 13, 14],
+      points: order.map((pointIndex) => noisyPoints[pointIndex])
+    })?.owner, "warped-noisy", `permutation ${order.join(":")} must match`);
+  }
+});
+
 test("geometric face identity rejects a distinct tolerance-close set outside the anchor plane", () => {
   const tolerance = 1e-8;
   const index = new GeometricFaceIndex(tolerance);
@@ -393,7 +470,7 @@ test("geometric face identity distinguishes degenerate and valid micro-scale qua
   assert.deepEqual(degenerateIndex.matches({
     owner: "line-copy",
     nodeIds: [11, 12, 13, 14],
-    points: line
+    points: [[1e-9, 0, 0], line[1], line[2], line[3]]
   }), []);
 
   const microIndex = new GeometricFaceIndex(1e-8);
@@ -466,7 +543,10 @@ test("geometric face identity normalizes representable faces translated near 1e3
 });
 
 test("geometric face identity fails closed when normalized deltas are not finite", () => {
-  const index = new GeometricFaceIndex(1);
+  const tolerance = 4e292;
+  const shiftedMaximum = 1e308 + 2e292;
+  assert.equal(shiftedMaximum > 1e308, true);
+  const index = new GeometricFaceIndex(tolerance);
   const unnormalizable = [
     [-1e308, -1e308, 0],
     [1e308, -1e308, 0],
@@ -482,7 +562,12 @@ test("geometric face identity fails closed when normalized deltas are not finite
   assert.deepEqual(index.matches({
     owner: "extreme-query",
     nodeIds: [11, 12, 13, 14],
-    points: unnormalizable
+    points: [
+      unnormalizable[0],
+      [shiftedMaximum, -1e308, 0],
+      unnormalizable[2],
+      unnormalizable[3]
+    ]
   }), []);
 });
 
@@ -516,6 +601,36 @@ test("geometric face identity rejects unsafe buckets atomically but preserves ex
     nodeIds: [4, 3, 2, 1],
     points: safePoints.map(([x, y, z]) => [x + 1, y, z])
   }).map((face) => face.owner), ["safe"]);
+});
+
+test("geometric face identity allows a corrected face to be added after bucket rejection", () => {
+  const index = new GeometricFaceIndex(Number.MIN_VALUE);
+  const safePoints = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  index.add({
+    owner: "origin",
+    nodeIds: [1, 2, 3, 4],
+    points: safePoints
+  });
+  const retriedFace = {
+    owner: "retried",
+    nodeIds: [11, 12, 13, 14],
+    points: safePoints.map(([x, y, z]) => [x + 1, y, z])
+  };
+
+  assert.throws(() => index.add(retriedFace), RangeError);
+  retriedFace.points = safePoints.map((point) => [...point]);
+  index.add(retriedFace);
+
+  assert.deepEqual(index.matches({
+    owner: "retried-query",
+    nodeIds: [14, 13, 12, 11],
+    points: safePoints
+  }).map((face) => face.owner), ["retried"]);
 });
 
 test("geometric face identity returns fresh match arrays", () => {
@@ -592,6 +707,47 @@ test("geometric face identity stores immutable snapshots and rejects mutated re-
     name: "TypeError",
     message: /modified after it was added/
   });
+});
+
+test("geometric face identity rejects owner, node, and point mutation during queries", () => {
+  const mutations = [
+    {
+      label: "owner",
+      mutate: (face) => {
+        face.owner = "changed";
+      }
+    },
+    {
+      label: "node",
+      mutate: (face) => {
+        face.nodeIds[0] = 99;
+      }
+    },
+    {
+      label: "point",
+      mutate: (face) => {
+        face.points[0][0] = 0.25;
+      }
+    }
+  ];
+
+  for (const { label, mutate } of mutations) {
+    const index = new GeometricFaceIndex(1e-8);
+    const face = {
+      owner: "original",
+      nodeIds: [1, 2, 3, 4],
+      points: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+    };
+    index.add(face);
+    mutate(face);
+
+    for (const method of ["matches", "uniqueMatch"]) {
+      assert.throws(() => index[method](face), {
+        name: "TypeError",
+        message: /modified after it was added/
+      }, `${method} must reject ${label} mutation`);
+    }
+  }
 });
 
 test("geometric face identity retains distinct exact faces with identical values", () => {
@@ -681,6 +837,43 @@ test("geometric face identity requires four distinct positive safe node ids", ()
       points
     }), TypeError);
   }
+});
+
+test("geometric face identity validates owners at runtime", () => {
+  const points = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]];
+  const invalidOwners = [
+    {},
+    null,
+    undefined,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    true
+  ];
+
+  for (const owner of invalidOwners) {
+    const face = {
+      owner,
+      nodeIds: [1, 2, 3, 4],
+      points
+    };
+    assert.throws(() => new GeometricFaceIndex(1e-8).add(face), TypeError);
+    assert.throws(() => new GeometricFaceIndex(1e-8).matches(face), TypeError);
+  }
+
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+  assert.equal(index.uniqueMatch({
+    owner: 0,
+    nodeIds: [4, 3, 2, 1],
+    points
+  })?.owner, "");
 });
 
 test("Hex 2:1 capability reports deep-clone string id arrays and actions", () => {
