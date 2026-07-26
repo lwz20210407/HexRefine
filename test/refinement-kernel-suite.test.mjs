@@ -200,6 +200,28 @@ test("geometric face identity rejects near and ambiguous faces", () => {
   assert.deepEqual(secondError.diagnostic.conflictingCellIds, ["query", "a", "duplicate"]);
 });
 
+test("geometric face identity rejects warped quads outside the corner-anchored plane", () => {
+  const tolerance = 1e-8;
+  const index = new GeometricFaceIndex(tolerance);
+  const warpedQuad = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 3 * tolerance]
+  ];
+  index.add({
+    owner: "warped",
+    nodeIds: [1, 2, 3, 4],
+    points: warpedQuad
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "warped-query",
+    nodeIds: [11, 12, 13, 14],
+    points: warpedQuad
+  }), []);
+});
+
 test("geometric face identity rejects invalid tolerances and malformed quads", () => {
   for (const tolerance of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(() => new GeometricFaceIndex(tolerance), RangeError);

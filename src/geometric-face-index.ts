@@ -212,13 +212,14 @@ function geometricallySameFace(
     return false;
   }
 
+  const planeOrigin = point3(first[0]!);
   for (const point of first) {
-    if (pointToPlaneDistance(point, firstGeometry.centroid, firstGeometry.unitNormal) > tolerance) {
+    if (pointToPlaneDistance(point, planeOrigin, firstGeometry.unitNormal) > tolerance) {
       return false;
     }
   }
   for (const point of second) {
-    if (pointToPlaneDistance(point, firstGeometry.centroid, firstGeometry.unitNormal) > tolerance) {
+    if (pointToPlaneDistance(point, planeOrigin, firstGeometry.unitNormal) > tolerance) {
       return false;
     }
   }
@@ -241,7 +242,6 @@ function faceGeometry(points: readonly Point[]): {
   unitNormal: Vector3;
   area: number;
   perimeter: number;
-  centroid: Vector3;
 } {
   const normal = newellNormal(points);
   const normalLength = Math.hypot(normal[0], normal[1], normal[2]);
@@ -256,8 +256,7 @@ function faceGeometry(points: readonly Point[]): {
     normalLength,
     unitNormal,
     area: normalLength * 0.5,
-    perimeter: facePerimeter(points),
-    centroid: faceCentroid(points)
+    perimeter: facePerimeter(points)
   };
 }
 
@@ -285,19 +284,6 @@ function facePerimeter(points: readonly Point[]): number {
     ));
   }
   return perimeter;
-}
-
-function faceCentroid(points: readonly Point[]): Vector3 {
-  let x = 0;
-  let y = 0;
-  let z = 0;
-  for (const point of points) {
-    const coordinate = point3(point);
-    x += coordinate[0];
-    y += coordinate[1];
-    z += coordinate[2];
-  }
-  return [x / 4, y / 4, z / 4];
 }
 
 function pointToPlaneDistance(point: Point, planePoint: Vector3, unitNormal: Vector3): number {
