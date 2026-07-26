@@ -21,6 +21,11 @@ interface NormalizedFacePair {
   toleranceRatio: number;
 }
 
+interface NormalizedSingleFace {
+  points: readonly Vector3[];
+  span: number;
+}
+
 interface FaceGeometry {
   normalLength: number;
   unitNormal: Vector3;
@@ -402,7 +407,7 @@ function geometricallySameFace(
     return false;
   }
   if (correspondence === "exact") {
-    return true;
+    return isValidExactCoordinateFace(first, firstOrder, tolerance);
   }
   const secondOrder = getSecondOrder();
   if (firstOrder === null || secondOrder === null) {
@@ -486,6 +491,55 @@ function pointCorrespondence(
     }
   }
   return hasApproximateCorrespondence ? "approximate" : "none";
+}
+
+function isValidExactCoordinateFace(
+  points: readonly Point[],
+  order: QuadOrder | null,
+  tolerance: number
+): boolean {
+  if (order === null) {
+    return false;
+  }
+  const normalized = normalizeSingleFace(points);
+  if (
+    normalized === undefined
+    || !hasFourDistinctCorners(normalized.points)
+  ) {
+    return false;
+  }
+  const geometry = faceGeometry(normalized.points, order);
+  if (geometry === undefined) {
+    return false;
+  }
+
+  const toleranceRatio = tolerance / normalized.span;
+  if (
+    !Number.isFinite(toleranceRatio)
+    && toleranceRatio !== Number.POSITIVE_INFINITY
+  ) {
+    return false;
+  }
+  const planeOrigin = normalized.points[0]!;
+  for (const point of normalized.points) {
+    const distance = pointToPlaneDistance(point, planeOrigin, geometry.unitNormal);
+    if (!Number.isFinite(distance) || distance > toleranceRatio) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasFourDistinctCorners(points: readonly Vector3[]): boolean {
+  for (let first = 0; first < 4; first += 1) {
+    for (let second = first + 1; second < 4; second += 1) {
+      const distance = pointDistance(points[first]!, points[second]!);
+      if (!Number.isFinite(distance) || distance <= 0) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function normalizeFacePair(
@@ -573,7 +627,7 @@ function canonicalPointOrder(points: readonly Point[]): QuadOrder | undefined {
   let best: GeometryCandidate | undefined;
   let bestOrder: QuadOrder | undefined;
   for (const permutation of QUAD_PERMUTATIONS) {
-    const candidate = geometryCandidate(normalized, permutation);
+    const candidate = geometryCandidate(normalized.points, permutation);
     if (candidate === undefined) {
       return undefined;
     }
@@ -593,7 +647,7 @@ function canonicalPointOrder(points: readonly Point[]): QuadOrder | undefined {
   return best !== undefined && best.normalLength > 0 ? bestOrder : undefined;
 }
 
-function normalizeSingleFace(points: readonly Point[]): Vector3[] | undefined {
+function normalizeSingleFace(points: readonly Point[]): NormalizedSingleFace | undefined {
   const origin = point3(points[0]!);
   const offsets: Vector3[] = [];
   let span = 0;
@@ -612,7 +666,11 @@ function normalizeSingleFace(points: readonly Point[]): Vector3[] | undefined {
   if (!Number.isFinite(span) || span <= 0) {
     return undefined;
   }
-  return normalizeOffsets(offsets, span);
+  const normalized = normalizeOffsets(offsets, span);
+  return normalized === undefined ? undefined : {
+    points: normalized,
+    span
+  };
 }
 
 function faceGeometry(

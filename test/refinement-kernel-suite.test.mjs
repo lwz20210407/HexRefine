@@ -370,7 +370,7 @@ test("geometric face identity exact-matches a 1e-200 face in every order", () =>
     [edge, edge, 0],
     [0, edge, 0]
   ];
-  const index = new GeometricFaceIndex(1);
+  const index = new GeometricFaceIndex(1e-14);
   index.add({
     owner: "micro",
     nodeIds: [1, 2, 3, 4],
@@ -384,6 +384,28 @@ test("geometric face identity exact-matches a 1e-200 face in every order", () =>
       points: order.map((pointIndex) => points[pointIndex])
     })?.owner, "micro", `permutation ${order.join(":")} must exact-match`);
   }
+});
+
+test("geometric face identity permits an infinite tolerance ratio for exact valid geometry", () => {
+  const edge = 1e-200;
+  const points = [
+    [0, 0, 0],
+    [edge, 0, 0],
+    [edge, edge, 0],
+    [0, edge, 0]
+  ];
+  const index = new GeometricFaceIndex(1e200);
+  index.add({
+    owner: "infinite-ratio",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.equal(index.uniqueMatch({
+    owner: "infinite-ratio-query",
+    nodeIds: [11, 12, 13, 14],
+    points: [points[2], points[0], points[3], points[1]]
+  })?.owner, "infinite-ratio");
 });
 
 test("geometric face identity matches all 24 orders of a warped noisy face", () => {
@@ -414,6 +436,114 @@ test("geometric face identity matches all 24 orders of a warped noisy face", () 
       points: order.map((pointIndex) => noisyPoints[pointIndex])
     })?.owner, "warped-noisy", `permutation ${order.join(":")} must match`);
   }
+});
+
+test("geometric face identity rejects exact-coordinate collinear geometry fallback", () => {
+  const points = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [2, 0, 0],
+    [3, 0, 0]
+  ];
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "collinear",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "collinear-query",
+    nodeIds: [11, 12, 13, 14],
+    points: [points[2], points[0], points[3], points[1]]
+  }), []);
+});
+
+test("geometric face identity rejects exact-coordinate coincident geometry fallback", () => {
+  const points = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0]
+  ];
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "coincident",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "coincident-query",
+    nodeIds: [11, 12, 13, 14],
+    points
+  }), []);
+});
+
+test("geometric face identity rejects exact-coordinate collapsed-corner fallback", () => {
+  const points = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0]
+  ];
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "collapsed",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.deepEqual(index.matches({
+    owner: "collapsed-query",
+    nodeIds: [11, 12, 13, 14],
+    points: [points[3], points[1], points[0], points[2]]
+  }), []);
+});
+
+test("geometric face identity rejects all 24 exact orders of an over-warped face", () => {
+  const tolerance = 1e-8;
+  const points = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 3 * tolerance]
+  ];
+  const index = new GeometricFaceIndex(tolerance);
+  index.add({
+    owner: "over-warped",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  for (const order of ALL_QUAD_PERMUTATIONS) {
+    assert.deepEqual(index.matches({
+      owner: "over-warped-query",
+      nodeIds: [11, 12, 13, 14],
+      points: order.map((pointIndex) => points[pointIndex])
+    }), [], `permutation ${order.join(":")} must be rejected`);
+  }
+});
+
+test("geometric face identity keeps exact node ids authoritative for invalid geometry", () => {
+  const points = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0]
+  ];
+  const index = new GeometricFaceIndex(1e-8);
+  index.add({
+    owner: "exact-invalid",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.equal(index.uniqueMatch({
+    owner: "exact-invalid-query",
+    nodeIds: [4, 3, 2, 1],
+    points: [[100, 0, 0], [101, 0, 0], [101, 1, 0], [100, 1, 0]]
+  })?.owner, "exact-invalid");
 });
 
 test("geometric face identity rejects a distinct tolerance-close set outside the anchor plane", () => {
