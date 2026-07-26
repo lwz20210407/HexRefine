@@ -438,6 +438,107 @@ test("geometric face identity matches all 24 orders of a warped noisy face", () 
   }
 });
 
+test("geometric face identity limits non-planar exact-coordinate fallback to D4 face order", () => {
+  const tolerance = 1e-8;
+  const points = [
+    [0, 0, 0],
+    [2, 0, 0.1],
+    [2, 1, -0.08],
+    [0, 1, 0.12]
+  ];
+  const index = new GeometricFaceIndex(tolerance, {
+    allowNonPlanarExactCoordinateMatches: true
+  });
+  index.add({
+    owner: "stored",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+  const dihedralOrders = [
+    [0, 1, 2, 3],
+    [1, 2, 3, 0],
+    [2, 3, 0, 1],
+    [3, 0, 1, 2],
+    [0, 3, 2, 1],
+    [3, 2, 1, 0],
+    [2, 1, 0, 3],
+    [1, 0, 3, 2]
+  ];
+  for (const order of dihedralOrders) {
+    assert.equal(index.uniqueMatch({
+      owner: `dihedral-${order.join("-")}`,
+      nodeIds: [11, 12, 13, 14],
+      points: order.map((pointIndex) => points[pointIndex])
+    })?.owner, "stored");
+  }
+  assert.deepEqual(index.matches({
+    owner: "non-dihedral",
+    nodeIds: [21, 22, 23, 24],
+    points: [points[0], points[2], points[1], points[3]]
+  }), []);
+
+  const invalidFaces = [
+    {
+      label: "bow-tie",
+      points: [[0, 0, 0], [1, 1, 0], [0, 1, 0], [1, 0, 0.3]]
+    },
+    {
+      label: "folded",
+      points: [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 1]]
+    },
+    {
+      label: "repeated-corner",
+      points: [[0, 0, 0], [1, 0, 0], [1, 0, 0], [0, 1, 0]]
+    },
+    {
+      label: "degenerate",
+      points: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]
+    },
+    {
+      label: "direction-inconsistent",
+      points: [[0, 0, 0], [1, 0, 0], [1, 1, 1], [0.8, 0.2, -1]]
+    }
+  ];
+  for (const invalid of invalidFaces) {
+    const invalidIndex = new GeometricFaceIndex(tolerance, {
+      allowNonPlanarExactCoordinateMatches: true
+    });
+    invalidIndex.add({
+      owner: invalid.label,
+      nodeIds: [1, 2, 3, 4],
+      points: invalid.points
+    });
+    assert.deepEqual(invalidIndex.matches({
+      owner: `${invalid.label}-query`,
+      nodeIds: [11, 12, 13, 14],
+      points: invalid.points
+    }), [], invalid.label);
+  }
+});
+
+test("geometric face identity preserves planar permutations when non-planar fallback is enabled", () => {
+  const points = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const index = new GeometricFaceIndex(1e-8, {
+    allowNonPlanarExactCoordinateMatches: true
+  });
+  index.add({
+    owner: "planar",
+    nodeIds: [1, 2, 3, 4],
+    points
+  });
+
+  assert.equal(index.uniqueMatch({
+    owner: "non-cyclic-planar-query",
+    nodeIds: [11, 12, 13, 14],
+    points: [points[0], points[2], points[1], points[3]]
+  })?.owner, "planar");
+});
+
 test("geometric face identity rejects exact-coordinate collinear geometry fallback", () => {
   const points = [
     [0, 0, 0],
@@ -776,7 +877,7 @@ test("geometric face identity rejects unsafe buckets atomically but preserves ex
   }).map((face) => face.owner), ["safe"]);
 });
 
-test("geometric face identity allows a corrected face to be added after bucket rejection", () => {
+test("geometric face identity includes a corrected face in ambiguity after bucket rejection", () => {
   const index = new GeometricFaceIndex(Number.MIN_VALUE);
   const safePoints = [
     [0, 0, 0],
@@ -799,11 +900,16 @@ test("geometric face identity allows a corrected face to be added after bucket r
   retriedFace.points = safePoints.map((point) => [...point]);
   index.add(retriedFace);
 
-  assert.deepEqual(index.matches({
+  const error = captureError(() => index.uniqueMatch({
     owner: "retried-query",
     nodeIds: [14, 13, 12, 11],
     points: safePoints
-  }).map((face) => face.owner), ["retried"]);
+  }));
+  assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+  assert.deepEqual(
+    error.diagnostic.conflictingCellIds,
+    ["retried-query", "retried", "origin"]
+  );
 });
 
 test("geometric face identity returns fresh match arrays", () => {
@@ -983,7 +1089,53 @@ test("geometric face identity retains distinct exact faces with identical values
   assert.deepEqual(error.diagnostic.conflictingCellIds, ["query", "same"]);
 });
 
-test("geometric face identity keeps exact node ids authoritative over geometry", () => {
+test("geometric face identity detects ambiguity behind exact hits in either insertion order", () => {
+  const square = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0]
+  ];
+  const faces = {
+    exact: {
+      owner: "exact",
+      nodeIds: [1, 2, 3, 4],
+      points: square
+    },
+    near: {
+      owner: "near",
+      nodeIds: [11, 12, 13, 14],
+      points: square.map(([x, y], index) => [
+        x,
+        y,
+        [2e-9, -1e-9, 1e-9, -2e-9][index]
+      ])
+    }
+  };
+  for (const insertionOrder of [
+    ["exact", "near"],
+    ["near", "exact"]
+  ]) {
+    const index = new GeometricFaceIndex(1e-8);
+    for (const key of insertionOrder) {
+      index.add(faces[key]);
+    }
+    const error = captureError(() => index.uniqueMatch({
+      owner: "query",
+      nodeIds: [4, 3, 2, 1],
+      points: square
+    }));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+    assert.deepEqual(
+      error.diagnostic.conflictingCellIds,
+      ["query", "exact", "near"]
+    );
+  }
+});
+
+test("geometric face identity keeps unique exact ids authoritative over unrelated geometry", () => {
   const index = new GeometricFaceIndex(1e-8);
   const square = [
     [0, 0, 0],
@@ -998,9 +1150,14 @@ test("geometric face identity keeps exact node ids authoritative over geometry",
     points: square
   });
   index.add({
-    owner: "near-geometry",
+    owner: "unrelated-near-bucket",
     nodeIds: [11, 12, 13, 14],
-    points: square.map(([x, y]) => [x, y, 1e-9])
+    points: [
+      square[0],
+      square[1],
+      square[2],
+      [0, 1, 2e-8]
+    ]
   });
   index.add({
     owner: "far-geometry",
@@ -1011,7 +1168,7 @@ test("geometric face identity keeps exact node ids authoritative over geometry",
   assert.deepEqual(index.matches({
     owner: "near-query",
     nodeIds: [4, 3, 2, 1],
-    points: square.map(([x, y]) => [x, y, 1e-9])
+    points: square
   }).map((face) => face.owner), ["exact"]);
   assert.deepEqual(index.matches({
     owner: "far-query",
@@ -4768,7 +4925,12 @@ test("Hex 2:1 transition-shell rebuilding recognizes near-coincident duplicate i
     session,
     candidate
   } = createTransitionShellRegressionFixture();
-  duplicateOneNearCoincidentNeighborFace(session, candidate);
+  const perturbedOwner = duplicateOneNearCoincidentNeighborFace(
+    session,
+    candidate
+  );
+  const perturbedParent = session.cells.get(perturbedOwner).parentId;
+  assert.ok(perturbedParent);
   const perturbedActive = buildActiveMeshWithMap(session, {
     mergeNodes: true,
     mergeTolerance: 1e-8
@@ -4787,6 +4949,16 @@ test("Hex 2:1 transition-shell rebuilding recognizes near-coincident duplicate i
   });
 
   assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(
+    command.twoToOne.actions[0].replacedTransitionCellIds.includes(
+      perturbedParent
+    ),
+    true
+  );
+  assert.equal(
+    command.twoToOne.affectedComponentCellIds.includes(perturbedOwner),
+    true
+  );
   assert.equal(checkNoHangingNodes(refined, 1e-8).ok, true);
   assert.ok(minimumCornerScaledJacobian(refined) > 0);
 });
@@ -4850,6 +5022,87 @@ test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomi
     diagnostics.push(error.diagnostic.conflictingCellIds);
   }
   assert.deepEqual(diagnostics[1], diagnostics[0]);
+});
+
+test("Hex 2:1 connected support detects ambiguity hidden behind exact node IDs atomically", () => {
+  const {
+    session,
+    candidate,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const owners = addExactFirstSupportAmbiguity(session, candidate);
+  const before = structuredClone(session);
+
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-8,
+    activeBuild: firstRefined
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, [
+    owners.exactQuery,
+    owners.exactStored,
+    owners.nearStored
+  ]);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 replacement ownership detects ambiguity hidden behind exact node IDs atomically", () => {
+  const {
+    session,
+    candidate,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const before = structuredClone(session);
+  const injectedOwner = "ownership-near-owner";
+  const originalAdd = GeometricFaceIndex.prototype.add;
+  const originalUniqueMatch = GeometricFaceIndex.prototype.uniqueMatch;
+  let injected = false;
+  GeometricFaceIndex.prototype.uniqueMatch =
+    function matchWithOwnershipCompetitor(face) {
+      const match = originalUniqueMatch.call(this, face);
+      const hasExactIdentity = match !== undefined
+        && [...match.nodeIds].sort((first, second) => first - second).join(":")
+          === [...face.nodeIds].sort((first, second) => first - second).join(":");
+      if (
+        !injected
+        && hasExactIdentity
+        && new Error().stack?.includes("validateRebuiltSupportPlanOwnership")
+      ) {
+        injected = true;
+        originalAdd.call(this, {
+          owner: injectedOwner,
+          nodeIds: [900000001, 900000002, 900000003, 900000004],
+          points: face.points.map((point) => [...point])
+        });
+        return originalUniqueMatch.call(this, face);
+      }
+      return match;
+    };
+  let error;
+  try {
+    error = captureError(() => refineSessionPatch(session, [candidate], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: firstRefined
+    }));
+  } finally {
+    GeometricFaceIndex.prototype.uniqueMatch = originalUniqueMatch;
+  }
+
+  assert.equal(injected, true);
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+  assert.equal(
+    error.diagnostic.conflictingCellIds.includes(injectedOwner),
+    true
+  );
+  assert.deepEqual(session, before);
 });
 
 test("Hex 2:1 transition-shell rebuilding geometrically matches valid coincident faces with distinct node IDs", () => {
@@ -5208,11 +5461,7 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
     mergeNodes: true,
     mergeTolerance: 1e-9
   });
-  const beforeRejectedDistortion = {
-    activeLeafCount: session.activeLeafIds.size,
-    nodeCount: session.nodes.length,
-    undoCount: session.undoStack.length
-  };
+  const beforeRejectedDistortion = structuredClone(session);
   assert.throws(
     () => refineSessionPatch(session, [boundaryCellId], {
       hexRefinementRatio: 2,
@@ -5222,11 +5471,7 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
     }),
     /could not preserve the selected fine-cell geometry|failed its net quality gate/
   );
-  assert.deepEqual({
-    activeLeafCount: session.activeLeafIds.size,
-    nodeCount: session.nodes.length,
-    undoCount: session.undoStack.length
-  }, beforeRejectedDistortion);
+  assert.deepEqual(session, beforeRejectedDistortion);
   for (const [nodeId, point] of originalCoincidentPoints) {
     session.nodes[nodeId - 1] = point;
   }
@@ -5755,6 +6000,19 @@ function duplicateOneNearCoincidentNeighborFace(
         ]);
         neighbor.element[localIndex] = session.nodes.length;
       }
+      const selectedFaceLocalIndices = new Set(face);
+      for (let localIndex = 0; localIndex < neighbor.element.length; localIndex += 1) {
+        if (selectedFaceLocalIndices.has(localIndex)) {
+          continue;
+        }
+        const source = session.nodes[neighbor.element[localIndex] - 1];
+        session.nodes.push([
+          source[0] + 2e-8,
+          source[1] - 1e-8,
+          source[2] + 1e-8
+        ]);
+        neighbor.element[localIndex] = session.nodes.length;
+      }
       return neighbor.id;
     }
   }
@@ -5859,6 +6117,61 @@ function addCoincidentDegenerateSupportCells(
     supportCommand.createdNodeIds.push(...duplicateNodeIds);
     owners.push(cellId);
   }
+  return owners;
+}
+
+function addExactFirstSupportAmbiguity(session, selectedCellId) {
+  const selected = session.cells.get(selectedCellId);
+  const supportCommand = [...session.undoStack]
+    .reverse()
+    .find((command) => command.createdCellIds.includes(selectedCellId));
+  assert.ok(selected);
+  assert.ok(supportCommand);
+  const sharedNodeIds = [
+    [10, 20, 30],
+    [11, 20, 30],
+    [11, 21, 30],
+    [10, 21, 30],
+    [10, 20, 31],
+    [11, 20, 31],
+    [11, 21, 31],
+    [10, 21, 31]
+  ].map((point) => {
+    session.nodes.push(point);
+    return session.nodes.length;
+  });
+  const nearNodeIds = sharedNodeIds.map((nodeId) => {
+    const point = session.nodes[nodeId - 1];
+    session.nodes.push([
+      point[0] + 2e-10,
+      point[1] - 1e-10,
+      point[2] + 1e-10
+    ]);
+    return session.nodes.length;
+  });
+  const owners = {
+    exactStored: "e999997/1",
+    nearStored: "e999998/1",
+    exactQuery: "e999999/1"
+  };
+  for (const [cellId, element] of [
+    [owners.exactStored, sharedNodeIds],
+    [owners.nearStored, nearNodeIds],
+    [owners.exactQuery, sharedNodeIds]
+  ]) {
+    session.cells.set(cellId, {
+      ...selected,
+      id: cellId,
+      ordinal: session.nextCellOrdinal,
+      element,
+      children: [],
+      active: false,
+      hidden: true
+    });
+    session.nextCellOrdinal += 1;
+    supportCommand.createdCellIds.push(cellId);
+  }
+  supportCommand.createdNodeIds.push(...sharedNodeIds, ...nearNodeIds);
   return owners;
 }
 

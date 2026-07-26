@@ -18,7 +18,10 @@ interface GeometricFaceIndexOptions {
 type BucketCoordinate = readonly [number, number, number];
 type Vector3 = readonly [number, number, number];
 type QuadOrder = readonly [number, number, number, number];
-type PointCorrespondence = "none" | "approximate" | "exact";
+type PointCorrespondence =
+  | { kind: "none" }
+  | { kind: "approximate" }
+  | { kind: "exact"; permutation: QuadOrder };
 
 interface NormalizedFacePair {
   first: readonly Vector3[];
@@ -75,9 +78,8 @@ const QUAD_PERMUTATIONS = [
 
 /**
  * Incremental face index for mesh construction. Call `uniqueMatch(query)`
- * before `add(query)`. Exact node-id identity is authoritative for a
- * registered face, so an exact hit never falls back to geometrically similar
- * faces carrying different node ids.
+ * before `add(query)`. Exact node-id identity is authoritative unless another
+ * owner represents the same valid geometry, which is reported as ambiguous.
  */
 export class GeometricFaceIndex<T extends TwoToOneEntityId> {
   private readonly exact = new Map<string, GeometricFace<T>[]>();
@@ -147,8 +149,8 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
   }
 
   /**
-   * Returns exact node-id matches first. Geometry is consulted only when no
-   * exact identity exists.
+   * Returns exact node-id matches first, plus competing geometric owners when
+   * the exact identity is geometrically valid.
    */
   matches(face: GeometricFace<T>): GeometricFace<T>[] {
     const query = this.resolveFace(face);
@@ -193,9 +195,37 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
   private matchesResolved(face: GeometricFace<T>): GeometricFace<T>[] {
     const exactFaces = this.exact.get(nodeIdKey(face.nodeIds));
     if (exactFaces !== undefined) {
-      return [...exactFaces];
+      const queryOrder = this.canonicalOrders.get(face)
+        ?? canonicalPointOrder(face.points)
+        ?? null;
+      const exactGeometryMatch = exactFaces.some((candidate) =>
+        geometricallySameFace(
+          candidate.points,
+          this.canonicalOrders.get(candidate) ?? null,
+          face.points,
+          () => queryOrder,
+          this.tolerance,
+          this.allowNonPlanarExactCoordinateMatches
+        )
+      );
+      if (!exactGeometryMatch) {
+        return [...exactFaces];
+      }
+      const geometricMatches = this.geometricMatchesResolved(face);
+      const exactFaceSet = new Set(exactFaces);
+      const exactOwners = new Set(exactFaces.map((candidate) => candidate.owner));
+      const competingOwners = geometricMatches.filter((candidate) =>
+        !exactFaceSet.has(candidate)
+        && !exactOwners.has(candidate.owner)
+      );
+      return competingOwners.length === 0
+        ? [...exactFaces]
+        : [...exactFaces, ...competingOwners];
     }
+    return this.geometricMatchesResolved(face);
+  }
 
+  private geometricMatchesResolved(face: GeometricFace<T>): GeometricFace<T>[] {
     if (this.bucketOrigin === undefined) {
       return [];
     }
@@ -425,7 +455,7 @@ function geometricallySameFace(
   allowNonPlanarExactCoordinateMatches: boolean
 ): boolean {
   const correspondence = pointCorrespondence(first, second, tolerance);
-  if (correspondence === "none") {
+  if (correspondence.kind === "none") {
     return false;
   }
   const secondOrder = getSecondOrder();
@@ -435,20 +465,20 @@ function geometricallySameFace(
   ) {
     return false;
   }
-  if (
-    correspondence === "exact"
-    && allowNonPlanarExactCoordinateMatches
-  ) {
+  const strictlyValid = isValidSingleFace(first, firstOrder, tolerance)
+    && isValidSingleFace(second, secondOrder, tolerance);
+  if (!strictlyValid) {
+    if (
+      correspondence.kind !== "exact"
+      || !allowNonPlanarExactCoordinateMatches
+      || !isDihedralQuadPermutation(correspondence.permutation)
+    ) {
+      return false;
+    }
     return isValidNonPlanarSingleFace(first)
       && isValidNonPlanarSingleFace(second);
   }
-  if (
-    !isValidSingleFace(first, firstOrder, tolerance)
-    || !isValidSingleFace(second, secondOrder, tolerance)
-  ) {
-    return false;
-  }
-  if (correspondence === "exact") {
+  if (correspondence.kind === "exact") {
     return true;
   }
 
@@ -522,13 +552,31 @@ function pointCorrespondence(
       }
     }
     if (permutationMatches && permutationIsExact) {
-      return "exact";
+      return {
+        kind: "exact",
+        permutation
+      };
     }
     if (permutationMatches) {
       hasApproximateCorrespondence = true;
     }
   }
-  return hasApproximateCorrespondence ? "approximate" : "none";
+  return {
+    kind: hasApproximateCorrespondence ? "approximate" : "none"
+  };
+}
+
+function isDihedralQuadPermutation(permutation: QuadOrder): boolean {
+  const step = (permutation[1] - permutation[0] + 4) % 4;
+  if (step !== 1 && step !== 3) {
+    return false;
+  }
+  for (let index = 2; index < permutation.length; index += 1) {
+    if (permutation[index] !== (permutation[index - 1]! + step) % 4) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isValidSingleFace(
