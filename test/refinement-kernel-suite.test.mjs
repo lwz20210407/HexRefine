@@ -4852,6 +4852,74 @@ test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomi
   assert.deepEqual(diagnostics[1], diagnostics[0]);
 });
 
+test("Hex 2:1 transition-shell rebuilding geometrically matches valid coincident faces with distinct node IDs", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const ambiguousOwner = addAmbiguousSupportFaceCell(
+    session,
+    candidate,
+    [0, 0, 0]
+  );
+  const selected = session.cells.get(candidate);
+  const duplicate = session.cells.get(ambiguousOwner);
+  assert.deepEqual(
+    duplicate.element.map((nodeId) => session.nodes[nodeId - 1]),
+    selected.element.map((nodeId) => session.nodes[nodeId - 1])
+  );
+  assert.equal(
+    duplicate.element.some((nodeId) => selected.element.includes(nodeId)),
+    false
+  );
+  const before = structuredClone(session);
+
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-8
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+  assert.equal(error.diagnostic.conflictingCellIds[0], ambiguousOwner);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects degenerate coincident faces before exact matching", () => {
+  const {
+    session,
+    candidate,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const degenerateOwners = addCoincidentDegenerateSupportCells(
+    session,
+    candidate,
+    3
+  );
+
+  const command = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-8,
+    activeBuild: firstRefined
+  });
+  const refined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
+
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(checkNoHangingNodes(refined, 1e-8).ok, true);
+  for (const owner of degenerateOwners) {
+    assert.equal(command.twoToOne.affectedComponentCellIds.includes(owner), false);
+    assert.equal(session.cells.get(owner).active, false);
+    assert.equal(session.cells.get(owner).hidden, true);
+  }
+});
+
 test("Hex 2:1 transition-shell rebuilding rejects invalid requested merge tolerances", () => {
   const {
     session,
@@ -5078,7 +5146,8 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
       includeTransitions: true,
       activeBuild: distortedActive
     }),
-    /could not preserve the selected fine-cell geometry|failed its net quality gate/
+    (error) => error?.code === "HEX_PATCH_VOLUME"
+      && /does not conserve parent volume/.test(error.message)
   );
   assert.deepEqual({
     activeLeafCount: session.activeLeafIds.size,
@@ -5092,6 +5161,7 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
+    mergeTolerance: 1e-4,
     activeBuild: firstRefined
   });
   const twiceRefined = buildActiveMesh(session, {
@@ -5666,6 +5736,41 @@ function addAmbiguousSupportFaceCell(
   supportCommand.createdCellIds.push(cellId);
   supportCommand.createdNodeIds.push(...duplicateNodeIds);
   return cellId;
+}
+
+function addCoincidentDegenerateSupportCells(
+  session,
+  selectedCellId,
+  count
+) {
+  const selected = session.cells.get(selectedCellId);
+  const supportCommand = [...session.undoStack]
+    .reverse()
+    .find((command) => command.createdCellIds.includes(selectedCellId));
+  assert.ok(selected);
+  assert.ok(supportCommand);
+  const owners = [];
+  for (let duplicateIndex = 0; duplicateIndex < count; duplicateIndex += 1) {
+    const duplicateNodeIds = Array.from({ length: 8 }, (_, nodeIndex) => {
+      session.nodes.push([10 + nodeIndex, 20, 30]);
+      return session.nodes.length;
+    });
+    const cellId = `e${999997 + duplicateIndex}/1`;
+    session.cells.set(cellId, {
+      ...selected,
+      id: cellId,
+      ordinal: session.nextCellOrdinal,
+      element: duplicateNodeIds,
+      children: [],
+      active: false,
+      hidden: true
+    });
+    session.nextCellOrdinal += 1;
+    supportCommand.createdCellIds.push(cellId);
+    supportCommand.createdNodeIds.push(...duplicateNodeIds);
+    owners.push(cellId);
+  }
+  return owners;
 }
 
 function idsInIndexBlock(nx, ny, nz, min, max) {
