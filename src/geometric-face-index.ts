@@ -10,6 +10,11 @@ export interface GeometricFace<T> {
   points: readonly Point[];
 }
 
+interface GeometricFaceIndexOptions {
+  /** Preserve valid bilinear quad identity when all four coordinates coincide. */
+  allowNonPlanarExactCoordinateMatches?: boolean;
+}
+
 type BucketCoordinate = readonly [number, number, number];
 type Vector3 = readonly [number, number, number];
 type QuadOrder = readonly [number, number, number, number];
@@ -80,11 +85,25 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
   private readonly registrations = new WeakMap<GeometricFace<T>, GeometricFace<T>>();
   private readonly canonicalOrders = new WeakMap<GeometricFace<T>, QuadOrder | null>();
   private bucketOrigin: Vector3 | undefined;
+  private readonly allowNonPlanarExactCoordinateMatches: boolean;
 
-  constructor(readonly tolerance: number) {
+  constructor(
+    readonly tolerance: number,
+    options: Readonly<GeometricFaceIndexOptions> = {}
+  ) {
     if (!Number.isFinite(tolerance) || tolerance <= 0) {
       throw new RangeError("tolerance must be finite and greater than zero");
     }
+    if (
+      options.allowNonPlanarExactCoordinateMatches !== undefined
+      && typeof options.allowNonPlanarExactCoordinateMatches !== "boolean"
+    ) {
+      throw new TypeError(
+        "allowNonPlanarExactCoordinateMatches must be a boolean"
+      );
+    }
+    this.allowNonPlanarExactCoordinateMatches =
+      options.allowNonPlanarExactCoordinateMatches === true;
   }
 
   add(face: GeometricFace<T>): void {
@@ -217,7 +236,8 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
               candidateOrder,
               face.points,
               getQueryOrder,
-              this.tolerance
+              this.tolerance,
+              this.allowNonPlanarExactCoordinateMatches
             )) {
               matches.push(candidate);
             }
@@ -401,7 +421,8 @@ function geometricallySameFace(
   firstOrder: QuadOrder | null,
   second: readonly Point[],
   getSecondOrder: () => QuadOrder | null,
-  tolerance: number
+  tolerance: number,
+  allowNonPlanarExactCoordinateMatches: boolean
 ): boolean {
   const correspondence = pointCorrespondence(first, second, tolerance);
   if (correspondence === "none") {
@@ -411,7 +432,18 @@ function geometricallySameFace(
   if (
     firstOrder === null
     || secondOrder === null
-    || !isValidSingleFace(first, firstOrder, tolerance)
+  ) {
+    return false;
+  }
+  if (
+    correspondence === "exact"
+    && allowNonPlanarExactCoordinateMatches
+  ) {
+    return isValidNonPlanarSingleFace(first)
+      && isValidNonPlanarSingleFace(second);
+  }
+  if (
+    !isValidSingleFace(first, firstOrder, tolerance)
     || !isValidSingleFace(second, secondOrder, tolerance)
   ) {
     return false;
@@ -531,6 +563,34 @@ function isValidSingleFace(
     }
   }
   return true;
+}
+
+function isValidNonPlanarSingleFace(points: readonly Point[]): boolean {
+  if (!hasNoExactDuplicateCorners(points)) {
+    return false;
+  }
+  const normalized = normalizeSingleFace(points);
+  if (normalized === undefined) {
+    return false;
+  }
+  const [first, second, third, fourth] = normalized.points;
+  const cornerNormals = [
+    cross(subtract(second!, first!), subtract(fourth!, first!)),
+    cross(subtract(third!, second!), subtract(first!, second!)),
+    cross(subtract(fourth!, third!), subtract(second!, third!)),
+    cross(subtract(first!, fourth!), subtract(third!, fourth!))
+  ];
+  const referenceNormal = newellNormal(normalized.points);
+  const referenceLength = Math.hypot(...referenceNormal);
+  if (!Number.isFinite(referenceLength) || referenceLength <= 0) {
+    return false;
+  }
+  return cornerNormals.every((normal) => {
+    const length = Math.hypot(...normal);
+    return Number.isFinite(length)
+      && length > 0
+      && dot(normal, referenceNormal) > 0;
+  });
 }
 
 function hasNoExactDuplicateCorners(points: readonly Point[]): boolean {
@@ -794,6 +854,14 @@ function subtract(first: Vector3, second: Vector3): Vector3 {
     first[0] - second[0],
     first[1] - second[1],
     first[2] - second[2]
+  ];
+}
+
+function cross(first: Vector3, second: Vector3): Vector3 {
+  return [
+    first[1] * second[2] - first[2] * second[1],
+    first[2] * second[0] - first[0] * second[2],
+    first[0] * second[1] - first[1] * second[0]
   ];
 }
 

@@ -960,7 +960,7 @@ function selectionTouchesActiveTransitionCell(
   level: number,
   tolerance: number
 ): boolean {
-  const selectedFaces = new GeometricFaceIndex<CellId>(tolerance);
+  const selectedFaces = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(selectedCellIds)) {
     for (const face of refinementCellFaces(session, requiredCell(session, cellId))) {
       selectedFaces.add(face);
@@ -1282,7 +1282,7 @@ function collectAuthorizedCompletionParentIds(
 ): Set<CellId> {
   const authorized = new Set(originalSupportParentIds);
   const supportCreatedCellIds = new Set(supportCommand.createdCellIds);
-  const boundaryFaces = new GeometricFaceIndex<CellId>(tolerance);
+  const boundaryFaces = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(originalSupportParentIds)) {
     for (const face of refinementCellFaces(session, requiredCell(session, cellId))) {
       boundaryFaces.add(face);
@@ -1325,7 +1325,7 @@ function validateRebuiltSupportPlanOwnership(
 ): void {
   const originalSupport = new Set(originalSupportParentIds);
   const supportCreated = new Set(supportCommand.createdCellIds);
-  const replacementInterfaces = new GeometricFaceIndex<CellId>(tolerance);
+  const replacementInterfaces = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(replacementParentIds)) {
     const cell = requiredCell(session, cellId);
     for (const face of refinementCellFaces(session, cell)) {
@@ -1374,7 +1374,7 @@ function findCollidingTransitionParentIds(
       ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
     }
   ).replacements;
-  const replacementFaces = new GeometricFaceIndex<CellId>(tolerance);
+  const replacementFaces = createSessionFaceIndex(tolerance);
   for (const replacement of replacements) {
     const cellId = activeBuildCellIdByElementId(planningActive, replacement.elementId);
     if (cellId === undefined) {
@@ -1415,7 +1415,7 @@ function collectConnectedSupportLayerCells(
     throw new Error("automatic transition-shell rebuilding selection is outside its supporting layer");
   }
   const adjacency = new Map<CellId, Set<CellId>>();
-  const index = new GeometricFaceIndex<CellId>(tolerance);
+  const index = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(supportCellIds)) {
     adjacency.set(cellId, new Set<CellId>());
     const cell = requiredCell(session, cellId);
@@ -1490,6 +1490,14 @@ function assertValidSessionFaceTolerance(requested?: number): void {
   ) {
     throw new RangeError("mergeTolerance must be finite and nonnegative");
   }
+}
+
+function createSessionFaceIndex(
+  tolerance: number
+): GeometricFaceIndex<CellId> {
+  return new GeometricFaceIndex<CellId>(tolerance, {
+    allowNonPlanarExactCoordinateMatches: true
+  });
 }
 
 function refinementCellFaces(

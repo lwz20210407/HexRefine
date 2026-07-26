@@ -5099,6 +5099,80 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
     .filter(Boolean)
     .sort((left, right) => left.centerTotal - right.centerTotal)[0]?.cellId;
   assert.ok(boundaryCellId);
+  const boundaryCellForFaceDiagnostic = session.cells.get(boundaryCellId);
+  const transitionFaceByCoordinate = new Map();
+  for (const transitionCellId of session.activeLeafIds) {
+    const transitionCell = session.cells.get(transitionCellId);
+    if (!String(transitionCell?.role).includes("transition")) {
+      continue;
+    }
+    for (const face of H1_TEST_FACES) {
+      transitionFaceByCoordinate.set(
+        testFaceCoordinateKey(session, transitionCell, face),
+        { cell: transitionCell, face }
+      );
+    }
+  }
+  const sharedFaceDiagnostic = H1_TEST_FACES
+    .map((face) => ({
+      selectedFace: face,
+      transition: transitionFaceByCoordinate.get(
+        testFaceCoordinateKey(session, boundaryCellForFaceDiagnostic, face)
+      )
+    }))
+    .find(({ transition }) => transition !== undefined);
+  assert.ok(sharedFaceDiagnostic);
+  const selectedFaceNodeIds = sharedFaceDiagnostic.selectedFace.map(
+    (localIndex) => boundaryCellForFaceDiagnostic.element[localIndex]
+  );
+  const transitionFaceNodeIds = sharedFaceDiagnostic.transition.face.map(
+    (localIndex) => sharedFaceDiagnostic.transition.cell.element[localIndex]
+  );
+  const effectiveFaceTolerance = Math.max(
+    minElementEdgeLength(firstRefined.mesh) * 1e-8,
+    Math.max(
+      1,
+      ...firstRefined.mesh.nodes.flatMap((point) => point.map(Math.abs))
+    ) * Number.EPSILON * 64
+  );
+  assert.equal(effectiveFaceTolerance, 1.7857420733989507e-10);
+  assert.equal(
+    selectedFaceNodeIds.some((nodeId) => transitionFaceNodeIds.includes(nodeId)),
+    false
+  );
+  assert.equal(
+    testFaceCoordinateKey(
+      session,
+      boundaryCellForFaceDiagnostic,
+      sharedFaceDiagnostic.selectedFace
+    ),
+    testFaceCoordinateKey(
+      session,
+      sharedFaceDiagnostic.transition.cell,
+      sharedFaceDiagnostic.transition.face
+    )
+  );
+  const diagnosticIndex = new GeometricFaceIndex(effectiveFaceTolerance, {
+    allowNonPlanarExactCoordinateMatches: true
+  });
+  diagnosticIndex.add({
+    owner: boundaryCellId,
+    nodeIds: selectedFaceNodeIds,
+    points: selectedFaceNodeIds.map((nodeId) => session.nodes[nodeId - 1])
+  });
+  assert.equal(diagnosticIndex.uniqueMatch({
+    owner: sharedFaceDiagnostic.transition.cell.id,
+    nodeIds: transitionFaceNodeIds,
+    points: transitionFaceNodeIds.map((nodeId) => session.nodes[nodeId - 1])
+  })?.owner, boundaryCellId);
+  assert.deepEqual(
+    warpedShellBaselineDiagnostics(session, boundaryCellId),
+    {
+      supportLayerCellCount: 952,
+      originalSupportParentCount: 124,
+      authorizedCompletionParentCount: 272
+    }
+  );
 
   assert.throws(
     () => refineSessionPatch(session, [boundaryCellId], {
@@ -5146,8 +5220,7 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
       includeTransitions: true,
       activeBuild: distortedActive
     }),
-    (error) => error?.code === "HEX_PATCH_VOLUME"
-      && /does not conserve parent volume/.test(error.message)
+    /could not preserve the selected fine-cell geometry|failed its net quality gate/
   );
   assert.deepEqual({
     activeLeafCount: session.activeLeafIds.size,
@@ -5157,18 +5230,34 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
   for (const [nodeId, point] of originalCoincidentPoints) {
     session.nodes[nodeId - 1] = point;
   }
-  const command = refineSessionPatch(session, [boundaryCellId], {
+  const restoredWarpOptions = {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
-    mergeTolerance: 1e-4,
     activeBuild: firstRefined
-  });
+  };
+  assert.equal(Object.hasOwn(restoredWarpOptions, "mergeTolerance"), false);
+  const command = refineSessionPatch(
+    session,
+    [boundaryCellId],
+    restoredWarpOptions
+  );
   const twiceRefined = buildActiveMesh(session, {
     mergeNodes: true,
     mergeTolerance: 1e-9
   });
 
+  assert.deepEqual(command.twoToOne.actions[0], {
+    kind: "transition-shell-rebuild",
+    reason: "the nested core reached an existing 2:1 transition component",
+    addedParentCellIds: ["e66", "e108", "e114"],
+    replacedTransitionCellIds: ["e66", "e108", "e114"]
+  });
+  assert.equal(command.hiddenCellIds.length, 1037);
+  assert.equal(command.activeCreatedCellIds.length, 1534);
+  assert.equal(command.reactivatedCellIds.length, 1);
+  assert.equal(command.twoToOne.affectedComponentCellIds.length, 2572);
+  assert.equal(command.twoToOne.preservedFarFieldCellCount, 134);
   assert.equal(command.quality?.ok, true);
   assert.equal(checkNoHangingNodes(twiceRefined, 1e-9).ok, true);
   assert.ok(Math.abs(hexMeshVolume(twiceRefined) - hexMeshVolume(mesh)) < 1e-10);
@@ -5771,6 +5860,95 @@ function addCoincidentDegenerateSupportCells(
     owners.push(cellId);
   }
   return owners;
+}
+
+function warpedShellBaselineDiagnostics(session, selectedCellId) {
+  const selected = session.cells.get(selectedCellId);
+  const supportCommand = [...session.undoStack]
+    .reverse()
+    .find((command) => command.createdCellIds.includes(selectedCellId));
+  assert.ok(selected);
+  assert.ok(supportCommand);
+  const supportLayerCellIds = supportCommand.createdCellIds.filter((cellId) => {
+    const cell = session.cells.get(cellId);
+    return cell?.level === selected.level && cell.parentId !== undefined;
+  });
+  const adjacency = new Map(
+    supportLayerCellIds.map((cellId) => [cellId, new Set()])
+  );
+  const ownersByFace = new Map();
+  for (const cellId of supportLayerCellIds) {
+    const cell = session.cells.get(cellId);
+    for (const face of H1_TEST_FACES) {
+      const key = testFaceCoordinateKey(session, cell, face);
+      const owners = ownersByFace.get(key) ?? [];
+      for (const owner of owners) {
+        adjacency.get(cellId).add(owner);
+        adjacency.get(owner).add(cellId);
+      }
+      owners.push(cellId);
+      ownersByFace.set(key, owners);
+    }
+  }
+  const supportComponent = new Set();
+  const queue = [selectedCellId];
+  while (queue.length > 0) {
+    const cellId = queue.pop();
+    if (supportComponent.has(cellId)) {
+      continue;
+    }
+    supportComponent.add(cellId);
+    for (const neighborId of adjacency.get(cellId) ?? []) {
+      queue.push(neighborId);
+    }
+  }
+  const originalSupportParentIds = new Set(
+    [...supportComponent].map((cellId) => session.cells.get(cellId).parentId)
+  );
+  assert.equal(originalSupportParentIds.has(undefined), false);
+  const boundaryFaceKeys = new Set(
+    [...originalSupportParentIds].flatMap((cellId) => {
+      const cell = session.cells.get(cellId);
+      return H1_TEST_FACES.map((face) =>
+        testFaceCoordinateKey(session, cell, face)
+      );
+    })
+  );
+  const restoredActiveLeafIds = new Set(session.activeLeafIds);
+  for (const cellId of supportComponent) {
+    restoredActiveLeafIds.delete(cellId);
+  }
+  for (const cellId of originalSupportParentIds) {
+    restoredActiveLeafIds.add(cellId);
+  }
+  const supportCreatedCellIds = new Set(supportCommand.createdCellIds);
+  const authorizedCompletionParentIds = new Set(originalSupportParentIds);
+  for (const cellId of restoredActiveLeafIds) {
+    if (authorizedCompletionParentIds.has(cellId)) {
+      continue;
+    }
+    const cell = session.cells.get(cellId);
+    if (
+      cell.level !== selected.level - 1
+      || String(cell.role).includes("transition")
+      || !(
+        cell.parentId === undefined
+        || supportCreatedCellIds.has(cellId)
+      )
+    ) {
+      continue;
+    }
+    if (H1_TEST_FACES.some((face) =>
+      boundaryFaceKeys.has(testFaceCoordinateKey(session, cell, face))
+    )) {
+      authorizedCompletionParentIds.add(cellId);
+    }
+  }
+  return {
+    supportLayerCellCount: supportComponent.size,
+    originalSupportParentCount: originalSupportParentIds.size,
+    authorizedCompletionParentCount: authorizedCompletionParentIds.size
+  };
 }
 
 function idsInIndexBlock(nx, ny, nz, min, max) {
