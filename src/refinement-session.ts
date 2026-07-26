@@ -33,6 +33,10 @@ import {
   DirectTwoToOnePlanningError,
   type TwoToOneCapabilityReport
 } from "./two-to-one-capability.js";
+import {
+  GeometricFaceIndex,
+  type GeometricFace
+} from "./geometric-face-index.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -809,6 +813,7 @@ export function refineSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
+  assertValidSessionFaceTolerance(options.mergeTolerance);
   let plan: RefinementSessionPatchPlan;
   try {
     plan = buildRefinementSessionPatchPlan(session, cellIds, options);
@@ -931,37 +936,55 @@ function shouldRebuildExistingTransitionShell(
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
     return false;
   }
-  return error instanceof ExistingTransitionCollisionError
-    || (
-      error instanceof HexPatchQualityError
-      && error.code === "HEX_PATCH_VOLUME"
-      && selectionTouchesActiveTransitionCell(
-        session,
-        validation.cellIds,
-        validation.level
-      )
-    );
+  if (error instanceof ExistingTransitionCollisionError) {
+    return true;
+  }
+  if (!(error instanceof HexPatchQualityError) || error.code !== "HEX_PATCH_VOLUME") {
+    return false;
+  }
+  return selectionTouchesActiveTransitionCell(
+    session,
+    validation.cellIds,
+    validation.level,
+    effectiveSessionFaceTolerance(
+      session,
+      sortedActiveLeafIds(session),
+      options.mergeTolerance
+    ),
+    exactSessionFaceNodeIds(session)
+  );
 }
 
 function selectionTouchesActiveTransitionCell(
   session: RefinementSession,
   selectedCellIds: readonly CellId[],
-  level: number
+  level: number,
+  tolerance: number,
+  exactNodeIds: ReadonlyMap<number, number>
 ): boolean {
-  const selectedFaceKeys = new Set(selectedCellIds.flatMap((cellId) =>
-    refinementCellFaceKeys(session, requiredCell(session, cellId))
-  ));
-  for (const cellId of session.activeLeafIds) {
-    const cell = requiredCell(session, cellId);
-    if (
-      cell.level === level
-      && isTransitionSessionCell(cell)
-      && refinementCellFaceKeys(session, cell).some((key) => selectedFaceKeys.has(key))
-    ) {
-      return true;
+  const selectedFaces = new GeometricFaceIndex<CellId>(tolerance);
+  for (const cellId of stableCellIds(selectedCellIds)) {
+    for (const face of refinementCellFaces(
+      session,
+      requiredCell(session, cellId),
+      exactNodeIds
+    )) {
+      selectedFaces.add(face);
     }
   }
-  return false;
+  let touchesTransition = false;
+  for (const cellId of stableCellIds(session.activeLeafIds)) {
+    const cell = requiredCell(session, cellId);
+    if (cell.level !== level || !isTransitionSessionCell(cell)) {
+      continue;
+    }
+    for (const face of refinementCellFaces(session, cell, exactNodeIds)) {
+      if (selectedFaces.uniqueMatch(face) !== undefined) {
+        touchesTransition = true;
+      }
+    }
+  }
+  return touchesTransition;
 }
 
 function refineSessionPatchWithRebuiltTransitionShell(
@@ -974,6 +997,12 @@ function refineSessionPatchWithRebuiltTransitionShell(
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
     throw new Error(validation.errors.join("; ") || "transition-shell rebuilding requires a refined selection");
   }
+  const faceTolerance = effectiveSessionFaceTolerance(
+    working,
+    sortedActiveLeafIds(working),
+    options.mergeTolerance
+  );
+  const exactFaceNodeIds = exactSessionFaceNodeIds(working);
   const selectedLevel = validation.level;
   const supportCommand = findSingleSupportCommand(working, validation.cellIds);
   const allSupportLayerCellIds = supportCommand.createdCellIds.filter((cellId) => {
@@ -986,14 +1015,18 @@ function refineSessionPatchWithRebuiltTransitionShell(
   const supportLayerCellIds = collectConnectedSupportLayerCells(
     working,
     allSupportLayerCellIds,
-    validation.cellIds
+    validation.cellIds,
+    faceTolerance,
+    exactFaceNodeIds
   );
   const collidingTransitionParentIds = findCollidingTransitionParentIds(
     working,
     validation.cellIds,
     supportLayerCellIds,
     selectedLevel,
-    options
+    options,
+    faceTolerance,
+    exactFaceNodeIds
   );
   if (collidingTransitionParentIds.length === 0) {
     throw new Error("automatic transition-shell rebuilding could not isolate the colliding transition parents");
@@ -1048,7 +1081,9 @@ function refineSessionPatchWithRebuiltTransitionShell(
     working,
     originalSupportParentIds,
     supportCommand,
-    selectedLevel - 1
+    selectedLevel - 1,
+    faceTolerance,
+    exactFaceNodeIds
   );
 
   const retryOptions: RefinementSessionPatchOptions = {
@@ -1067,7 +1102,9 @@ function refineSessionPatchWithRebuiltTransitionShell(
     working,
     rebuiltSupportPlan.hiddenCellIds,
     originalSupportParentIds,
-    supportCommand
+    supportCommand,
+    faceTolerance,
+    exactFaceNodeIds
   );
   const rebuiltSupportCommand = applyRefinementSessionPatchPlan(
     working,
@@ -1251,14 +1288,23 @@ function collectAuthorizedCompletionParentIds(
   session: RefinementSession,
   originalSupportParentIds: readonly CellId[],
   supportCommand: RefinementSessionCommand,
-  parentLevel: number
+  parentLevel: number,
+  tolerance: number,
+  exactNodeIds: ReadonlyMap<number, number>
 ): Set<CellId> {
   const authorized = new Set(originalSupportParentIds);
   const supportCreatedCellIds = new Set(supportCommand.createdCellIds);
-  const boundaryFaceKeys = new Set(originalSupportParentIds.flatMap((cellId) =>
-    refinementCellFaceKeys(session, requiredCell(session, cellId))
-  ));
-  for (const cellId of session.activeLeafIds) {
+  const boundaryFaces = new GeometricFaceIndex<CellId>(tolerance);
+  for (const cellId of stableCellIds(originalSupportParentIds)) {
+    for (const face of refinementCellFaces(
+      session,
+      requiredCell(session, cellId),
+      exactNodeIds
+    )) {
+      boundaryFaces.add(face);
+    }
+  }
+  for (const cellId of stableCellIds(session.activeLeafIds)) {
     if (authorized.has(cellId)) {
       continue;
     }
@@ -1273,7 +1319,13 @@ function collectAuthorizedCompletionParentIds(
     ) {
       continue;
     }
-    if (refinementCellFaceKeys(session, cell).some((faceKey) => boundaryFaceKeys.has(faceKey))) {
+    let touchesBoundary = false;
+    for (const face of refinementCellFaces(session, cell, exactNodeIds)) {
+      if (boundaryFaces.uniqueMatch(face) !== undefined) {
+        touchesBoundary = true;
+      }
+    }
+    if (touchesBoundary) {
       authorized.add(cellId);
     }
   }
@@ -1284,12 +1336,19 @@ function validateRebuiltSupportPlanOwnership(
   session: RefinementSession,
   replacementParentIds: readonly CellId[],
   originalSupportParentIds: readonly CellId[],
-  supportCommand: RefinementSessionCommand
+  supportCommand: RefinementSessionCommand,
+  tolerance: number,
+  exactNodeIds: ReadonlyMap<number, number>
 ): void {
   const originalSupport = new Set(originalSupportParentIds);
   const supportCreated = new Set(supportCommand.createdCellIds);
-  for (const cellId of replacementParentIds) {
+  const replacementInterfaces = new GeometricFaceIndex<CellId>(tolerance);
+  for (const cellId of stableCellIds(replacementParentIds)) {
     const cell = requiredCell(session, cellId);
+    for (const face of refinementCellFaces(session, cell, exactNodeIds)) {
+      replacementInterfaces.uniqueMatch(face);
+      replacementInterfaces.add(face);
+    }
     if (
       originalSupport.has(cellId)
       || cell.parentId === undefined
@@ -1308,7 +1367,9 @@ function findCollidingTransitionParentIds(
   selectedCellIds: readonly CellId[],
   supportLayerCellIds: readonly CellId[],
   level: number,
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  tolerance: number,
+  exactNodeIds: ReadonlyMap<number, number>
 ): CellId[] {
   const planningActive = buildSameLevelRefinementPlanningMesh(session, level, options);
   const selectedElementIds = selectedCellIds.map((cellId) => {
@@ -1331,43 +1392,63 @@ function findCollidingTransitionParentIds(
       ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
     }
   ).replacements;
-  const replacementFaceKeys = new Set(replacements.flatMap((replacement) => {
+  const replacementFaces = new GeometricFaceIndex<CellId>(tolerance);
+  for (const replacement of replacements) {
     const cellId = activeBuildCellIdByElementId(planningActive, replacement.elementId);
-    return cellId === undefined
-      ? []
-      : refinementCellFaceKeys(session, requiredCell(session, cellId));
-  }));
-  return [...new Set(supportLayerCellIds
-    .filter((cellId) => {
-      const cell = requiredCell(session, cellId);
-      return isTransitionSessionCell(cell)
-        && refinementCellFaceKeys(session, cell).some((faceKey) => replacementFaceKeys.has(faceKey));
-    })
-    .map((cellId) => requiredCell(session, cellId).parentId)
-    .filter((parentId): parentId is CellId => parentId !== undefined))]
-    .sort(compareCellIds);
+    if (cellId === undefined) {
+      continue;
+    }
+    for (const face of refinementCellFaces(
+      session,
+      requiredCell(session, cellId),
+      exactNodeIds
+    )) {
+      replacementFaces.add(face);
+    }
+  }
+  const collidingParentIds = new Set<CellId>();
+  for (const cellId of stableCellIds(supportLayerCellIds)) {
+    const cell = requiredCell(session, cellId);
+    if (!isTransitionSessionCell(cell)) {
+      continue;
+    }
+    let collides = false;
+    for (const face of refinementCellFaces(session, cell, exactNodeIds)) {
+      if (replacementFaces.uniqueMatch(face) !== undefined) {
+        collides = true;
+      }
+    }
+    if (collides && cell.parentId !== undefined) {
+      collidingParentIds.add(cell.parentId);
+    }
+  }
+  return [...collidingParentIds].sort(compareCellIds);
 }
 
 function collectConnectedSupportLayerCells(
   session: RefinementSession,
   supportCellIds: readonly CellId[],
-  selectedCellIds: readonly CellId[]
+  selectedCellIds: readonly CellId[],
+  tolerance: number,
+  exactNodeIds: ReadonlyMap<number, number>
 ): CellId[] {
   const supportSet = new Set(supportCellIds);
   const selectedSupportCellIds = selectedCellIds.filter((cellId) => supportSet.has(cellId));
   if (selectedSupportCellIds.length !== selectedCellIds.length) {
     throw new Error("automatic transition-shell rebuilding selection is outside its supporting layer");
   }
-  const cellIdsByFaceKey = new Map<string, CellId[]>();
-  const faceKeysByCellId = new Map<CellId, string[]>();
-  for (const cellId of supportCellIds) {
+  const adjacency = new Map<CellId, Set<CellId>>();
+  const index = new GeometricFaceIndex<CellId>(tolerance);
+  for (const cellId of stableCellIds(supportCellIds)) {
+    adjacency.set(cellId, new Set<CellId>());
     const cell = requiredCell(session, cellId);
-    const faceKeys = refinementCellFaceKeys(session, cell);
-    faceKeysByCellId.set(cellId, faceKeys);
-    for (const faceKey of faceKeys) {
-      const owners = cellIdsByFaceKey.get(faceKey) ?? [];
-      owners.push(cellId);
-      cellIdsByFaceKey.set(faceKey, owners);
+    for (const face of refinementCellFaces(session, cell, exactNodeIds)) {
+      const match = index.uniqueMatch(face);
+      if (match !== undefined && match.owner !== cellId) {
+        adjacency.get(cellId)!.add(match.owner);
+        adjacency.get(match.owner)!.add(cellId);
+      }
+      index.add(face);
     }
   }
 
@@ -1379,11 +1460,9 @@ function collectConnectedSupportLayerCells(
       continue;
     }
     component.add(cellId);
-    for (const faceKey of faceKeysByCellId.get(cellId) ?? []) {
-      for (const neighborId of cellIdsByFaceKey.get(faceKey) ?? []) {
-        if (!component.has(neighborId)) {
-          queue.push(neighborId);
-        }
+    for (const neighborId of adjacency.get(cellId) ?? []) {
+      if (!component.has(neighborId)) {
+        queue.push(neighborId);
       }
     }
   }
@@ -1396,21 +1475,97 @@ function collectConnectedSupportLayerCells(
   return [...component].sort(compareCellIds);
 }
 
-function refinementCellFaceKeys(
+function effectiveSessionFaceTolerance(
   session: RefinementSession,
-  cell: RefinementSessionCell
-): string[] {
-  return H1_FACES.map((face) => face
-    .map((localNodeId) => {
+  cellIds: readonly CellId[],
+  requested?: number
+): number {
+  assertValidSessionFaceTolerance(requested);
+  const mesh = buildActiveMeshForCellIdsWithMap(session, cellIds).mesh;
+  let scale = 1;
+  for (const point of mesh.nodes) {
+    for (const coordinate of point) {
+      if (!Number.isFinite(coordinate)) {
+        throw new Error(
+          "cannot compute effective session face tolerance from a non-finite coordinate"
+        );
+      }
+      scale = Math.max(scale, Math.abs(coordinate));
+    }
+  }
+  const edge = mesh.elements.length === 0
+    ? Number.POSITIVE_INFINITY
+    : minElementEdgeLength(mesh);
+  const edgeTolerance = Number.isFinite(edge) && edge >= 0
+    ? edge * 1e-8
+    : 0;
+  return Math.max(
+    requested ?? 0,
+    Number.isFinite(edgeTolerance) ? edgeTolerance : 0,
+    scale * Number.EPSILON * 64
+  );
+}
+
+function assertValidSessionFaceTolerance(requested?: number): void {
+  if (
+    requested !== undefined
+    && (!Number.isFinite(requested) || requested < 0)
+  ) {
+    throw new RangeError("mergeTolerance must be finite and nonnegative");
+  }
+}
+
+function exactSessionFaceNodeIds(
+  session: RefinementSession
+): ReadonlyMap<number, number> {
+  // Preserve exact identity across replacement-local node aliases without
+  // mutating the session; perturbed duplicates remain geometric fallbacks.
+  return buildActiveMeshForCellIdsWithMap(
+    session,
+    stableCellIds(session.cells.keys()),
+    {
+      mergeNodes: true,
+      mergeTolerance: 0,
+      includeSessionNodeIdByNodeId: false,
+      includeSessionNodeIdsByNodeId: false,
+      includeCellIdByElementId: false,
+      includeElementIdByCellId: false
+    }
+  ).nodeIdBySessionNodeId;
+}
+
+function refinementCellFaces(
+  session: RefinementSession,
+  cell: RefinementSessionCell,
+  exactNodeIds?: ReadonlyMap<number, number>
+): Array<GeometricFace<CellId>> {
+  if (cell.kind !== "H1" || cell.element.length !== 8) {
+    throw new Error(`cell ${cell.id} has invalid Hex connectivity`);
+  }
+  return H1_FACES.map((face) => {
+    const nodeIds = face.map((localNodeId) => {
       const nodeId = cell.element[localNodeId - 1];
-      const point = nodeId === undefined ? undefined : session.nodes[nodeId - 1];
-      if (!point) {
+      if (nodeId === undefined || session.nodes[nodeId - 1] === undefined) {
         throw new Error(`cell ${cell.id} has an invalid Hex face`);
       }
-      return exactActiveMergeKey(point);
-    })
-    .sort()
-    .join("|"));
+      return nodeId;
+    });
+    return {
+      owner: cell.id,
+      nodeIds: exactNodeIds === undefined
+        ? nodeIds
+        : nodeIds.map((nodeId) => {
+            const exactNodeId = exactNodeIds.get(nodeId);
+            if (exactNodeId === undefined) {
+              throw new Error(
+                `cell ${cell.id} has no exact face identity for session node ${nodeId}`
+              );
+            }
+            return exactNodeId;
+          }),
+      points: nodeIds.map((nodeId) => session.nodes[nodeId - 1]!)
+    };
+  });
 }
 
 function auditNetHexCellReplacementQuality(
@@ -1573,6 +1728,7 @@ export function previewSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementPreview<CellId> {
+  assertValidSessionFaceTolerance(options.mergeTolerance);
   const sourceActive = options.activeBuild ?? buildActiveMeshWithMap(session, {
     mergeNodes: true,
     includeSessionNodeIdByNodeId: false,
@@ -2267,6 +2423,10 @@ function uniquePreserveOrder<T extends string | number>(values: readonly T[]): T
 
 function uniqueSortedNumbers(values: readonly number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function stableCellIds(cellIds: Iterable<CellId>): CellId[] {
+  return [...new Set(cellIds)].sort(compareCellIds);
 }
 
 function compareCellIds(a: CellId, b: CellId): number {

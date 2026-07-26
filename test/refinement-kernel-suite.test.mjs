@@ -4763,6 +4763,121 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   }), thirdRefined);
 });
 
+test("Hex 2:1 transition-shell rebuilding recognizes near-coincident duplicate interface nodes", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  duplicateOneNearCoincidentNeighborFace(session, candidate);
+  const perturbedActive = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
+
+  const command = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-8,
+    activeBuild: perturbedActive
+  });
+  const refined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
+
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(checkNoHangingNodes(refined, 1e-8).ok, true);
+  assert.ok(minimumCornerScaledJacobian(refined) > 0);
+});
+
+test("Hex 2:1 transition-shell rebuilding does not connect faces beyond the effective tolerance", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const separatedOwner = addAmbiguousSupportFaceCell(
+    session,
+    candidate,
+    [2e-8, -1e-8, 1e-8]
+  );
+  const separatedActive = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-8
+  });
+
+  const command = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-8,
+    activeBuild: separatedActive
+  });
+
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.equal(command.twoToOne.affectedComponentCellIds.includes(separatedOwner), false);
+  assert.equal(session.cells.get(separatedOwner).active, false);
+  assert.equal(session.cells.get(separatedOwner).hidden, true);
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomically", () => {
+  const diagnostics = [];
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    const {
+      session,
+      candidate
+    } = createTransitionShellRegressionFixture();
+    const ambiguousOwner = addAmbiguousSupportFaceCell(session, candidate);
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-8
+    });
+    const before = structuredClone(session);
+
+    const error = captureError(() => refineSessionPatch(session, [candidate], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      mergeTolerance: 1e-8,
+      activeBuild: active
+    }));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
+    assert.equal(error.diagnostic.conflictingCellIds[0], ambiguousOwner);
+    assert.equal(error.diagnostic.conflictingCellIds.length, 3);
+    assert.deepEqual(session, before);
+    diagnostics.push(error.diagnostic.conflictingCellIds);
+  }
+  assert.deepEqual(diagnostics[1], diagnostics[0]);
+});
+
+test("Hex 2:1 transition-shell rebuilding rejects invalid requested merge tolerances", () => {
+  const {
+    session,
+    candidate,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const before = structuredClone(session);
+
+  for (const mergeTolerance of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => previewSessionPatch(session, [candidate], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        includeTransitions: true,
+        mergeTolerance,
+        activeBuild: firstRefined
+      }),
+      {
+        name: "RangeError",
+        message: /mergeTolerance must be finite and nonnegative/
+      }
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
 test("Hex 2:1 local refinement can reject rebuilding an existing transition shell", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
@@ -5397,6 +5512,160 @@ function q1Bounds(mesh) {
 
 function elementIdAt(nx, ny, _nz, i, j, k) {
   return k * nx * ny + j * nx + i + 1;
+}
+
+const H1_TEST_FACES = [
+  [0, 1, 2, 3],
+  [4, 7, 6, 5],
+  [0, 4, 5, 1],
+  [1, 5, 6, 2],
+  [2, 6, 7, 3],
+  [3, 7, 4, 0]
+];
+
+function testFaceCoordinateKey(session, cell, face) {
+  return face
+    .map((localIndex) => session.nodes[cell.element[localIndex] - 1]
+      .map((coordinate) => coordinate.toPrecision(17))
+      .join(","))
+    .sort()
+    .join("|");
+}
+
+function firstActiveBoundaryCoreCell(session) {
+  const transitionFaceKeys = new Set([...session.activeLeafIds]
+    .map((cellId) => session.cells.get(cellId))
+    .filter((cell) => cell && String(cell.role).includes("transition"))
+    .flatMap((cell) => H1_TEST_FACES.map((face) =>
+      testFaceCoordinateKey(session, cell, face)
+    )));
+  return [...session.activeLeafIds]
+    .map((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (cell?.level !== 1 || cell.role !== "selected") {
+        return undefined;
+      }
+      const transitionFaceCount = H1_TEST_FACES.filter((face) =>
+        transitionFaceKeys.has(testFaceCoordinateKey(session, cell, face))
+      ).length;
+      if (transitionFaceCount !== 1) {
+        return undefined;
+      }
+      const centerTotal = cell.element.reduce(
+        (total, nodeId) => total + session.nodes[nodeId - 1].reduce(
+          (sum, coordinate) => sum + coordinate,
+          0
+        ),
+        0
+      ) / cell.element.length;
+      return { cellId, centerTotal };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.centerTotal - b.centerTotal)[0].cellId;
+}
+
+function duplicateOneNearCoincidentNeighborFace(
+  session,
+  selectedCellId,
+  translation = [2e-10, -1e-10, 1e-10]
+) {
+  const selected = session.cells.get(selectedCellId);
+  const selectedFaces = new Set(H1_TEST_FACES.map((face) =>
+    testFaceCoordinateKey(session, selected, face)
+  ));
+  for (const neighborId of session.activeLeafIds) {
+    const neighbor = session.cells.get(neighborId);
+    if (
+      !neighbor
+      || neighbor.id === selectedCellId
+      || !String(neighbor.role).includes("transition")
+    ) {
+      continue;
+    }
+    for (const face of H1_TEST_FACES) {
+      if (!selectedFaces.has(testFaceCoordinateKey(session, neighbor, face))) {
+        continue;
+      }
+      for (const localIndex of face) {
+        const sourceNodeId = neighbor.element[localIndex];
+        const source = session.nodes[sourceNodeId - 1];
+        session.nodes.push([
+          source[0] + translation[0],
+          source[1] + translation[1],
+          source[2] + translation[2]
+        ]);
+        neighbor.element[localIndex] = session.nodes.length;
+      }
+      return neighbor.id;
+    }
+  }
+  throw new Error("selected core cell has no transition-face neighbor");
+}
+
+function createTransitionShellRegressionFixture() {
+  const mesh = createHexUnitCubeMesh(7, 7, 7);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session);
+  const firstCore = idsInIndexBlock(
+    7,
+    7,
+    7,
+    [2, 2, 2],
+    [4, 4, 4]
+  ).map((elementId) =>
+    activeBuildCellIdByElementId(initial, elementId)
+  ).filter(Boolean);
+  refineSessionPatch(session, firstCore, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: initial
+  });
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  return {
+    session,
+    firstRefined,
+    candidate: firstActiveBoundaryCoreCell(session)
+  };
+}
+
+function addAmbiguousSupportFaceCell(
+  session,
+  selectedCellId,
+  translation = [2e-10, -1e-10, 1e-10]
+) {
+  const selected = session.cells.get(selectedCellId);
+  const supportCommand = [...session.undoStack]
+    .reverse()
+    .find((command) => command.createdCellIds.includes(selectedCellId));
+  assert.ok(selected);
+  assert.ok(supportCommand);
+  const duplicateNodeIds = selected.element.map((sourceNodeId) => {
+    const source = session.nodes[sourceNodeId - 1];
+    session.nodes.push([
+      source[0] + translation[0],
+      source[1] + translation[1],
+      source[2] + translation[2]
+    ]);
+    return session.nodes.length;
+  });
+  const cellId = "e999999/1";
+  session.cells.set(cellId, {
+    ...selected,
+    id: cellId,
+    ordinal: session.nextCellOrdinal,
+    element: duplicateNodeIds,
+    children: [],
+    active: false,
+    hidden: true
+  });
+  session.nextCellOrdinal += 1;
+  supportCommand.createdCellIds.push(cellId);
+  supportCommand.createdNodeIds.push(...duplicateNodeIds);
+  return cellId;
 }
 
 function idsInIndexBlock(nx, ny, nz, min, max) {
