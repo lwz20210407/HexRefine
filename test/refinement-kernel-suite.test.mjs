@@ -2207,6 +2207,131 @@ test("HexRefine command script reports the default grid merge tolerance", () => 
   assert.equal(replay.mergeTolerance, Math.hypot(2, 2, 1) * 1e-10);
 });
 
+test("HexRefine command replay applies selection compensation to a bounded 2:1 patch", () => {
+  const replay = replayHexRefineCommandScript(twoToOneCompensationReplayScript({
+    mode: "selection",
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 32
+  }));
+  const localTopologyReplay = replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript({
+      mode: "local-topology",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    })
+  );
+  const command = replay.session.undoStack.at(-1);
+
+  assert.equal(replay.warnings.length, 0);
+  assert.equal(localTopologyReplay.session.undoStack.at(-1)?.twoToOne?.status, "compensated");
+  assert.equal(command?.twoToOne?.status, "compensated");
+  assert.deepEqual(command?.twoToOne?.originalSelectedCellIds, ["e5", "e6", "e7", "e8"]);
+  assert.deepEqual(command?.twoToOne?.effectiveSelectedCellIds, [
+    "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"
+  ]);
+  assert.deepEqual(command?.twoToOne?.actions, [{
+    kind: "selection-expand",
+    reason: "completed a conforming one-layer 2:1 template field",
+    addedParentCellIds: ["e1", "e2", "e3", "e4"],
+    replacedTransitionCellIds: []
+  }]);
+  assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
+});
+
+test("HexRefine command replay warns and preserves the session when strict 2:1 compensation is disabled", () => {
+  const baseline = replayHexRefineCommandScript(twoToOneCompensationReplayScript(
+    undefined,
+    false
+  ));
+  const replay = replayHexRefineCommandScript(twoToOneCompensationReplayScript({
+    mode: "none"
+  }));
+
+  assert.deepEqual(replay.session, baseline.session);
+  assert.deepEqual(replay.mesh, baseline.mesh);
+  assert.deepEqual(replay.warnings, [
+    "refine.patch skipped after TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY: "
+      + "2:1 transition element 1 reaches a free boundary on its coarse side"
+  ]);
+});
+
+test("HexRefine command replay preserves delete redo history after a skipped 2:1 patch", () => {
+  const script = twoToOneCompensationReplayScript({ mode: "none" });
+  script.commands.splice(
+    1,
+    0,
+    {
+      kind: "delete.elements",
+      payload: {
+        mode: "delete",
+        elementIds: [20],
+        deletedElementCount: 1,
+        sourceElementCount: 20
+      }
+    },
+    { kind: "undo.delete" }
+  );
+  script.commands.push({ kind: "redo.delete" });
+
+  const replay = replayHexRefineCommandScript(script);
+
+  assert.equal(replay.mesh.elements.length, 19);
+  assert.equal(replay.session.revision, 3);
+  assert.deepEqual(replay.warnings, [
+    "refine.patch skipped after TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY: "
+      + "2:1 transition element 1 reaches a free boundary on its coarse side"
+  ]);
+});
+
+test("HexRefine strict command replay retains 2:1 compensation diagnostics", () => {
+  const strictError = captureError(() => replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript({ mode: "none" }),
+    { strict: true }
+  ));
+  const limitError = captureError(() => replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript({
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 0
+    }),
+    { strict: true }
+  ));
+
+  assert.equal(strictError instanceof TwoToOnePlanningError, true);
+  assert.equal(strictError.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.deepEqual(strictError.diagnostic.conflictingCellIds, ["e5", "e6", "e7", "e8"]);
+  assert.equal(limitError instanceof TwoToOnePlanningError, true);
+  assert.equal(limitError.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+  assert.ok(limitError.diagnostic.attemptedActions.length > 0);
+  assert.deepEqual(
+    limitError.diagnostic.attemptedActions[0].addedParentCellIds,
+    ["e1", "e2", "e3", "e4"]
+  );
+});
+
+test("HexRefine command replay strictly validates 2:1 compensation options", () => {
+  const invalidCompensations = [
+    null,
+    [],
+    { mode: "automatic" },
+    { maxAddedParentLayers: -1 },
+    { maxAddedParentLayers: 0.5 },
+    { maxAddedParentLayers: "1" },
+    { maxAddedParentLayers: Number.POSITIVE_INFINITY },
+    { maxAddedParentCount: -1 },
+    { maxAddedParentCount: 0.5 },
+    { maxAddedParentCount: Number.MAX_SAFE_INTEGER + 1 },
+    { maxAddedParentCount: Number.NaN }
+  ];
+
+  for (const compensation of invalidCompensations) {
+    assert.throws(
+      () => replayHexRefineCommandScript(twoToOneCompensationReplayScript(compensation)),
+      /hexTwoToOneCompensation|maxAddedParent/
+    );
+  }
+});
+
 test("HexRefine command script replays single-cell pick and hide-pick commands", () => {
   const replay = replayHexRefineCommandScript({
     commands: [
@@ -4007,10 +4132,64 @@ test("Hex 2:1 selection compensation minimally expands one bounded parent layer"
   assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
   assert.equal(result.quality.ok, true);
   assert.ok(result.quality.childMinimumOrientedScaledJacobian > 0);
-  assert.deepEqual(
-    result.cellData.filter((cell) => cell.parentElementId === 20),
-    [{ parentElementId: 20, role: "unchanged", templateCode: 0 }]
-  );
+  const affectedParentIdSet = new Set(affectedParentIds);
+  const farFieldParentIds = mesh.elements
+    .map((_, index) => index + 1)
+    .filter((parentElementId) => !affectedParentIdSet.has(parentElementId));
+  assert.equal(farFieldParentIds.length, 8);
+  for (const parentElementId of farFieldParentIds) {
+    const resultElementIndices = result.cellData.flatMap((cell, index) =>
+      cell.parentElementId === parentElementId ? [index] : []
+    );
+    assert.equal(resultElementIndices.length, 1);
+    const [resultElementIndex] = resultElementIndices;
+    assert.deepEqual(result.cellData[resultElementIndex], {
+      parentElementId,
+      role: "unchanged",
+      templateCode: 0
+    });
+    assert.deepEqual(
+      result.mesh.elements[resultElementIndex],
+      mesh.elements[parentElementId - 1]
+    );
+  }
+});
+
+test("Hex 2:1 selection compensation audits a warped mapped 2x2x5 patch physically", () => {
+  const base = createHexUnitCubeMesh(2, 2, 5);
+  const mesh = {
+    ...base,
+    nodes: base.nodes.map(([x, y, z]) => [
+      x + 0.025 * y * z,
+      y + 0.020 * x * z,
+      z + 0.015 * x * y
+    ])
+  };
+  const original = idsInIndexBlock(2, 2, 5, [0, 0, 1], [1, 1, 1]);
+  const expectedAdded = idsInIndexBlock(2, 2, 5, [0, 0, 0], [1, 1, 0]);
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    }
+  };
+  const planned = planTwoToOneHexRefinement(mesh, original, options);
+  const repeated = planTwoToOneHexRefinement(mesh, [...original].reverse(), options);
+  const physicalQuality = auditHexRefinementPatchQuality(mesh, planned.replacements);
+  const result = refineByElementIdsWithReport(mesh, original, options);
+
+  assert.equal(planned.report.status, "compensated");
+  assert.deepEqual(planned.report.actions[0].addedParentCellIds, expectedAdded);
+  assert.deepEqual(repeated.report, planned.report);
+  assert.deepEqual(repeated.replacements, planned.replacements);
+  assert.deepEqual(result.quality, physicalQuality);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.ok(physicalQuality.childMinimumOrientedScaledJacobian > 0.1);
+  assert.ok(minimumCornerScaledJacobian(result.mesh) > 0.1);
 });
 
 test("Hex 2:1 selection compensation preserves an already direct core", () => {
@@ -8244,6 +8423,43 @@ function idsInIndexBlock(nx, ny, nz, min, max) {
     }
   }
   return ids;
+}
+
+function twoToOneCompensationReplayScript(compensation, includeRefine = true) {
+  return {
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: [
+      {
+        kind: "grid.generate",
+        payload: {
+          kind: "H1",
+          nx: 2,
+          ny: 2,
+          nz: 5,
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+          mergeTolerance: 1e-9
+        }
+      },
+      ...(includeRefine
+        ? [{
+            kind: "refine.patch",
+            payload: {
+              cellIds: ["e5", "e6", "e7", "e8"],
+              options: {
+                includeTransitions: true,
+                regularizeHexSelection: false,
+                hexRefinementRatio: 2,
+                hexTwoToOneSelectionMode: "local",
+                hexTwoToOneCompensation: compensation,
+                mergeTolerance: 1e-9
+              }
+            }
+          }]
+        : [])
+    ]
+  };
 }
 
 function createDeformedHexBlock(nx, ny, nz) {

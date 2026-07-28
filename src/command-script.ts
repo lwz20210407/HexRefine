@@ -23,6 +23,11 @@ import { meshFromSerializable } from "./mesh-io.js";
 import { growQ1BoundaryLayer, replaceQ1BlockWithRectangleCircleTemplate } from "./q1-operations.js";
 import { buildDefaultRefinementReplacements } from "./refinement-planner.js";
 import { prepareSessionRefineSelection } from "./session-selection-prep.js";
+import {
+  normalizeTwoToOneCompensation,
+  TwoToOnePlanningError,
+  type TwoToOneCompensationOptions
+} from "./two-to-one-capability.js";
 
 export interface ComformHexCommand {
   index?: number;
@@ -369,7 +374,6 @@ function replayRefinePatch(
   payload: Record<string, unknown>,
   options: ReplayComformHexCommandScriptOptions
 ): void {
-  state.deleteRedoSnapshots = [];
   const session = requireSession(state);
   const commandOptions = readObject(payload.options);
   const includeTransitions = readBoolean(commandOptions.includeTransitions, true);
@@ -378,6 +382,9 @@ function replayRefinePatch(
   const hexTransitionAxis = readHexTransitionAxis(commandOptions.hexTransitionAxis);
   const hexTwoToOneSelectionMode = readHexTwoToOneSelectionMode(
     commandOptions.hexTwoToOneSelectionMode
+  );
+  const hexTwoToOneCompensation = readHexTwoToOneCompensation(
+    commandOptions.hexTwoToOneCompensation
   );
   const rebuildExistingTransitions = readBoolean(
     commandOptions.rebuildExistingTransitions,
@@ -416,16 +423,34 @@ function replayRefinePatch(
   for (const warning of replaySelection.warnings) {
     handleWarning(state, options, warning);
   }
-  const command = refineSessionPatch(session, selectedCellIds, {
-    includeTransitions,
-    hexRefinementRatio,
-    ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
-    ...(hexTwoToOneSelectionMode === undefined ? {} : { hexTwoToOneSelectionMode }),
-    rebuildExistingTransitions,
-    transitionSupportCellIds,
-    activeBuild: active,
-    ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
-  });
+  let command: RefinementSessionCommand;
+  try {
+    command = refineSessionPatch(session, selectedCellIds, {
+      includeTransitions,
+      hexRefinementRatio,
+      ...(hexTransitionAxis === undefined ? {} : { hexTransitionAxis }),
+      ...(hexTwoToOneSelectionMode === undefined ? {} : { hexTwoToOneSelectionMode }),
+      ...(hexTwoToOneCompensation === undefined ? {} : { hexTwoToOneCompensation }),
+      rebuildExistingTransitions,
+      transitionSupportCellIds,
+      activeBuild: active,
+      ...(mergeTolerance !== undefined ? { mergeTolerance } : {})
+    });
+  } catch (error) {
+    if (!(error instanceof TwoToOnePlanningError)) {
+      throw error;
+    }
+    if (options.strict) {
+      throw error;
+    }
+    handleWarning(
+      state,
+      options,
+      `refine.patch skipped after ${error.code}: ${error.message}`
+    );
+    return;
+  }
+  state.deleteRedoSnapshots = [];
   if (command.quality) {
     state.refinementQuality.push(command.quality);
   }
@@ -2083,6 +2108,18 @@ function readHexTwoToOneSelectionMode(
     return value;
   }
   throw new Error("hexTwoToOneSelectionMode must be section or local");
+}
+
+function readHexTwoToOneCompensation(
+  value: unknown
+): TwoToOneCompensationOptions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  normalizeTwoToOneCompensation(0, {
+    hexTwoToOneCompensation: value as TwoToOneCompensationOptions
+  });
+  return value as TwoToOneCompensationOptions;
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {
