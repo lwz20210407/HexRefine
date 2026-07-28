@@ -11,6 +11,7 @@ import type {
   RefineOptions
 } from "./types.js";
 import {
+  assertMergeToleranceBelowFinalEdgeLimit,
   elementVertices,
   inferMeshKind,
   mergeCoincidentNodesWithMap,
@@ -525,8 +526,15 @@ function buildMergedActiveMeshDirect(
   includeGeometryResolution: boolean
 ): ActiveMeshBuildResult {
   const tolerance = options.mergeTolerance!;
-  const toleranceSquared = tolerance * tolerance;
   const sessionNodes = session.nodes;
+  assertMergeToleranceBelowFinalEdgeLimit(
+    {
+      kind: session.kind,
+      nodes: sessionNodes,
+      elements: activeIds.map((cellId) => [...requiredCell(session, cellId).element])
+    },
+    tolerance
+  );
   const nodes: Point[] = [];
   const elements: Element[] = new Array(activeIds.length);
   const cellIdByElementId = new Map<number, CellId>();
@@ -572,7 +580,7 @@ function buildMergedActiveMeshDirect(
             exactNodeIndexByKey.set(exactKey, nodeIndex);
           }
         } else if (buckets) {
-          nodeIndex = findMergedActiveNodeIndex(point, nodes, buckets, tolerance, toleranceSquared);
+          nodeIndex = findMergedActiveNodeIndex(point, nodes, buckets, tolerance);
           if (nodeIndex === undefined) {
             nodeIndex = nodes.length;
             nodes.push([...point]);
@@ -1138,8 +1146,7 @@ function findMergedActiveNodeIndex(
   point: Point,
   nodes: readonly Point[],
   buckets: ReadonlyMap<number, readonly number[]>,
-  tolerance: number,
-  toleranceSquared: number
+  tolerance: number
 ): number | undefined {
   let bestIndex: number | undefined;
   const px = point[0] ?? 0;
@@ -1156,9 +1163,10 @@ function findMergedActiveNodeIndex(
             continue;
           }
           const candidate = nodes[candidateIndex]!;
-          const dx = (candidate[0] ?? 0) - px;
-          const dy = (candidate[1] ?? 0) - py;
-          if ((dx * dx) + (dy * dy) <= toleranceSquared) {
+          if (Math.hypot(
+            (candidate[0] ?? 0) - px,
+            (candidate[1] ?? 0) - py
+          ) <= tolerance) {
             bestIndex = candidateIndex;
           }
         }
@@ -1174,10 +1182,11 @@ function findMergedActiveNodeIndex(
             continue;
           }
           const candidate = nodes[candidateIndex]!;
-          const dx = (candidate[0] ?? 0) - px;
-          const dy = (candidate[1] ?? 0) - py;
-          const dz = (candidate[2] ?? 0) - pz;
-          if ((dx * dx) + (dy * dy) + (dz * dz) <= toleranceSquared) {
+          if (Math.hypot(
+            (candidate[0] ?? 0) - px,
+            (candidate[1] ?? 0) - py,
+            (candidate[2] ?? 0) - pz
+          ) <= tolerance) {
             bestIndex = candidateIndex;
           }
         }

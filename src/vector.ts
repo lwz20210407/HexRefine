@@ -42,7 +42,7 @@ export function lerp(a: Point, b: Point, t: number): MutablePoint {
 }
 
 export function norm(a: Point): number {
-  return Math.sqrt(a.reduce((total, value) => total + value * value, 0));
+  return Math.hypot(...a);
 }
 
 export function distance(a: Point, b: Point): number {

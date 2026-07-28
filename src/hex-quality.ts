@@ -67,7 +67,12 @@ export function auditHexRefinementQuality(
   const relativeVolumeError = Math.abs(childSignedVolume - parentSignedVolume)
     / Math.max(Math.abs(parentSignedVolume), Number.EPSILON);
   return {
-    ok: parentMinimumOrientedScaledJacobian > 0
+    ok: Number.isFinite(parentSignedVolume)
+      && Number.isFinite(childSignedVolume)
+      && Number.isFinite(relativeVolumeError)
+      && Number.isFinite(parentMinimumOrientedScaledJacobian)
+      && Number.isFinite(childMinimumOrientedScaledJacobian)
+      && parentMinimumOrientedScaledJacobian > 0
       && childMinimumOrientedScaledJacobian > 0
       && relativeVolumeError <= relativeVolumeTolerance,
     parentSignedVolume,
@@ -130,7 +135,12 @@ export function auditHexRefinementPatchQuality(
   const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
     / Math.max(parentOrientedVolume, Number.EPSILON);
   return {
-    ok: parentMinimumOrientedScaledJacobian > 0
+    ok: Number.isFinite(parentOrientedVolume)
+      && Number.isFinite(childOrientedVolume)
+      && Number.isFinite(relativeVolumeError)
+      && Number.isFinite(parentMinimumOrientedScaledJacobian)
+      && Number.isFinite(childMinimumOrientedScaledJacobian)
+      && parentMinimumOrientedScaledJacobian > 0
       && childMinimumOrientedScaledJacobian > 0
       && relativeVolumeError <= relativeVolumeTolerance,
     parentElementCount: replacements.length,
@@ -170,12 +180,12 @@ export function minimumOrientedHexCornerScaledJacobian(
   let minimum = Number.POSITIVE_INFINITY;
   for (const [xi, eta, zeta] of CORNER_SIGNS) {
     const jacobian = hexJacobian(vertices, xi, eta, zeta);
-    const denominator = vectorLength(jacobian[0])
-      * vectorLength(jacobian[1])
-      * vectorLength(jacobian[2]);
-    const scaled = denominator === 0
+    const lengths = jacobian.map(vectorLength);
+    const scaled = lengths.some((length) => length === 0)
       ? Number.NEGATIVE_INFINITY
-      : orientation * determinant3(jacobian) / denominator;
+      : orientation * determinant3(jacobian.map((column, index) =>
+          column.map((component) => component / lengths[index]!)
+        ));
     minimum = Math.min(minimum, scaled);
   }
   return minimum;

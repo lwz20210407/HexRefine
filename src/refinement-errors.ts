@@ -1,4 +1,7 @@
-import { checkNoHangingNodes } from "./conformance.js";
+import {
+  checkNoHangingNodes,
+  type HangingEntity
+} from "./conformance.js";
 import {
   auditHexRefinementPatchQuality,
   hexElementSignedVolume,
@@ -43,6 +46,28 @@ export function assertHexPatchQuality(
   const quality = finalMesh === undefined
     ? auditHexRefinementPatchQuality(sourceMesh, replacements)
     : auditFinalHexPatchQuality(sourceMesh, replacements, finalMesh);
+  if (
+    !Number.isFinite(quality.parentOrientedVolume)
+    || !Number.isFinite(quality.childOrientedVolume)
+    || !Number.isFinite(quality.relativeVolumeError)
+  ) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_VOLUME",
+      "refinement patch produced a non-finite oriented volume or relative volume error"
+    );
+  }
+  if (!Number.isFinite(quality.parentMinimumOrientedScaledJacobian)) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_PARENT_JACOBIAN",
+      "refinement patch parent scaled Jacobian is non-finite"
+    );
+  }
+  if (!Number.isFinite(quality.childMinimumOrientedScaledJacobian)) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_CHILD_JACOBIAN",
+      "refinement patch child scaled Jacobian is non-finite"
+    );
+  }
   if (quality.parentMinimumOrientedScaledJacobian <= 0) {
     throw new HexPatchQualityError(
       "HEX_PATCH_PARENT_JACOBIAN",
@@ -71,8 +96,11 @@ export function assertHexPatchQuality(
       : 1e-9;
     const conformance = checkNoHangingNodes(finalMesh, tolerance);
     if (!conformance.ok) {
-      throw new HexPatchQualityError(
-        "HEX_PATCH_CHILD_JACOBIAN",
+      throw finalConformancePlanningError(
+        sourceMesh,
+        replacements,
+        finalMesh,
+        conformance.hanging,
         "merged final Hex mesh contains a nonconforming interface: " +
         conformance.hanging[0]!.message
       );
@@ -321,9 +349,110 @@ function auditFinalHexPatchQuality(
   );
   return {
     ...quality,
-    ok: quality.parentMinimumOrientedScaledJacobian > 0
+    ok: Number.isFinite(quality.parentOrientedVolume)
+      && Number.isFinite(quality.childOrientedVolume)
+      && Number.isFinite(quality.relativeVolumeError)
+      && Number.isFinite(quality.parentMinimumOrientedScaledJacobian)
+      && Number.isFinite(childMinimumOrientedScaledJacobian)
+      && quality.parentMinimumOrientedScaledJacobian > 0
       && childMinimumOrientedScaledJacobian > 0
       && quality.relativeVolumeError <= 1e-8,
     childMinimumOrientedScaledJacobian
   };
+}
+
+function finalConformancePlanningError(
+  sourceMesh: Mesh,
+  replacements: readonly ReplaceElement[],
+  finalMesh: Mesh,
+  hanging: readonly HangingEntity[],
+  message: string
+): TwoToOnePlanningError<number> {
+  const sourceElementIdByFinalElementId = new Map<number, number>();
+  const replacedElementIds = new Set(
+    replacements.map((replacement) => replacement.elementId)
+  );
+  let finalElementId = 1;
+  for (
+    let sourceElementId = 1;
+    sourceElementId <= sourceMesh.elements.length;
+    sourceElementId += 1
+  ) {
+    if (!replacedElementIds.has(sourceElementId)) {
+      sourceElementIdByFinalElementId.set(finalElementId, sourceElementId);
+      finalElementId += 1;
+    }
+  }
+  for (const replacement of replacements) {
+    for (let index = 0; index < replacement.refinement.elements.length; index += 1) {
+      sourceElementIdByFinalElementId.set(finalElementId, replacement.elementId);
+      finalElementId += 1;
+    }
+  }
+  if (finalElementId - 1 !== finalMesh.elements.length) {
+    throw new Error("final Hex conformance element provenance is inconsistent");
+  }
+
+  const interfacesByKey = new Map<string, {
+    firstCellId: number;
+    secondCellId: number;
+    faceNodeIds: number[];
+  }>();
+  for (const issue of hanging) {
+    const owner = sourceElementIdByFinalElementId.get(issue.ownerElementId);
+    const other = sourceElementIdByFinalElementId.get(issue.otherElementId);
+    if (owner === undefined || other === undefined) {
+      throw new Error("final Hex conformance references an unmapped element");
+    }
+    const firstCellId = Math.min(owner, other);
+    const secondCellId = Math.max(owner, other);
+    const faceNodeIds = stableNumericIds(issue.boundary);
+    const key = `${firstCellId}:${secondCellId}:${faceNodeIds.join(",")}`;
+    interfacesByKey.set(key, {
+      firstCellId,
+      secondCellId,
+      faceNodeIds
+    });
+  }
+  const conflictingInterfaces = [...interfacesByKey.values()].sort(
+    (first, second) =>
+      compareNumbers(first.firstCellId, second.firstCellId)
+      || compareNumbers(first.secondCellId, second.secondCellId)
+      || compareNumericArrays(first.faceNodeIds, second.faceNodeIds)
+  );
+  const conflictingCellIds = stableNumericIds(
+    conflictingInterfaces.flatMap((entry) => [
+      entry.firstCellId,
+      entry.secondCellId
+    ])
+  );
+  return freezeTwoToOnePlanningErrorDiagnostic(
+    new TwoToOnePlanningError(
+      "TWO_TO_ONE_CONFORMANCE",
+      message,
+      {
+        conflictingCellIds,
+        conflictingInterfaces,
+        attemptedActions: [],
+        suggestion: {
+          kind: "expand-selection",
+          parentCellIds: conflictingCellIds
+        }
+      }
+    )
+  );
+}
+
+function compareNumericArrays(
+  first: readonly number[],
+  second: readonly number[]
+): number {
+  const length = Math.min(first.length, second.length);
+  for (let index = 0; index < length; index += 1) {
+    const compared = compareNumbers(first[index]!, second[index]!);
+    if (compared !== 0) {
+      return compared;
+    }
+  }
+  return first.length - second.length;
 }

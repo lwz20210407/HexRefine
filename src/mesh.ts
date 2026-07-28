@@ -138,7 +138,7 @@ export function mergeCoincidentNodes(mesh: Mesh, tolerance: number): Mesh {
 }
 
 export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): NodeMergeResult {
-  validateMergeTolerance(tolerance);
+  validateRequiredMergeTolerance(tolerance);
   assertMergeToleranceBelowFinalEdgeLimit(mesh, tolerance);
   const nodes: Point[] = [];
   const oldToNewArray: number[] = new Array(mesh.nodes.length + 1);
@@ -200,6 +200,12 @@ export function validateMergeTolerance(tolerance: unknown): asserts tolerance is
   if (tolerance === undefined) {
     return;
   }
+  validateRequiredMergeTolerance(tolerance);
+}
+
+export function validateRequiredMergeTolerance(
+  tolerance: unknown
+): asserts tolerance is number {
   if (typeof tolerance !== "number") {
     throw new TypeError("mergeTolerance must be a number");
   }
@@ -212,14 +218,21 @@ export function assertMergeToleranceBelowFinalEdgeLimit(
   mesh: ReadonlyMesh,
   tolerance: number
 ): void {
-  validateMergeTolerance(tolerance);
-  if (tolerance === 0 || mesh.elements.length === 0) {
+  validateRequiredMergeTolerance(tolerance);
+  if (mesh.elements.length === 0) {
     return;
   }
   const minimumFinalEdge = minNonzeroElementEdgeLength(mesh);
+  if (!Number.isFinite(minimumFinalEdge)) {
+    throw new RangeError(
+      "unmerged mesh has no distinguishable nonzero element edge"
+    );
+  }
+  if (tolerance === 0) {
+    return;
+  }
   if (
-    Number.isFinite(minimumFinalEdge)
-    && tolerance >= minimumFinalEdge / 2
+    tolerance >= minimumFinalEdge / 2
   ) {
     throw new RangeError(
       `mergeTolerance ${tolerance} must be less than half the unmerged final mesh minimum nonzero edge ${minimumFinalEdge}`
@@ -348,11 +361,7 @@ function minimumElementEdgeLength(
       const deltas = pa.map((coordinate, dimension) =>
         coordinate - (pb[dimension] ?? 0)
       );
-      const length = nonzeroOnly
-        ? Math.hypot(...deltas)
-        : Math.sqrt(
-            deltas.reduce((total, delta) => total + delta * delta, 0)
-          );
+      const length = Math.hypot(...deltas);
       if (!nonzeroOnly || length > 0) {
         minimum = Math.min(minimum, length);
       }

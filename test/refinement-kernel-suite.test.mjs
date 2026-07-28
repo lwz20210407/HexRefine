@@ -29,6 +29,9 @@ const {
   findBoundaryPairs,
   checkNoHangingNodes,
   minElementEdgeLength,
+  minNonzeroElementEdgeLength,
+  mergeCoincidentNodes,
+  mergeCoincidentNodesWithMap,
   boxDistance,
   circleDistance,
   createHexUnitCubeMesh,
@@ -176,6 +179,49 @@ function createMergeCollapsedHexMesh() {
     elements: [[1, 2, 3, 4, 5, 6, 7, 8]],
     data: {
       source: "merge-collapse-regression"
+    }
+  };
+}
+
+function createScaledHexMesh(scale) {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  mesh.nodes = mesh.nodes.map((point) =>
+    point.map((coordinate) => coordinate * scale)
+  );
+  mesh.data = {
+    source: "scaled-hex-quality",
+    scale
+  };
+  return mesh;
+}
+
+function createNearlyTouchingHexMesh(gap = 4e-9) {
+  return {
+    kind: "H1",
+    nodes: [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+      [1, 0, 1],
+      [1, 1, 1],
+      [0, 1, 1],
+      [1 + gap, 0, 0],
+      [2 + gap, 0, 0],
+      [2 + gap, 1, 0],
+      [1 + gap, 1, 0],
+      [1 + gap, 0, 1],
+      [2 + gap, 0, 1],
+      [2 + gap, 1, 1],
+      [1 + gap, 1, 1]
+    ],
+    elements: [
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [9, 10, 11, 12, 13, 14, 15, 16]
+    ],
+    data: {
+      source: "near-interface-conformance"
     }
   };
 }
@@ -5680,6 +5726,223 @@ test("flat 2:1 preview and refine audit the merged final Hex mesh", () => {
   }
 });
 
+test("final merged Hex quality rejects nonfinite volume reports structurally and atomically", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  };
+  for (const scale of [1e103, 1e200]) {
+    for (const entry of [
+      previewRefinementByElementIds,
+      previewHexRefinementByElementIds,
+      refineByElementIdsWithReport,
+      refineHexByElementIdsWithReport
+    ]) {
+      const mesh = createScaledHexMesh(scale);
+      const snapshot = structuredClone(mesh);
+      const error = captureError(() => entry(mesh, [1], options));
+
+      assert.equal(error instanceof TwoToOnePlanningError, true, `${entry.name}:${scale}`);
+      assert.equal(error.code, "TWO_TO_ONE_VOLUME");
+      assert.match(error.message, /nonfinite|non-finite|finite.*volume/i);
+      assert.equal(Object.isFrozen(error.diagnostic), true);
+      assert.deepEqual(error.diagnostic.conflictingCellIds, [1]);
+      assert.deepEqual(mesh, snapshot);
+    }
+  }
+});
+
+test("edge resolution and default merge tolerance remain stable at extreme scales", () => {
+  for (const scale of [1e200, 1e-200]) {
+    const mesh = createScaledHexMesh(scale);
+    const edge = minElementEdgeLength(mesh);
+    const nonzeroEdge = minNonzeroElementEdgeLength(mesh);
+
+    assert.equal(Number.isFinite(edge), true, `finite edge:${scale}`);
+    assert.equal(edge > 0, true, `positive edge:${scale}`);
+    assert.equal(edge, nonzeroEdge);
+    assert.equal(Math.abs(edge / scale - 1) < 1e-12, true);
+
+    if (scale === 1e-200) {
+      for (const entry of [
+        previewRefinementByElementIds,
+        previewHexRefinementByElementIds,
+        refineByElementIdsWithReport,
+        refineHexByElementIdsWithReport
+      ]) {
+        const snapshot = structuredClone(mesh);
+        const result = entry(mesh, [1], {
+          hexRefinementRatio: 2,
+          includeTransitions: false,
+          regularizeHexSelection: false
+        });
+        assert.equal(result.quality.ok, true, entry.name);
+        for (const value of [
+          result.quality.parentOrientedVolume,
+          result.quality.childOrientedVolume,
+          result.quality.relativeVolumeError,
+          result.quality.parentMinimumOrientedScaledJacobian,
+          result.quality.childMinimumOrientedScaledJacobian
+        ]) {
+          assert.equal(Number.isFinite(value), true, `${entry.name}:${value}`);
+        }
+        assert.deepEqual(mesh, snapshot);
+      }
+    }
+  }
+});
+
+test("indistinguishable element geometry is rejected explicitly", () => {
+  const mesh = createScaledHexMesh(0);
+  const snapshot = structuredClone(mesh);
+  assert.equal(minElementEdgeLength(mesh), 0);
+  assert.equal(minNonzeroElementEdgeLength(mesh), Number.POSITIVE_INFINITY);
+
+  for (const entry of [mergeCoincidentNodes, mergeCoincidentNodesWithMap]) {
+    const error = captureError(() => entry(mesh, 0));
+    assert.equal(error instanceof RangeError, true, entry.name);
+    assert.match(error.message, /no distinguishable nonzero element edge/i);
+  }
+
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  for (const entry of [
+    () => buildActiveMesh(session, { mergeNodes: true }),
+    () => buildActiveMeshWithMap(session, { mergeNodes: true })
+  ]) {
+    const error = captureError(entry);
+    assert.equal(error instanceof RangeError, true);
+    assert.match(error.message, /no distinguishable nonzero element edge/i);
+    assert.deepEqual(session, before);
+  }
+
+  const error = captureError(() => previewRefinementByElementIds(mesh, [1], {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  }));
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_PARENT_JACOBIAN");
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("low-level node merging requires a finite nonnegative tolerance", () => {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  const snapshot = structuredClone(mesh);
+  for (const entry of [mergeCoincidentNodes, mergeCoincidentNodesWithMap]) {
+    const missing = captureError(() => entry(mesh, undefined));
+    assert.equal(missing instanceof TypeError, true, entry.name);
+    assert.match(missing.message, /tolerance.*required|must be a number/i);
+    for (const tolerance of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -1
+    ]) {
+      const error = captureError(() => entry(mesh, tolerance));
+      assert.equal(error instanceof RangeError, true, `${entry.name}:${tolerance}`);
+      assert.match(error.message, /finite and nonnegative/);
+    }
+  }
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("session active mesh merging enforces the unmerged active edge limit", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const before = structuredClone(session);
+  for (const mergeTolerance of [0, 0.5 - Number.EPSILON]) {
+    const build = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance
+    });
+    assert.equal(build.mesh.elements.length, 1);
+    assert.equal(new Set(build.mesh.elements[0]).size, 8);
+    assert.deepEqual(session, before);
+  }
+  for (const mergeTolerance of [0.5, 0.5 + Number.EPSILON]) {
+    for (const entry of [
+      () => buildActiveMesh(session, { mergeNodes: true, mergeTolerance }),
+      () => buildActiveMeshWithMap(session, { mergeNodes: true, mergeTolerance }),
+      () => previewSessionPatch(session, ["e1"], {
+        hexRefinementRatio: 2,
+        includeTransitions: false,
+        mergeTolerance
+      }),
+      () => refineSessionPatch(session, ["e1"], {
+        hexRefinementRatio: 2,
+        includeTransitions: false,
+        mergeTolerance
+      })
+    ]) {
+      const error = captureError(entry);
+      assert.equal(error instanceof RangeError, true, `${mergeTolerance}`);
+      assert.match(error.message, /less than half.*edge/i);
+      assert.deepEqual(session, before);
+    }
+  }
+
+  const unmerged = buildActiveMesh(session, {
+    mergeNodes: false,
+    mergeTolerance: 1
+  });
+  assert.equal(unmerged.elements.length, 1);
+  assert.deepEqual(session, before);
+});
+
+test("session default and explicit merge tolerances remain stable at extreme scales", () => {
+  for (const scale of [1e200, 1e-200]) {
+    const session = createRefinementSession(createScaledHexMesh(scale));
+    const before = structuredClone(session);
+    for (const options of [
+      { mergeNodes: true },
+      { mergeNodes: true, mergeTolerance: scale * 1e-4 }
+    ]) {
+      const build = buildActiveMeshWithMap(session, options);
+      assert.equal(build.mesh.elements.length, 1);
+      assert.equal(new Set(build.mesh.elements[0]).size, 8);
+      assert.deepEqual(session, before);
+    }
+  }
+});
+
+test("final conformance failures use structured conformance diagnostics", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: true,
+    regularizeHexSelection: false,
+    mergeTolerance: 0
+  };
+  for (const entry of [
+    previewRefinementByElementIds,
+    previewHexRefinementByElementIds,
+    refineByElementIdsWithReport,
+    refineHexByElementIdsWithReport
+  ]) {
+    const mesh = createNearlyTouchingHexMesh();
+    const snapshot = structuredClone(mesh);
+    const error = captureError(() => entry(mesh, [1, 2], options));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, entry.name);
+    assert.equal(error.code, "TWO_TO_ONE_CONFORMANCE");
+    assert.deepEqual(error.diagnostic.conflictingCellIds, [1, 2]);
+    assert.equal(error.diagnostic.conflictingInterfaces.length > 0, true);
+    for (const diagnostic of error.diagnostic.conflictingInterfaces) {
+      assert.equal([1, 2].includes(diagnostic.firstCellId), true);
+      assert.equal([1, 2].includes(diagnostic.secondCellId), true);
+      assert.equal(diagnostic.faceNodeIds.length, 4);
+      assert.equal(Object.isFrozen(diagnostic.faceNodeIds), true);
+      assert.equal(Object.isFrozen(diagnostic), true);
+    }
+    assert.equal(Object.isFrozen(error.diagnostic), true);
+    assert.throws(
+      () => error.diagnostic.conflictingInterfaces[0].faceNodeIds.push(99),
+      TypeError
+    );
+    assert.deepEqual(mesh, snapshot);
+  }
+});
+
 test("session preflight planning diagnostics are cloned and deeply frozen", () => {
   for (const operation of ["preview", "refine"]) {
     const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
@@ -8405,22 +8668,18 @@ test("Hex 2:1 transition-shell rebuilding rejects a requested tolerance that ove
     session,
     candidate
   } = createTransitionShellRegressionFixture();
-  const active = buildActiveMeshWithMap(session, {
-    mergeNodes: true,
-    mergeTolerance: 1e-2
-  });
   const before = structuredClone(session);
 
   const error = captureError(() => refineSessionPatch(session, [candidate], {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
-    activeBuild: active
+    mergeTolerance: 1e-2
   }));
 
-  assert.equal(error instanceof TwoToOnePlanningError, true);
-  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
-  assert.match(error.message, /face tolerance.*minimum edge.*resolution/i);
+  assert.equal(error instanceof RangeError, true);
+  assert.equal(error instanceof TwoToOnePlanningError, false);
+  assert.match(error.message, /less than half.*edge/i);
   assert.deepEqual(session, before);
 });
 
@@ -8665,7 +8924,11 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
       ...firstRefined.mesh.nodes.flatMap((point) => point.map(Math.abs))
     ) * Number.EPSILON * 64
   );
-  assert.equal(effectiveFaceTolerance, 1.7857420733989507e-10);
+  assert.equal(
+    Math.abs(effectiveFaceTolerance - 1.7857420733989507e-10)
+      <= Number.EPSILON * 1.7857420733989507e-10,
+    true
+  );
   assert.equal(
     selectedFaceNodeIds.some((nodeId) => transitionFaceNodeIds.includes(nodeId)),
     false
