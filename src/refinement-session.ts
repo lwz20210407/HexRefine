@@ -1420,14 +1420,15 @@ export function checkRefinementSessionCommandConformance(
     mergeTolerance: tolerance,
     includeElementIdsByNodeId: true
   });
-  const seedCellIds = (command.activeCreatedCellIds ?? command.createdCellIds)
-    .filter((cellId) => {
-      const cell = session.cells.get(cellId);
-      return cell !== undefined
-        && cell.active
-        && !cell.hidden
-        && session.activeLeafIds.has(cellId);
-    });
+  const seedCellIds = command.activeCreatedCellIds === undefined
+    ? command.createdCellIds.filter((cellId) => {
+        const cell = session.cells.get(cellId);
+        return cell !== undefined
+          && cell.active
+          && !cell.hidden
+          && session.activeLeafIds.has(cellId);
+      })
+    : command.activeCreatedCellIds;
   validateActiveBuildCellsForSession(session, active, seedCellIds);
   const seedElementIds = seedCellIds
     .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))

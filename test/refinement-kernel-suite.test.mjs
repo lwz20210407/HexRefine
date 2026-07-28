@@ -4989,6 +4989,19 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   );
   assert.equal(localConformance.seedCellIds.length, command.activeCreatedCellIds.length);
   assert.equal(localConformance.report.ok, true);
+  const {
+    activeCreatedCellIds: ignoredActiveCreatedCellIds,
+    ...legacyCompoundCommand
+  } = command;
+  assert.ok(ignoredActiveCreatedCellIds.length > 0);
+  const legacyConformance = checkRefinementSessionCommandConformance(
+    session,
+    legacyCompoundCommand,
+    1e-9,
+    conformanceBuild
+  );
+  assert.equal(legacyConformance.seedCellIds.length, command.activeCreatedCellIds.length);
+  assert.equal(legacyConformance.report.ok, true);
   const undoneCommand = undoRefinementSession(session);
   assert.equal(undoneCommand?.id, command.id);
   assert.deepEqual(undoneCommand?.twoToOne, stableTwoToOne);
@@ -5911,6 +5924,56 @@ test("local command conformance rejects stale active-created coordinates", () =>
   assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
   assert.match(error.message, /activeBuild.*stale|selected cell.*changed/i);
   assert.deepEqual(session, before);
+});
+
+test("local command conformance requires every recorded active-created cell to remain active", () => {
+  const mutations = [
+    ["active flag", (session, cellId, cell) => {
+      cell.active = false;
+    }],
+    ["hidden flag", (session, cellId, cell) => {
+      cell.hidden = true;
+    }],
+    ["active leaf membership", (session, cellId) => {
+      Set.prototype.delete.call(session.activeLeafIds, cellId);
+    }]
+  ];
+  for (const [mutationName, mutate] of mutations) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const initial = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const command = refineSessionPatch(session, ["e1"], {
+      includeTransitions: false,
+      activeBuild: initial
+    });
+    const recordedCommand = {
+      ...command,
+      activeCreatedCellIds: [...command.createdCellIds]
+    };
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9,
+      includeElementIdsByNodeId: true
+    });
+    const cellId = recordedCommand.activeCreatedCellIds[0];
+    const cell = session.cells.get(cellId);
+    mutate(session, cellId, cell);
+
+    const error = captureError(() =>
+      checkRefinementSessionCommandConformance(
+        session,
+        recordedCommand,
+        1e-9,
+        active
+      )
+    );
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, mutationName);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*stale|active-leaf state changed/i);
+  }
 });
 
 test("trusted active builds isolate planning and remap from public mapping tamper", () => {
