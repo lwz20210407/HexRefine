@@ -11,13 +11,19 @@ export function determinant3Scaled(
   matrix: readonly number[][]
 ): ScaledValue {
   const [a, b, c] = matrix;
-  return sumScaledValues([
-    scaledProduct3(a![0]!, b![1]!, c![2]!),
-    scaleScaledValue(scaledProduct3(a![0]!, b![2]!, c![1]!), -1),
-    scaleScaledValue(scaledProduct3(b![0]!, a![1]!, c![2]!), -1),
-    scaledProduct3(b![0]!, a![2]!, c![1]!),
-    scaledProduct3(c![0]!, a![1]!, b![2]!),
-    scaleScaledValue(scaledProduct3(c![0]!, a![2]!, b![1]!), -1)
+  return sumScaledExpansions([
+    scaledProductExpansion3(a![0]!, b![1]!, c![2]!),
+    negateScaledExpansion(
+      scaledProductExpansion3(a![0]!, b![2]!, c![1]!)
+    ),
+    negateScaledExpansion(
+      scaledProductExpansion3(b![0]!, a![1]!, c![2]!)
+    ),
+    scaledProductExpansion3(b![0]!, a![2]!, c![1]!),
+    scaledProductExpansion3(c![0]!, a![1]!, b![2]!),
+    negateScaledExpansion(
+      scaledProductExpansion3(c![0]!, a![2]!, b![1]!)
+    )
   ]);
 }
 
@@ -125,14 +131,19 @@ export function scaledValueSign(value: ScaledValue): number {
   return value.mantissa < 0 || Object.is(value.mantissa, -0) ? -1 : 1;
 }
 
-function scaledProduct3(
+interface ScaledExpansion {
+  components: number[];
+  exponent: number;
+}
+
+function scaledProductExpansion3(
   first: number,
   second: number,
   third: number
-): ScaledValue {
+): ScaledExpansion {
   const values = [first, second, third];
   if (values.some(Number.isNaN)) {
-    return { mantissa: Number.NaN, exponent: 0 };
+    return { components: [Number.NaN], exponent: 0 };
   }
   const hasZero = values.some((value) => value === 0);
   const hasInfinity = values.some((value) => !Number.isFinite(value));
@@ -141,24 +152,165 @@ function scaledProduct3(
     1
   );
   if (hasZero && hasInfinity) {
-    return { mantissa: Number.NaN, exponent: 0 };
+    return { components: [Number.NaN], exponent: 0 };
   }
   if (hasZero) {
-    return { mantissa: sign < 0 ? -0 : 0, exponent: 0 };
+    return { components: [], exponent: 0 };
   }
   if (hasInfinity) {
     return {
-      mantissa: sign < 0
+      components: [sign < 0
         ? Number.NEGATIVE_INFINITY
-        : Number.POSITIVE_INFINITY,
+        : Number.POSITIVE_INFINITY],
       exponent: 0
     };
   }
   const parts = values.map(scaledValueFromFiniteNumber);
-  return normalizeScaledValue(
-    parts[0]!.mantissa * parts[1]!.mantissa * parts[2]!.mantissa,
-    parts[0]!.exponent + parts[1]!.exponent + parts[2]!.exponent
+  const [firstError, firstProduct] = twoProduct(
+    parts[0]!.mantissa,
+    parts[1]!.mantissa
   );
+  const components: number[] = [];
+  for (const partial of [firstError, firstProduct]) {
+    const [error, product] = twoProduct(partial, parts[2]!.mantissa);
+    if (error !== 0) {
+      components.push(error);
+    }
+    if (product !== 0) {
+      components.push(product);
+    }
+  }
+  return {
+    components: exactExpansionSum(components),
+    exponent: parts[0]!.exponent
+      + parts[1]!.exponent
+      + parts[2]!.exponent
+  };
+}
+
+function sumScaledExpansions(
+  values: readonly ScaledExpansion[]
+): ScaledValue {
+  const components = values.flatMap((value) => value.components);
+  if (components.some(Number.isNaN)) {
+    return { mantissa: Number.NaN, exponent: 0 };
+  }
+  const infinities = components.filter((value) => !Number.isFinite(value));
+  if (infinities.length > 0) {
+    const hasPositive = infinities.some((value) => value > 0);
+    const hasNegative = infinities.some((value) => value < 0);
+    return {
+      mantissa: hasPositive && hasNegative
+        ? Number.NaN
+        : hasNegative
+          ? Number.NEGATIVE_INFINITY
+          : Number.POSITIVE_INFINITY,
+      exponent: 0
+    };
+  }
+
+  const byExponent = new Map<number, number[]>();
+  for (const value of values) {
+    if (value.components.length === 0) {
+      continue;
+    }
+    const group = byExponent.get(value.exponent) ?? [];
+    group.push(...value.components);
+    byExponent.set(value.exponent, group);
+  }
+  const groups = [...byExponent.entries()]
+    .sort(([first], [second]) => second - first)
+    .map(([exponent, group]) => ({
+      exponent,
+      components: exactExpansionSum(group)
+    }))
+    .filter((group) => group.components.length > 0);
+  if (groups.length === 0) {
+    return { mantissa: 0, exponent: 0 };
+  }
+
+  let exponent = groups[0]!.exponent;
+  let expansion = groups[0]!.components;
+  for (const group of groups.slice(1)) {
+    if (expansion.length === 0) {
+      exponent = group.exponent;
+      expansion = group.components;
+      continue;
+    }
+    const scale = 2 ** (group.exponent - exponent);
+    if (scale === 0) {
+      continue;
+    }
+    expansion = exactExpansionSum([
+      ...expansion,
+      ...group.components.map((component) => component * scale)
+    ]);
+  }
+  const mantissa = expansion.reduce(
+    (total, component) => total + component,
+    0
+  );
+  return normalizeScaledValue(mantissa, exponent);
+}
+
+function negateScaledExpansion(value: ScaledExpansion): ScaledExpansion {
+  return {
+    components: value.components.map((component) => -component),
+    exponent: value.exponent
+  };
+}
+
+function exactExpansionSum(values: readonly number[]): number[] {
+  let expansion: number[] = [];
+  for (const value of [...values].sort(
+    (first, second) => Math.abs(first) - Math.abs(second)
+  )) {
+    expansion = growExpansion(expansion, value);
+  }
+  return expansion;
+}
+
+function growExpansion(
+  expansion: readonly number[],
+  value: number
+): number[] {
+  let accumulator = value;
+  const result: number[] = [];
+  for (const component of expansion) {
+    const [error, sum] = twoSum(accumulator, component);
+    if (error !== 0) {
+      result.push(error);
+    }
+    accumulator = sum;
+  }
+  if (accumulator !== 0 || result.length === 0) {
+    result.push(accumulator);
+  }
+  return result;
+}
+
+function twoSum(first: number, second: number): [number, number] {
+  const sum = first + second;
+  const secondVirtual = sum - first;
+  const firstVirtual = sum - secondVirtual;
+  const secondRoundoff = second - secondVirtual;
+  const firstRoundoff = first - firstVirtual;
+  return [firstRoundoff + secondRoundoff, sum];
+}
+
+function twoProduct(first: number, second: number): [number, number] {
+  const product = first * second;
+  const splitter = 134217729;
+  const firstSplit = splitter * first;
+  const firstHigh = firstSplit - (firstSplit - first);
+  const firstLow = first - firstHigh;
+  const secondSplit = splitter * second;
+  const secondHigh = secondSplit - (secondSplit - second);
+  const secondLow = second - secondHigh;
+  const error = firstLow * secondLow
+    - (((product - firstHigh * secondHigh) - firstLow * secondHigh)
+      - firstHigh * secondLow);
+  return [error, product];
 }
 
 function scaledValueFromFiniteNumber(value: number): ScaledValue {

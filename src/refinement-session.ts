@@ -25,10 +25,11 @@ import {
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 import {
   auditHexRefinementPatchQuality,
-  auditHexRefinementQuality,
-  hexElementSignedVolume,
-  minimumOrientedHexCornerScaledJacobian
+  auditHexRefinementQuality
 } from "./hex-quality.js";
+import {
+  auditNetHexCellReplacementQuality
+} from "./refinement-session-quality-internal.js";
 import { inferHexElementLattice } from "./regularization.js";
 import { H1_FACES } from "./topology.js";
 import {
@@ -1177,6 +1178,9 @@ function findMergedActiveNodeIndex(
         continue;
       }
       const candidate = nodes[candidateIndex]!;
+      if (candidate.length !== point.length) {
+        continue;
+      }
       if (Math.hypot(
         ...point.map((coordinate, dimension) =>
           (candidate[dimension] ?? 0) - coordinate
@@ -2708,77 +2712,6 @@ function refinementCellFaces(
       points: nodeIds.map((nodeId) => session.nodes[nodeId - 1]!)
     };
   });
-}
-
-function auditNetHexCellReplacementQuality(
-  parentSession: RefinementSession,
-  parentCellIds: readonly CellId[],
-  childSession: RefinementSession,
-  childCellIds: readonly CellId[],
-  relativeVolumeTolerance = 1e-8
-): HexRefinementQualitySummary {
-  if (parentCellIds.length === 0 || childCellIds.length === 0) {
-    throw new Error("net Hex replacement quality audit requires parent and child cells");
-  }
-  const parent = summarizeHexSessionCells(parentSession, parentCellIds);
-  const child = summarizeHexSessionCells(childSession, childCellIds);
-  const parentOrientedVolume = parent.orientedVolume;
-  const childOrientedVolume = child.orientedVolume;
-  const volumeDifference = Math.abs(
-    childOrientedVolume - parentOrientedVolume
-  );
-  const volumeScale = Math.abs(parentOrientedVolume);
-  const relativeVolumeError = volumeScale === 0
-    ? (volumeDifference === 0 ? 0 : Number.POSITIVE_INFINITY)
-    : volumeDifference / volumeScale;
-  return {
-    ok: Number.isFinite(parentOrientedVolume)
-      && Number.isFinite(childOrientedVolume)
-      && Number.isFinite(relativeVolumeError)
-      && Number.isFinite(parent.minimumOrientedScaledJacobian)
-      && Number.isFinite(child.minimumOrientedScaledJacobian)
-      && parent.minimumOrientedScaledJacobian > 0
-      && child.minimumOrientedScaledJacobian > 0
-      && relativeVolumeError <= relativeVolumeTolerance,
-    parentElementCount: parentCellIds.length,
-    childElementCount: childCellIds.length,
-    parentOrientedVolume,
-    childOrientedVolume,
-    relativeVolumeError,
-    parentMinimumOrientedScaledJacobian: parent.minimumOrientedScaledJacobian,
-    childMinimumOrientedScaledJacobian: child.minimumOrientedScaledJacobian
-  };
-}
-
-function summarizeHexSessionCells(
-  session: RefinementSession,
-  cellIds: readonly CellId[]
-): {
-  orientedVolume: number;
-  minimumOrientedScaledJacobian: number;
-} {
-  let orientedVolume = 0;
-  let minimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
-  for (const cellId of cellIds) {
-    const cell = requiredCell(session, cellId);
-    if (cell.kind !== "H1") {
-      throw new Error(`net Hex replacement quality audit received non-Hex cell ${cellId}`);
-    }
-    const vertices = elementVertices(sessionMeshView(session), cell.element);
-    const signedVolume = hexElementSignedVolume(vertices);
-    const orientation = signedVolume < 0 || Object.is(signedVolume, -0)
-      ? -1
-      : 1;
-    orientedVolume += orientation * signedVolume;
-    minimumOrientedScaledJacobian = Math.min(
-      minimumOrientedScaledJacobian,
-      minimumOrientedHexCornerScaledJacobian(vertices, orientation)
-    );
-  }
-  return {
-    orientedVolume,
-    minimumOrientedScaledJacobian
-  };
 }
 
 function findSingleSupportCommand(

@@ -20,11 +20,17 @@ import {
 import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
 import {
   asTwoToOneFlatPlanningError,
+  assertHexPatchQualitySummary,
   HexPatchQualityError
 } from "../dist/refinement-errors.js";
 import {
   determinant3 as robustDeterminant3
 } from "../dist/hex-numeric-internal.js";
+import {
+  createMergeBucketLayout,
+  forEachCandidateMergeBucketKey,
+  mergeBucketKey
+} from "../dist/merge-buckets-internal.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
@@ -2372,6 +2378,52 @@ test("Hex determinant preserves tiny components beside huge column components", 
   ])), true);
 });
 
+test("Hex determinant preserves B=2**30 cancellation across every axis order", () => {
+  const base = 2 ** 30;
+  const columns = [
+    [base + 1, base, base],
+    [base, base + 1, base],
+    [base, base, base + 1]
+  ];
+  const expected = 3 * base + 1;
+  const permutations = [
+    { order: [0, 1, 2], sign: 1 },
+    { order: [0, 2, 1], sign: -1 },
+    { order: [1, 0, 2], sign: -1 },
+    { order: [1, 2, 0], sign: 1 },
+    { order: [2, 0, 1], sign: 1 },
+    { order: [2, 1, 0], sign: -1 }
+  ];
+
+  for (const { order, sign } of permutations) {
+    const matrix = order.map((index) => columns[index]);
+    assert.equal(robustDeterminant3(matrix), sign * expected, `${order}`);
+
+    const vertices = createParallelepipedHexVertices(
+      matrix[0],
+      matrix[1],
+      matrix[2]
+    );
+    const volume = hexElementSignedVolume(vertices);
+    assert.equal(
+      Math.abs(volume / (sign * expected) - 1) < 1e-6,
+      true,
+      `${order}`
+    );
+    const report = auditHexRefinementQuality(
+      vertices,
+      refineHexTo8Hex(vertices)
+    );
+    assert.equal(report.ok, true, `${order}`);
+    assert.equal(
+      Math.abs(report.parentSignedVolume / (sign * expected) - 1) < 1e-6,
+      true,
+      `${order}`
+    );
+    assert.equal(report.relativeVolumeError < 1e-12, true, `${order}`);
+  }
+});
+
 test("underflowed Hex volume retains orientation for quality checks", () => {
   const tiny = 2 ** -400;
   const positive = createAnisotropicHexVertices(tiny, tiny, tiny);
@@ -2418,6 +2470,43 @@ test("underflowed Hex volume retains orientation for quality checks", () => {
     );
     assert.deepEqual(negativeMesh, snapshot);
   }
+});
+
+test("session net quality rejects one retained child at underflow scale", async () => {
+  const {
+    auditNetHexCellReplacementQuality
+  } = await import("../dist/refinement-session-quality-internal.js");
+  const tiny = 2 ** -400;
+  const vertices = createAnisotropicHexVertices(tiny, tiny, tiny);
+  const refinement = refineHexTo8Hex(vertices);
+  const parentSession = createRefinementSession({
+    kind: "H1",
+    nodes: vertices.map((point) => [...point]),
+    elements: [[1, 2, 3, 4, 5, 6, 7, 8]]
+  });
+  const childSession = createRefinementSession({
+    kind: "H1",
+    nodes: refinement.nodes.map((point) => [...point]),
+    elements: [[...refinement.elements[0]]]
+  });
+  const parentBefore = structuredClone(parentSession);
+  const childBefore = structuredClone(childSession);
+
+  const quality = auditNetHexCellReplacementQuality(
+    parentSession,
+    ["e1"],
+    childSession,
+    ["e1"]
+  );
+  assert.equal(Math.abs(quality.relativeVolumeError - 0.875) < 1e-12, true);
+  assert.equal(quality.ok, false);
+  const error = captureError(() =>
+    assertHexPatchQualitySummary(quality, "underflow net replacement")
+  );
+  assert.equal(error instanceof HexPatchQualityError, true);
+  assert.equal(error.code, "HEX_PATCH_VOLUME");
+  assert.deepEqual(parentSession, parentBefore);
+  assert.deepEqual(childSession, childBefore);
 });
 
 test("anisotropic Hex volume loss remains visible to the quality gate", () => {
@@ -6374,6 +6463,76 @@ test("merge buckets use one stable axis mode near MAX_SAFE_INTEGER", () => {
     assert.deepEqual(active.mesh.elements[0], active.mesh.elements[1]);
     assert.deepEqual(session, before);
   }
+});
+
+test("BigInt merge buckets preserve neighbors and negative floor boundaries", () => {
+  const layout = createMergeBucketLayout([
+    [-1e308, 0],
+    [1e308, 0]
+  ], 1);
+  for (const [first, second] of [
+    [[0.75, 0], [1.25, 0]],
+    [[-1.25, 0], [-0.75, 0]],
+    [[-1, 0], [0, 0]]
+  ]) {
+    const candidates = [];
+    forEachCandidateMergeBucketKey(second, layout, (key) => {
+      candidates.push(key);
+    });
+    assert.equal(candidates.includes(mergeBucketKey(first, layout)), true);
+
+    for (const reverse of [false, true]) {
+      const pair = reverse ? [second, first] : [first, second];
+      const merged = mergeCoincidentNodesWithMap({
+        kind: "Q1",
+        nodes: [
+          [-1e308, 100],
+          ...pair.map((point) => [...point]),
+          [1e308, 100]
+        ],
+        elements: []
+      }, 1);
+      assert.equal(merged.mesh.nodes.length, 3, `${first}:${second}:${reverse}`);
+    }
+  }
+  assert.equal(mergeBucketKey([-1.25, 0], layout).startsWith("b-2:"), true);
+  assert.equal(mergeBucketKey([-1, 0], layout).startsWith("b-1:"), true);
+  assert.equal(mergeBucketKey([0, 0], layout).startsWith("b0:"), true);
+  assert.equal(mergeBucketKey([1, 0], layout).startsWith("b1:"), true);
+});
+
+test("session explicit-tolerance merging preserves point dimensions", () => {
+  const mesh = {
+    kind: "Q1",
+    nodes: [
+      [0, 0],
+      [4, 0],
+      [4, 4],
+      [0, 4],
+      [0, 0, 0],
+      [4, 0, 0],
+      [4, 4, 0],
+      [0, 4, 0]
+    ],
+    elements: [
+      [1, 2, 3, 4],
+      [5, 6, 7, 8]
+    ]
+  };
+  const snapshot = structuredClone(mesh);
+  const lowLevel = mergeCoincidentNodesWithMap(mesh, 0.25);
+  assert.equal(lowLevel.mesh.nodes.length, 8);
+
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 0.25
+  });
+  assert.equal(active.mesh.nodes.length, lowLevel.mesh.nodes.length);
+  assert.deepEqual(active.mesh.elements, lowLevel.mesh.elements);
+  assert.deepEqual(mesh, snapshot);
+  assert.deepEqual(session, before);
 });
 
 test("final conformance failures use structured conformance diagnostics", () => {
