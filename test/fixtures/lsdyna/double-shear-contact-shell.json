@@ -1,0 +1,23 @@
+{
+  "selectedElementIds": [
+    75,
+    76,
+    84,
+    85,
+    105,
+    106,
+    114,
+    115
+  ],
+  "options": {
+    "hexRefinementRatio": 2,
+    "hexTwoToOneSelectionMode": "local",
+    "regularizeHexSelection": false
+  },
+  "expectedStatus": "direct",
+  "expectedInputNodeCount": 320,
+  "expectedInputElementCount": 189,
+  "expectedOutputNodeCount": 756,
+  "expectedOutputElementCount": 615,
+  "minimumScaledJacobian": 0.12
+}

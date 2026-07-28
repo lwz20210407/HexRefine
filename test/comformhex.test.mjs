@@ -13,6 +13,7 @@ import {
   iterateNativeSessionVtkLines,
   iteratePreparedInpLines,
   meshFromSerializable,
+  meshToLsdynaKeyword,
   meshToLegacyVtk,
   meshSelection,
   parseLegacyVtkMesh,
@@ -22,6 +23,42 @@ import {
   refinementOps,
   replayHexRefineCommandScript
 } from "../dist/index.js";
+
+function loadLsdynaRegressionFixture(name) {
+  const root = new URL("./fixtures/lsdyna/", import.meta.url);
+  const keyword = readFileSync(new URL(`${name}.k`, root), "utf8");
+  const manifest = JSON.parse(
+    readFileSync(new URL(`${name}.json`, root), "utf8")
+  );
+  return {
+    keyword,
+    manifest,
+    mesh: parseMeshText(keyword, `${name}.k`)
+  };
+}
+
+function assertMeshOnlyKeyword(keyword) {
+  const keywords = keyword
+    .split(/\r?\n/)
+    .map((line) => line.trim().toUpperCase())
+    .filter((line) => line.startsWith("*"));
+  assert.deepEqual(keywords, [
+    "*KEYWORD",
+    "*NODE",
+    "*ELEMENT_SOLID",
+    "*END"
+  ]);
+}
+
+function assertPoint(actual, expected, tolerance) {
+  assert.equal(actual.length, expected.length);
+  for (let axis = 0; axis < expected.length; axis += 1) {
+    assert.ok(
+      Math.abs(actual[axis] - expected[axis]) <= tolerance,
+      `coordinate ${axis}: ${actual[axis]} != ${expected[axis]}`
+    );
+  }
+}
 
 function inpSetIds(text, keyword, name) {
   const lines = text.split(/\r?\n/);
@@ -453,6 +490,55 @@ test("HexRefine refines an anonymized real-deck O-grid gauge slab at 2:1", () =>
   assert.ok((result.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0.25);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-8).ok, true);
 });
+
+for (const name of [
+  "tension-gauge-slab",
+  "compression-ogrid-ring",
+  "double-shear-contact-shell"
+]) {
+  test(`HexRefine refines and round-trips ${name}`, () => {
+    const { keyword, manifest, mesh } =
+      loadLsdynaRegressionFixture(name);
+    assertMeshOnlyKeyword(keyword);
+    assert.equal(mesh.nodes.length, manifest.expectedInputNodeCount);
+    assert.equal(mesh.elements.length, manifest.expectedInputElementCount);
+
+    const result = refinementOps.refineByElementIdsWithReport(
+      mesh,
+      manifest.selectedElementIds,
+      manifest.options
+    );
+    assert.equal(result.twoToOne.status, manifest.expectedStatus);
+    assert.equal(result.mesh.nodes.length, manifest.expectedOutputNodeCount);
+    assert.equal(
+      result.mesh.elements.length,
+      manifest.expectedOutputElementCount
+    );
+    assert.equal(checkNoHangingNodes(result.mesh, 1e-8).ok, true);
+    assert.ok(
+      result.quality.childMinimumOrientedScaledJacobian
+      >= manifest.minimumScaledJacobian
+    );
+    assert.equal(
+      manifest.selectedElementIds.every((parentElementId) =>
+        result.cellData.filter((cell) =>
+          cell.parentElementId === parentElementId
+          && cell.role === "selected"
+        ).length === 8
+      ),
+      true
+    );
+
+    const output = meshToLsdynaKeyword(result.mesh, { partId: 1 });
+    assertMeshOnlyKeyword(output);
+    const reparsed = parseMeshText(output, `${name}-refined.k`);
+    assert.deepEqual(reparsed.elements, result.mesh.elements);
+    assert.equal(reparsed.nodes.length, result.mesh.nodes.length);
+    for (let index = 0; index < reparsed.nodes.length; index += 1) {
+      assertPoint(reparsed.nodes[index], result.mesh.nodes[index], 1e-8);
+    }
+  });
+}
 
 test("HexRefine project rejects non-quad and non-hex VTK and Abaqus INP imports", () => {
   const tetraInp = [
