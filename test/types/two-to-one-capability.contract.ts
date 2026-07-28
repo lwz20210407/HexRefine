@@ -1,5 +1,6 @@
 import type {
   AggregateRefinementPlanSummary,
+  Mesh,
   PlannedTwoToOneHexRefinement,
   RefineOptions,
   RefinementSessionPatchOptions,
@@ -12,6 +13,7 @@ import type {
   TwoToOnePlanningDiagnostic,
   TwoToOnePlanningError,
   TwoToOnePlanningErrorDto,
+  TwoToOnePlanningOptions,
   TwoToOnePlanningStatus,
   TwoToOneTopologyClass,
   planTwoToOneHexRefinement,
@@ -115,6 +117,19 @@ type PlannerReturnContract = Expect<Equal<
   ReturnType<typeof planTwoToOneHexRefinement>,
   PlannedTwoToOneHexRefinement
 >>;
+
+type PlannerOptionsContract = Expect<Equal<
+  NonNullable<Parameters<typeof planTwoToOneHexRefinement>[2]>,
+  TwoToOnePlanningOptions
+>>;
+
+declare const planningMesh: Mesh;
+declare const planningOptions: TwoToOnePlanningOptions;
+declare const planner: typeof planTwoToOneHexRefinement;
+planner(planningMesh, [1], planningOptions);
+planner(planningMesh, [1], { includeTransitions: true });
+// @ts-expect-error the public transition planner cannot disable transitions
+planner(planningMesh, [1], { includeTransitions: false });
 
 type RefinementResultReportContract = Expect<Equal<
   RefinementResult["twoToOne"],

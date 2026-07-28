@@ -61,7 +61,10 @@ function buildHexClassifiedPlanFromNormalizedSelection(
       twoToOne: buildDirectReport(mesh, selected, replacements, "mapped")
     };
   }
-  const planned = planTwoToOneHexRefinement(mesh, selected, options);
+  const planned = planTwoToOneHexRefinement(mesh, selected, {
+    ...options,
+    includeTransitions: true
+  });
   return {
     replacements: planned.replacements,
     twoToOne: planned.report

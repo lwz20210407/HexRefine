@@ -264,7 +264,8 @@ function buildRefinementResult(
     mesh,
     cellData,
     summary: {
-      selectedElementCount,
+      selectedElementCount:
+        twoToOne?.effectiveSelectedCellIds.length ?? selectedElementCount,
       faceTransitionElementCount: countRole("face-transition"),
       edgeTransitionElementCount: countRole("edge-transition"),
       cornerTransitionElementCount: countRole("corner-transition"),

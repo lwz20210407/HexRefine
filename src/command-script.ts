@@ -2116,10 +2116,19 @@ function readHexTwoToOneCompensation(
   if (value === undefined) {
     return undefined;
   }
-  normalizeTwoToOneCompensation(0, {
+  const normalized = normalizeTwoToOneCompensation(0, {
     hexTwoToOneCompensation: value as TwoToOneCompensationOptions
   });
-  return value as TwoToOneCompensationOptions;
+  const source = value as TwoToOneCompensationOptions;
+  return Object.freeze({
+    ...(Object.hasOwn(source, "mode") ? { mode: normalized.mode } : {}),
+    ...(Object.hasOwn(source, "maxAddedParentLayers")
+      ? { maxAddedParentLayers: normalized.maxAddedParentLayers }
+      : {}),
+    ...(Object.hasOwn(source, "maxAddedParentCount")
+      ? { maxAddedParentCount: normalized.maxAddedParentCount }
+      : {})
+  });
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {

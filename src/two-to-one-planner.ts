@@ -18,6 +18,11 @@ import {
 } from "./two-to-one.js";
 import type { Mesh, RefineOptions } from "./types.js";
 
+export type TwoToOnePlanningOptions =
+  & Omit<RefineOptions, "includeTransitions">
+  & TwoToOneCompensationCarrier
+  & { includeTransitions?: true };
+
 export interface PlannedTwoToOneHexRefinement {
   replacements: TwoToOneReplacement[];
   report: TwoToOneCapabilityReport<number>;
@@ -47,8 +52,13 @@ interface RankableSuccessfulCandidate {
 export function planTwoToOneHexRefinement(
   mesh: Mesh,
   selectedElementIds: readonly number[],
-  options: RefineOptions & TwoToOneCompensationCarrier = {}
+  options: TwoToOnePlanningOptions = {}
 ): PlannedTwoToOneHexRefinement {
+  if ((options as RefineOptions).includeTransitions === false) {
+    throw new RangeError(
+      "planTwoToOneHexRefinement requires transitions to be enabled"
+    );
+  }
   const original = uniqueSorted(selectedElementIds);
   const compensation = normalizeTwoToOneCompensation(original.length, options);
 
@@ -63,7 +73,10 @@ export function planTwoToOneHexRefinement(
     directFailure = error;
   }
 
-  if (compensation.mode === "none") {
+  if (
+    compensation.mode === "none"
+    || directFailure.kind !== "selection-signature"
+  ) {
     throw publicPlanningError(directFailure, original, []);
   }
 
@@ -139,11 +152,12 @@ function oneLayerLogicalExpansionCandidates(
   if (selectedElementIds.length === 0) {
     return [];
   }
+  const latticeMesh = normalizedLatticeInferenceMesh(mesh, selectedElementIds);
   const tolerance = Math.max(
-    minElementEdgeLength(mesh) * 1e-8,
+    minElementEdgeLength(latticeMesh) * 1e-8,
     Number.EPSILON * 64
   );
-  const lattice = inferHexElementLattice(mesh, tolerance);
+  const lattice = inferHexElementLattice(latticeMesh, tolerance);
   const indices = selectedElementIds.map((elementId) =>
     lattice.indicesByElementId.get(elementId)
   );
@@ -207,6 +221,75 @@ function oneLayerLogicalExpansionCandidates(
     )
     || first.axis - second.axis
     || first.side - second.side
+  );
+}
+
+function normalizedLatticeInferenceMesh(
+  mesh: Mesh,
+  selectedElementIds: readonly number[]
+): Mesh {
+  const minimumEdge = minElementEdgeLength(mesh);
+  let coordinateScale = 0;
+  for (const point of mesh.nodes) {
+    for (const coordinate of point) {
+      if (!Number.isFinite(coordinate)) {
+        throw latticeResolutionError(
+          selectedElementIds,
+          "2:1 compensation lattice inference requires finite coordinates"
+        );
+      }
+      coordinateScale = Math.max(coordinateScale, Math.abs(coordinate));
+    }
+  }
+  const precisionFloor = coordinateScale * Number.EPSILON * 64;
+  if (
+    !Number.isFinite(minimumEdge)
+    || minimumEdge <= 0
+    || !Number.isFinite(precisionFloor)
+    || precisionFloor >= minimumEdge / 2
+  ) {
+    throw latticeResolutionError(
+      selectedElementIds,
+      `2:1 compensation lattice tolerance ${precisionFloor} reaches minimum edge ${minimumEdge} resolution limit`
+    );
+  }
+
+  const origin = mesh.nodes[0] ?? [];
+  const normalized: Mesh = {
+    ...mesh,
+    nodes: mesh.nodes.map((point) =>
+      point.map((coordinate, axis) =>
+        (coordinate - (origin[axis] ?? 0)) / minimumEdge
+      )
+    ),
+    elements: mesh.elements
+  };
+  const normalizedMinimumEdge = minElementEdgeLength(normalized);
+  const normalizedTolerance = Math.max(
+    normalizedMinimumEdge * 1e-8,
+    Number.EPSILON * 64
+  );
+  if (
+    !Number.isFinite(normalizedMinimumEdge)
+    || normalizedMinimumEdge <= 0
+    || normalizedTolerance >= normalizedMinimumEdge / 2
+  ) {
+    throw latticeResolutionError(
+      selectedElementIds,
+      `2:1 compensation lattice tolerance ${normalizedTolerance} reaches minimum edge ${normalizedMinimumEdge} resolution limit`
+    );
+  }
+  return normalized;
+}
+
+function latticeResolutionError(
+  selectedElementIds: readonly number[],
+  message: string
+): TwoToOnePlanningError<number> {
+  return new TwoToOnePlanningError(
+    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+    message,
+    planningDiagnostic(selectedElementIds, [])
   );
 }
 

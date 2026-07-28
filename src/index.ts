@@ -15,7 +15,8 @@ export * from "./types.js";
 export * from "./two-to-one-capability.js";
 export {
   planTwoToOneHexRefinement,
-  type PlannedTwoToOneHexRefinement
+  type PlannedTwoToOneHexRefinement,
+  type TwoToOnePlanningOptions
 } from "./two-to-one-planner.js";
 export * from "./conformance.js";
 export * from "./hex-quality.js";
