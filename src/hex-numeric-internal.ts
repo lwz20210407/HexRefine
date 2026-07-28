@@ -283,7 +283,7 @@ function growExpansion(
     }
     accumulator = sum;
   }
-  if (accumulator !== 0 || result.length === 0) {
+  if (accumulator !== 0) {
     result.push(accumulator);
   }
   return result;

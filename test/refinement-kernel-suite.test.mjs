@@ -2424,6 +2424,52 @@ test("Hex determinant preserves B=2**30 cancellation across every axis order", (
   }
 });
 
+test("Hex determinant retains a low-scale residual after high-scale cancellation", () => {
+  const high = 2 ** 1000;
+  const small = 2 ** -1000;
+  const columns = [
+    [high, high, small],
+    [high, high, 0],
+    [small, 0, small]
+  ];
+  const permutations = [
+    { order: [0, 1, 2], sign: 1 },
+    { order: [0, 2, 1], sign: -1 },
+    { order: [1, 0, 2], sign: -1 },
+    { order: [1, 2, 0], sign: 1 },
+    { order: [2, 0, 1], sign: 1 },
+    { order: [2, 1, 0], sign: -1 }
+  ];
+
+  for (const { order, sign } of permutations) {
+    const matrix = order.map((index) => columns[index]);
+    assert.equal(robustDeterminant3(matrix), sign * -small, `${order}`);
+  }
+
+  const vertices = createParallelepipedHexVertices(
+    columns[0],
+    columns[1],
+    columns[2]
+  );
+  const volume = hexElementSignedVolume(vertices);
+  assert.equal(Number.isFinite(volume), true);
+  assert.equal(volume < 0, true);
+  assert.equal(Math.abs(volume / (-small / 4) - 1) < 1e-12, true);
+
+  const report = auditHexRefinementQuality(
+    vertices,
+    refineHexTo8Hex(vertices)
+  );
+  assert.equal(report.parentSignedVolume, volume);
+  assert.equal(report.childSignedVolume < 0, true);
+  assert.equal(
+    Math.abs(report.relativeVolumeError - 0.75) < 1e-12,
+    true
+  );
+  assert.equal(report.ok, false);
+  assert.equal(report.parentMinimumOrientedScaledJacobian <= 0, true);
+});
+
 test("underflowed Hex volume retains orientation for quality checks", () => {
   const tiny = 2 ** -400;
   const positive = createAnisotropicHexVertices(tiny, tiny, tiny);
