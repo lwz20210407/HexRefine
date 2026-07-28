@@ -2281,6 +2281,126 @@ test("HexRefine command replay snapshots 2:1 compensation getters exactly once",
   });
 });
 
+test("HexRefine command replay retains a self-deleting none compensation descriptor", () => {
+  let modeReads = 0;
+  const compensation = {};
+  Object.defineProperty(compensation, "mode", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      modeReads += 1;
+      delete compensation.mode;
+      return "none";
+    }
+  });
+
+  const replay = replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  );
+
+  assert.equal(modeReads, 1);
+  assert.equal(replay.session.undoStack.length, 0);
+  assert.match(
+    replay.warnings.join("; "),
+    /TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY/
+  );
+});
+
+test("HexRefine command replay captures maxCount before the mode getter deletes it", () => {
+  const reads = { mode: 0, maxAddedParentCount: 0 };
+  const compensation = {};
+  Object.defineProperties(compensation, {
+    mode: {
+      enumerable: true,
+      get() {
+        reads.mode += 1;
+        delete compensation.maxAddedParentCount;
+        return "selection";
+      }
+    },
+    maxAddedParentCount: {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads.maxAddedParentCount += 1;
+        return 0;
+      }
+    }
+  });
+
+  const replay = replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  );
+
+  assert.deepEqual(reads, { mode: 1, maxAddedParentCount: 1 });
+  assert.equal(replay.session.undoStack.length, 0);
+  assert.match(replay.warnings.join("; "), /TWO_TO_ONE_COMPENSATION_LIMIT/);
+});
+
+test("HexRefine command replay isolates mode from a mutating maxCount getter", () => {
+  const reads = { mode: 0, maxAddedParentCount: 0 };
+  const compensation = {};
+  Object.defineProperties(compensation, {
+    mode: {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads.mode += 1;
+        return "selection";
+      }
+    },
+    maxAddedParentCount: {
+      enumerable: true,
+      get() {
+        reads.maxAddedParentCount += 1;
+        Object.defineProperty(compensation, "mode", {
+          configurable: true,
+          enumerable: true,
+          value: "none"
+        });
+        return 32;
+      }
+    }
+  });
+
+  const replay = replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  );
+
+  assert.deepEqual(reads, { mode: 1, maxAddedParentCount: 1 });
+  assert.equal(replay.session.undoStack.at(-1)?.twoToOne?.status, "compensated");
+  assert.equal(replay.warnings.length, 0);
+});
+
+test("HexRefine command replay propagates compensation getter parse errors once", () => {
+  const getterError = new Error("compensation getter failed");
+  const reads = { mode: 0, maxAddedParentLayers: 0 };
+  const compensation = {};
+  Object.defineProperties(compensation, {
+    mode: {
+      enumerable: true,
+      get() {
+        reads.mode += 1;
+        throw getterError;
+      }
+    },
+    maxAddedParentLayers: {
+      enumerable: true,
+      get() {
+        reads.maxAddedParentLayers += 1;
+        return 1;
+      }
+    }
+  });
+
+  const error = captureError(() => replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  ));
+
+  assert.equal(error, getterError);
+  assert.deepEqual(reads, { mode: 1, maxAddedParentLayers: 0 });
+});
+
 test("HexRefine command replay warns and preserves the session when strict 2:1 compensation is disabled", () => {
   const baseline = replayHexRefineCommandScript(twoToOneCompensationReplayScript(
     undefined,
@@ -4469,6 +4589,36 @@ test("Hex 2:1 planner maps missing nodes without entering compensation", () => {
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
   assert.deepEqual(error.diagnostic.attemptedActions, []);
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("Hex 2:1 public planner maps valence failures without compensation", () => {
+  const mesh = createButterflyOgridBar(3);
+  const snapshot = structuredClone(mesh);
+  const error = captureError(() => planTwoToOneHexRefinement(mesh, [13, 15], {
+    hexTwoToOneCompensation: { mode: "selection" }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNSUPPORTED_VALENCE");
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
+  assert.equal(error.diagnostic.suggestion.kind, "remesh-source");
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("Hex 2:1 public planner maps nonmanifold topology without compensation", () => {
+  const mesh = createHexUnitCubeMesh(2, 1, 1);
+  mesh.elements.push([...mesh.elements[1]]);
+  const snapshot = structuredClone(mesh);
+  const error = captureError(() => planTwoToOneHexRefinement(mesh, [1], {
+    hexTwoToOneCompensation: { mode: "selection" }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /nonmanifold/);
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
+  assert.equal(error.diagnostic.suggestion.kind, "remesh-source");
   assert.deepEqual(mesh, snapshot);
 });
 

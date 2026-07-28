@@ -2116,19 +2116,33 @@ function readHexTwoToOneCompensation(
   if (value === undefined) {
     return undefined;
   }
-  const normalized = normalizeTwoToOneCompensation(0, {
-    hexTwoToOneCompensation: value as TwoToOneCompensationOptions
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("hexTwoToOneCompensation must be a non-null plain object");
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("hexTwoToOneCompensation must be a non-null plain object");
+  }
+
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const snapshot: Record<string, unknown> = {};
+  for (const key of [
+    "mode",
+    "maxAddedParentLayers",
+    "maxAddedParentCount"
+  ] as const) {
+    const descriptor = descriptors[key];
+    if (descriptor === undefined) {
+      continue;
+    }
+    snapshot[key] = "value" in descriptor
+      ? descriptor.value
+      : descriptor.get?.call(value);
+  }
+  normalizeTwoToOneCompensation(0, {
+    hexTwoToOneCompensation: snapshot
   });
-  const source = value as TwoToOneCompensationOptions;
-  return Object.freeze({
-    ...(Object.hasOwn(source, "mode") ? { mode: normalized.mode } : {}),
-    ...(Object.hasOwn(source, "maxAddedParentLayers")
-      ? { maxAddedParentLayers: normalized.maxAddedParentLayers }
-      : {}),
-    ...(Object.hasOwn(source, "maxAddedParentCount")
-      ? { maxAddedParentCount: normalized.maxAddedParentCount }
-      : {})
-  });
+  return Object.freeze(snapshot) as TwoToOneCompensationOptions;
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {
