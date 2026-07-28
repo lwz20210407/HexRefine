@@ -3031,6 +3031,7 @@ test("HexRefine shared session selection prep matches the GUI Hex core workflow"
   const session = createRefinementSession(createHexUnitCubeMesh(10, 2, 1));
   const active = buildActiveMeshWithMap(session, {
     mergeNodes: true,
+    mergeTolerance: 1e-9,
     includeCellIdByElementId: false,
     includeElementIdByCellId: false,
     includeSessionNodeIdByNodeId: false,
@@ -3063,6 +3064,7 @@ test("HexRefine shared session selection prep regularizes disconnected Hex regio
   const session = createRefinementSession(createHexUnitCubeMesh(12, 6, 6));
   const active = buildActiveMeshWithMap(session, {
     mergeNodes: true,
+    mergeTolerance: 1e-9,
     includeCellIdByElementId: false,
     includeElementIdByCellId: false,
     includeSessionNodeIdByNodeId: false,
@@ -3099,6 +3101,7 @@ test("HexRefine shared session selection prep uses a hollow uvw shell before gro
   const session = createRefinementSession(createHexUnitCubeMesh(7, 7, 7));
   const active = buildActiveMeshWithMap(session, {
     mergeNodes: true,
+    mergeTolerance: 1e-9,
     includeCellIdByElementId: false,
     includeElementIdByCellId: false,
     includeSessionNodeIdByNodeId: false,
@@ -3159,6 +3162,7 @@ test("HexRefine shared session selection prep omits transition support on model 
   const session = createRefinementSession(createHexUnitCubeMesh(7, 7, 7));
   const active = buildActiveMeshWithMap(session, {
     mergeNodes: true,
+    mergeTolerance: 1e-9,
     includeCellIdByElementId: false,
     includeElementIdByCellId: false,
     includeSessionNodeIdByNodeId: false,
@@ -5102,13 +5106,12 @@ test("Hex 2:1 transition-shell rebuilding rejects inconsistent or unproven activ
       candidate,
       [5e-7, -2.5e-7, 2.5e-7]
     );
-    const active = buildActiveMeshWithMap(session, {
-      mergeNodes: true,
-      mergeTolerance: 1e-6
-    });
-    if (mode === "unproven") {
-      delete active.mergeTolerance;
-    }
+    const active = mode === "unproven"
+      ? buildActiveMeshWithMap(session, { mergeNodes: false })
+      : buildActiveMeshWithMap(session, {
+          mergeNodes: true,
+          mergeTolerance: 1e-6
+        });
     const before = structuredClone(session);
 
     const error = captureError(() => refineSessionPatch(session, [candidate], {
@@ -5123,6 +5126,213 @@ test("Hex 2:1 transition-shell rebuilding rejects inconsistent or unproven activ
     assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
     assert.match(error.message, /activeBuild.*merge tolerance/i);
     assert.deepEqual(session, before);
+  }
+});
+
+test("session patch direct refine and preview reject activeBuild tolerance mismatch before planning", () => {
+  for (const operation of ["refine", "preview"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-6
+    });
+    const before = structuredClone(session);
+    const invoke = operation === "refine"
+      ? () => refineSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          mergeTolerance: 1e-8,
+          activeBuild: active
+        })
+      : () => previewSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          mergeTolerance: 1e-8,
+          activeBuild: active
+        });
+
+    const error = captureError(invoke);
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*merge tolerance/i);
+    assert.deepEqual(session, before);
+  }
+});
+
+test("active mesh builds snapshot geometry before deferred metadata reads", () => {
+  const firstSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const secondSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const first = buildActiveMeshWithMap(firstSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const second = buildActiveMeshWithMap(secondSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const firstResolution = first.geometryResolution;
+  const originalNode = [...second.mesh.nodes[0]];
+
+  firstSession.nodes[0] = [
+    firstSession.nodes[0][0] + 10,
+    firstSession.nodes[0][1],
+    firstSession.nodes[0][2]
+  ];
+  secondSession.nodes[0][0] += 10;
+
+  assert.deepEqual(second.mesh.nodes[0], originalNode);
+  assert.deepEqual(second.geometryResolution, firstResolution);
+  assert.equal(Object.isFrozen(second.mesh), true);
+  assert.equal(Object.isFrozen(second.mesh.nodes), true);
+  assert.equal(Object.isFrozen(second.mesh.nodes[0]), true);
+  assert.equal(Object.isFrozen(second.mesh.elements), true);
+  assert.equal(Object.isFrozen(second.mesh.elements[0]), true);
+  assert.equal(Object.isFrozen(second.geometryResolution), true);
+});
+
+test("session patch rejects stale activeBuild geometry, connectivity, and active leaves atomically", () => {
+  for (const mutation of [
+    "node-in-place",
+    "node-replacement",
+    "connectivity",
+    "active-leaf"
+  ]) {
+    for (const operation of ["refine", "preview"]) {
+      const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+      const active = buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      });
+      const secondCell = session.cells.get("e2");
+      const firstCellNodeIds = new Set(session.cells.get("e1").element);
+      const secondOnlyNodeId = secondCell.element.find(
+        (nodeId) => !firstCellNodeIds.has(nodeId)
+      );
+      assert.ok(secondOnlyNodeId);
+      if (mutation === "node-in-place") {
+        session.nodes[secondOnlyNodeId - 1][0] += 0.01;
+      } else if (mutation === "node-replacement") {
+        const point = session.nodes[secondOnlyNodeId - 1];
+        session.nodes[secondOnlyNodeId - 1] = [
+          point[0] + 0.01,
+          point[1],
+          point[2]
+        ];
+      } else if (mutation === "connectivity") {
+        secondCell.element = [
+          secondCell.element[1],
+          secondCell.element[0],
+          ...secondCell.element.slice(2)
+        ];
+      } else {
+        session.activeLeafIds.delete("e2");
+      }
+      const before = structuredClone(session);
+      const invoke = operation === "refine"
+        ? () => refineSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          })
+        : () => previewSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          });
+
+      const error = captureError(invoke);
+
+      assert.equal(error instanceof TwoToOnePlanningError, true, mutation);
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /activeBuild.*stale|session.*changed/i);
+      assert.deepEqual(session, before);
+    }
+  }
+});
+
+test("session patch invalidates an activeBuild after a successful session revision", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  refineSessionPatch(session, ["e1"], {
+    includeTransitions: false,
+    activeBuild: active
+  });
+  const before = structuredClone(session);
+
+  const error = captureError(() => previewSessionPatch(session, ["e2"], {
+    includeTransitions: false,
+    activeBuild: active
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /activeBuild.*stale|session.*revision/i);
+  assert.deepEqual(session, before);
+});
+
+test("active mesh build metadata is immutable and mapping tamper is rejected", () => {
+  const immutableSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const immutableBuild = buildActiveMeshWithMap(immutableSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  assert.throws(() => {
+    immutableBuild.geometryResolution.coordinateScale = 99;
+  }, TypeError);
+  assert.throws(() => {
+    Object.defineProperty(immutableBuild, "mergeTolerance", {
+      value: 99
+    });
+  }, TypeError);
+
+  for (const tamper of ["map", "array"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    if (tamper === "map") {
+      active.cellIdByElementId.set(1, "tampered");
+    } else {
+      active.cellIdsByElementIdArray[1] = "tampered";
+    }
+    const before = structuredClone(session);
+
+    const error = captureError(() => refineSessionPatch(session, ["e1"], {
+      includeTransitions: false,
+      activeBuild: active
+    }));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*metadata|activeBuild.*tamper/i);
+    assert.deepEqual(session, before);
+  }
+});
+
+test("session patch direct refine and preview use the full-geometry default tolerance", () => {
+  for (const operation of ["refine", "preview"]) {
+    const implicitSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const explicitSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const implicitOptions = { includeTransitions: false };
+    const explicitOptions = {
+      includeTransitions: false,
+      mergeTolerance: 1e-8
+    };
+    assert.equal(Object.hasOwn(implicitOptions, "activeBuild"), false);
+    assert.equal(Object.hasOwn(implicitOptions, "mergeTolerance"), false);
+
+    const implicitResult = operation === "refine"
+      ? refineSessionPatch(implicitSession, ["e1"], implicitOptions)
+      : previewSessionPatch(implicitSession, ["e1"], implicitOptions);
+    const explicitResult = operation === "refine"
+      ? refineSessionPatch(explicitSession, ["e1"], explicitOptions)
+      : previewSessionPatch(explicitSession, ["e1"], explicitOptions);
+
+    assert.deepEqual(implicitResult, explicitResult);
+    assert.deepEqual(implicitSession, explicitSession);
+    assert.equal(Object.hasOwn(implicitOptions, "activeBuild"), false);
+    assert.equal(Object.hasOwn(implicitOptions, "mergeTolerance"), false);
   }
 });
 
@@ -5239,7 +5449,7 @@ test("Hex 2:1 connected support rejects a collapsed same-owner face pair atomica
   assert.deepEqual(session, before);
 });
 
-test("Hex 2:1 transition-shell rebuilding reads a precomputed active geometry resolution once", () => {
+test("Hex 2:1 transition-shell rebuilding reuses immutable active geometry resolution metadata", () => {
   const {
     session,
     candidate,
@@ -5247,15 +5457,7 @@ test("Hex 2:1 transition-shell rebuilding reads a precomputed active geometry re
   } = createTransitionShellRegressionFixture();
   const resolution = firstRefined.geometryResolution;
   assert.ok(resolution);
-  let resolutionReadCount = 0;
-  Object.defineProperty(firstRefined, "geometryResolution", {
-    configurable: true,
-    enumerable: true,
-    get() {
-      resolutionReadCount += 1;
-      return resolution;
-    }
-  });
+  assert.equal(Object.isFrozen(resolution), true);
 
   const command = refineSessionPatch(session, [candidate], {
     hexRefinementRatio: 2,
@@ -5265,7 +5467,7 @@ test("Hex 2:1 transition-shell rebuilding reads a precomputed active geometry re
   });
 
   assert.equal(command.twoToOne.status, "compensated");
-  assert.equal(resolutionReadCount, 1);
+  assert.equal(firstRefined.geometryResolution, resolution);
   assert.ok(command.twoToOne.affectedComponentCellIds.length > 0);
 });
 
@@ -5721,10 +5923,10 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
   const restoredWarpOptions = {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
-    includeTransitions: true,
-    activeBuild: firstRefined
+    includeTransitions: true
   };
   assert.equal(Object.hasOwn(restoredWarpOptions, "mergeTolerance"), false);
+  assert.equal(Object.hasOwn(restoredWarpOptions, "activeBuild"), false);
   const command = refineSessionPatch(
     session,
     [boundaryCellId],
@@ -5820,7 +6022,10 @@ test("Hex 2:1 transition-shell rebuilding leaves a disjoint support component un
 test("HexRefine command script replays a second-level local 2:1 patch exactly", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
-  const initial = buildActiveMeshWithMap(session);
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
   const firstCoreCellIds = idsInIndexBlock(7, 7, 7, [2, 2, 2], [4, 4, 4])
     .map((elementId) => activeBuildCellIdByElementId(initial, elementId))
     .filter(Boolean);

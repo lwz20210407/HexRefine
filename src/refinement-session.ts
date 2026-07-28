@@ -100,7 +100,7 @@ export interface ActiveMeshBuildResult {
   mesh: Mesh;
   /** Actual node-merge tolerance used to construct `mesh`; absent when nodes were not merged. */
   readonly mergeTolerance?: number;
-  /** Lazily measured and cached geometric resolution of `mesh`. */
+  /** Build-time geometric resolution of the immutable `mesh` snapshot. */
   readonly geometryResolution?: ActiveMeshGeometryResolution;
   cellIdByElementId: Map<number, CellId>;
   elementIdByCellId: Map<CellId, number>;
@@ -113,9 +113,35 @@ export interface ActiveMeshBuildResult {
 }
 
 export interface ActiveMeshGeometryResolution {
-  coordinateScale: number;
-  minimumElementEdgeLength: number;
+  readonly coordinateScale: number;
+  readonly minimumElementEdgeLength: number;
 }
+
+interface ActiveMeshBuildCellSnapshot {
+  readonly id: CellId;
+  readonly cell: RefinementSessionCell;
+  readonly element: Element;
+  readonly elementReference: Element;
+}
+
+interface ActiveMeshBuildNodeSnapshot {
+  readonly id: number;
+  readonly point: Point;
+  readonly pointReference: Point;
+}
+
+interface ActiveMeshBuildMetadata {
+  readonly session: RefinementSession;
+  readonly activeCellIds: readonly CellId[];
+  readonly cells: readonly ActiveMeshBuildCellSnapshot[];
+  readonly nodes: readonly ActiveMeshBuildNodeSnapshot[];
+  readonly mesh: Mesh;
+  readonly geometryResolution: ActiveMeshGeometryResolution;
+  readonly mergeTolerance?: number;
+  readonly mappingSignature: string;
+}
+
+const activeMeshBuildMetadata = new WeakMap<ActiveMeshBuildResult, ActiveMeshBuildMetadata>();
 
 export type RefinementSessionNamedSets<T extends string | number> =
   | ReadonlyMap<string, readonly T[]>
@@ -254,7 +280,8 @@ export function buildActiveMeshWithMap(
 function buildActiveMeshForCellIdsWithMap(
   session: RefinementSession,
   activeIds: readonly CellId[],
-  options: BuildActiveMeshOptions = {}
+  options: BuildActiveMeshOptions = {},
+  resolveDefaultMergeTolerance?: (resolution: ActiveMeshGeometryResolution) => number
 ): ActiveMeshBuildResult {
   const includeSessionNodeIdByNodeId = options.includeSessionNodeIdByNodeId ?? true;
   const includeSessionNodeIdsByNodeId = options.includeSessionNodeIdsByNodeId ?? true;
@@ -328,13 +355,15 @@ function buildActiveMeshForCellIdsWithMap(
     if (options.includeElementIdsByNodeId) {
       result.elementIdsByNodeId = buildElementIdsByNodeId(mesh.elements);
     }
-    return attachActiveMeshBuildMetadata(result);
+    return attachActiveMeshBuildMetadata(result, session, activeIds);
   }
 
-  const measuredMinimumEdge = options.mergeTolerance === undefined
-    ? minElementEdgeLength(mesh)
+  const measuredResolution = options.mergeTolerance === undefined
+    ? measureActiveMeshGeometryResolution(mesh)
     : undefined;
-  const mergeTolerance = options.mergeTolerance ?? measuredMinimumEdge! * 0.0005;
+  const mergeTolerance = options.mergeTolerance
+    ?? resolveDefaultMergeTolerance?.(measuredResolution!)
+    ?? measuredResolution!.minimumElementEdgeLength * 0.0005;
   const merged = mergeCoincidentNodesWithMap(mesh, mergeTolerance);
   const nodeIdBySessionNodeId = new Map<number, number>();
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
@@ -382,8 +411,10 @@ function buildActiveMeshForCellIdsWithMap(
   }
   return attachActiveMeshBuildMetadata(
     result,
+    session,
+    activeIds,
     mergeTolerance,
-    measuredMinimumEdge
+    measuredResolution
   );
 }
 
@@ -492,35 +523,110 @@ function buildMergedActiveMeshDirect(
   if (options.includeElementIdsByNodeId) {
     result.elementIdsByNodeId = buildElementIdsByNodeId(elements);
   }
-  return attachActiveMeshBuildMetadata(result, tolerance);
+  return attachActiveMeshBuildMetadata(result, session, activeIds, tolerance);
 }
 
 function attachActiveMeshBuildMetadata(
   result: ActiveMeshBuildResult,
+  session: RefinementSession,
+  activeIds: readonly CellId[],
   mergeTolerance?: number,
-  measuredMinimumEdge?: number
+  measuredResolution?: ActiveMeshGeometryResolution
 ): ActiveMeshBuildResult {
-  let resolution: ActiveMeshGeometryResolution | undefined;
+  const mesh = snapshotActiveMesh(result.mesh);
+  result.mesh = mesh;
+  const geometryResolution = Object.freeze(
+    measuredResolution ?? measureActiveMeshGeometryResolution(mesh)
+  );
   if (mergeTolerance !== undefined) {
     Object.defineProperty(result, "mergeTolerance", {
-      configurable: true,
+      configurable: false,
       enumerable: true,
       value: mergeTolerance,
       writable: false
     });
   }
   Object.defineProperty(result, "geometryResolution", {
-    configurable: true,
+    configurable: false,
     enumerable: true,
-    get() {
-      resolution ??= measureActiveMeshGeometryResolution(
-        result.mesh,
-        measuredMinimumEdge
-      );
-      return resolution;
-    }
+    value: geometryResolution,
+    writable: false
   });
+  const cells = activeIds.map((cellId): ActiveMeshBuildCellSnapshot => {
+    const cell = requiredCell(session, cellId);
+    return Object.freeze({
+      id: cellId,
+      cell,
+      element: Object.freeze([...cell.element]) as unknown as Element,
+      elementReference: cell.element
+    });
+  });
+  const referencedNodeIds = new Set(cells.flatMap((cell) => cell.element));
+  const nodes = [...referencedNodeIds].sort((a, b) => a - b).map(
+    (nodeId): ActiveMeshBuildNodeSnapshot => {
+      const point = session.nodes[nodeId - 1];
+      if (!point) {
+        throw new Error(`active mesh snapshot references missing session node ${nodeId}`);
+      }
+      return Object.freeze({
+        id: nodeId,
+        point: Object.freeze([...point]) as unknown as Point,
+        pointReference: point
+      });
+    }
+  );
+  const metadata: ActiveMeshBuildMetadata = Object.freeze({
+    session,
+    activeCellIds: Object.freeze([...activeIds]),
+    cells: Object.freeze(cells),
+    nodes: Object.freeze(nodes),
+    mesh,
+    geometryResolution,
+    ...(mergeTolerance === undefined ? {} : { mergeTolerance }),
+    mappingSignature: activeMeshBuildMappingSignature(result)
+  });
+  Object.freeze(result);
+  activeMeshBuildMetadata.set(result, metadata);
   return result;
+}
+
+function snapshotActiveMesh(mesh: Mesh): Mesh {
+  const nodes = Object.freeze(
+    mesh.nodes.map((point) => Object.freeze([...point]) as unknown as Point)
+  ) as unknown as Point[];
+  const elements = Object.freeze(
+    mesh.elements.map((element) => Object.freeze([...element]) as unknown as Element)
+  ) as unknown as Element[];
+  return Object.freeze(
+    mesh.kind === undefined
+      ? { nodes, elements }
+      : { kind: mesh.kind, nodes, elements }
+  );
+}
+
+function activeMeshBuildMappingSignature(build: ActiveMeshBuildResult): string {
+  const numericEntries = <T>(map: ReadonlyMap<number, T>): Array<[number, T]> =>
+    [...map.entries()].sort((first, second) => first[0] - second[0]);
+  const stringEntries = <T>(map: ReadonlyMap<string, T>): Array<[string, T]> =>
+    [...map.entries()].sort((first, second) => first[0].localeCompare(second[0]));
+  return JSON.stringify({
+    cellIdByElementId: numericEntries(build.cellIdByElementId),
+    elementIdByCellId: stringEntries(build.elementIdByCellId),
+    cellIdsByElementIdArray: build.cellIdsByElementIdArray === undefined
+      ? undefined
+      : Array.from(build.cellIdsByElementIdArray),
+    elementIdByCellOrdinalArray: build.elementIdByCellOrdinalArray === undefined
+      ? undefined
+      : Array.from(build.elementIdByCellOrdinalArray),
+    nodeIdBySessionNodeId: numericEntries(build.nodeIdBySessionNodeId),
+    sessionNodeIdByNodeId: numericEntries(build.sessionNodeIdByNodeId),
+    sessionNodeIdsByNodeId: numericEntries(build.sessionNodeIdsByNodeId)
+      .map(([nodeId, sessionNodeIds]) => [nodeId, [...sessionNodeIds]]),
+    elementIdsByNodeId: build.elementIdsByNodeId === undefined
+      ? undefined
+      : numericEntries(build.elementIdsByNodeId)
+        .map(([nodeId, elementIds]) => [nodeId, [...elementIds]])
+  });
 }
 
 function measureActiveMeshGeometryResolution(
@@ -883,28 +989,112 @@ export function refineSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
-  assertValidSessionFaceTolerance(options.mergeTolerance);
+  const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
   let plan: RefinementSessionPatchPlan;
   try {
-    plan = buildRefinementSessionPatchPlan(session, cellIds, options);
+    plan = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
   } catch (error) {
     const faceResolution = resolveExistingTransitionShellRebuild(
       session,
       cellIds,
-      options,
+      resolvedOptions,
       error
     );
     if (faceResolution !== undefined) {
       return refineSessionPatchWithRebuiltTransitionShell(
         session,
         cellIds,
-        options,
+        resolvedOptions,
         faceResolution
       );
     }
     throw error;
   }
   return applyRefinementSessionPatchPlan(session, plan);
+}
+
+type ResolvedRefinementSessionPatchOptions = RefinementSessionPatchOptions & {
+  activeBuild: ActiveMeshBuildResult;
+  mergeTolerance: number;
+};
+
+function resolveSessionPatchOptions(
+  session: RefinementSession,
+  diagnosticCellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions
+): ResolvedRefinementSessionPatchOptions {
+  assertValidSessionFaceTolerance(options.mergeTolerance);
+  const activeCellIds = stableCellIds(session.activeLeafIds);
+  let activeBuild = options.activeBuild;
+  if (activeBuild !== undefined) {
+    assertActiveBuildCoversSessionCells(
+      session,
+      activeBuild,
+      activeCellIds,
+      diagnosticCellIds
+    );
+    const recordedTolerance = activeBuild.mergeTolerance;
+    if (
+      options.mergeTolerance !== undefined
+      && (
+        recordedTolerance === undefined
+        || options.mergeTolerance !== recordedTolerance
+      )
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        recordedTolerance === undefined
+          ? "external activeBuild does not record a merge tolerance, so requested planning consistency cannot be proven"
+          : `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${options.mergeTolerance}`
+      );
+    }
+  } else {
+    const buildOptions: BuildActiveMeshOptions = {
+      mergeNodes: true,
+      includeSessionNodeIdByNodeId: false,
+      includeSessionNodeIdsByNodeId: false,
+      ...(options.mergeTolerance === undefined
+        ? {}
+        : { mergeTolerance: options.mergeTolerance })
+    };
+    activeBuild = buildActiveMeshForCellIdsWithMap(
+      session,
+      activeCellIds,
+      buildOptions,
+      (resolution) => effectiveSessionFaceTolerance(
+        resolution.minimumElementEdgeLength,
+        resolution.coordinateScale
+      )
+    );
+  }
+  const geometryResolution = activeBuild.geometryResolution;
+  if (geometryResolution === undefined) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "activeBuild does not expose immutable geometry resolution metadata"
+    );
+  }
+  const mergeTolerance = activeBuild.mergeTolerance
+    ?? effectiveSessionFaceTolerance(
+      geometryResolution.minimumElementEdgeLength,
+      geometryResolution.coordinateScale
+    );
+  const faceTolerance = effectiveSessionFaceTolerance(
+    geometryResolution.minimumElementEdgeLength,
+    geometryResolution.coordinateScale,
+    mergeTolerance
+  );
+  assertSessionFaceGeometryResolution(
+    diagnosticCellIds,
+    faceTolerance,
+    geometryResolution.minimumElementEdgeLength,
+    activeCellIds.length > 0
+  );
+  return {
+    ...options,
+    activeBuild,
+    mergeTolerance
+  };
 }
 
 function applyRefinementSessionPatchPlan(
@@ -1636,17 +1826,82 @@ function assertActiveBuildCoversSessionCells(
   cellIds: readonly CellId[],
   diagnosticCellIds: readonly CellId[]
 ): void {
+  const metadata = activeMeshBuildMetadata.get(build);
   if (
-    build.mesh.elements.length !== cellIds.length
-    || cellIds.some((cellId) =>
-      activeBuildElementIdByCellId(session, build, cellId) === undefined
-    )
+    metadata === undefined
+    || build.mesh !== metadata.mesh
+    || build.geometryResolution !== metadata.geometryResolution
+    || build.mergeTolerance !== metadata.mergeTolerance
+    || activeMeshBuildMappingSignature(build) !== metadata.mappingSignature
   ) {
     throw sessionFaceResolutionError(
       diagnosticCellIds,
-      "external activeBuild does not cover the active session cells required for transition face matching"
+      "external activeBuild metadata or mappings were tampered with"
     );
   }
+  if (metadata.session !== session) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "external activeBuild is stale because it belongs to a different session"
+    );
+  }
+  const currentActiveCellIds = stableCellIds(session.activeLeafIds);
+  if (
+    !sameScalarSet(metadata.activeCellIds, currentActiveCellIds)
+    || !sameScalarSet(metadata.activeCellIds, cellIds)
+    || build.mesh.elements.length !== cellIds.length
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "external activeBuild is stale because the session active leaves changed"
+    );
+  }
+  for (const snapshot of metadata.cells) {
+    const cell = session.cells.get(snapshot.id);
+    if (
+      cell !== snapshot.cell
+      || cell.element !== snapshot.elementReference
+      || !sameScalarArray(cell.element, snapshot.element)
+      || activeBuildElementIdByCellId(session, build, snapshot.id) === undefined
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        "external activeBuild is stale because the session cell connectivity changed"
+      );
+    }
+  }
+  for (const snapshot of metadata.nodes) {
+    const point = session.nodes[snapshot.id - 1];
+    if (
+      point !== snapshot.pointReference
+      || !sameScalarArray(point, snapshot.point)
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        "external activeBuild is stale because the session geometry changed"
+      );
+    }
+  }
+}
+
+function sameScalarArray<T>(
+  first: readonly T[] | undefined,
+  second: readonly T[]
+): boolean {
+  return first !== undefined
+    && first.length === second.length
+    && first.every((value, index) => Object.is(value, second[index]));
+}
+
+function sameScalarSet<T>(
+  first: readonly T[],
+  second: readonly T[]
+): boolean {
+  if (first.length !== second.length) {
+    return false;
+  }
+  const secondValues = new Set(second);
+  return first.every((value) => secondValues.has(value));
 }
 
 function assertSessionFaceGeometryResolution(
@@ -1888,24 +2143,12 @@ export function previewSessionPatch(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementPreview<CellId> {
-  assertValidSessionFaceTolerance(options.mergeTolerance);
-  const sourceActive = options.activeBuild ?? buildActiveMeshWithMap(session, {
-    mergeNodes: true,
-    includeSessionNodeIdByNodeId: false,
-    includeSessionNodeIdsByNodeId: false,
-    ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
-  });
+  const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
+  const sourceActive = resolvedOptions.activeBuild;
   let patch: RefinementSessionPatchPlan;
   try {
-    patch = buildRefinementSessionPatchPlan(session, cellIds, {
-      ...options,
-      activeBuild: sourceActive
-    });
+    patch = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
   } catch (error) {
-    const resolvedOptions = {
-      ...options,
-      activeBuild: sourceActive
-    };
     const faceResolution = resolveExistingTransitionShellRebuild(
       session,
       cellIds,

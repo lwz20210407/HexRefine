@@ -164,6 +164,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
       return undefined;
     }
     const soleMatch = matches[0];
+    // A distinct stored face record from the same owner is still ambiguous.
     const distinctSameOwnerFace = matches.length === 1
       && soleMatch !== query
       && soleMatch?.owner === query.owner;
