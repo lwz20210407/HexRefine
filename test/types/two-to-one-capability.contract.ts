@@ -1,6 +1,8 @@
 import type {
   AggregateRefinementPlanSummary,
+  PlannedTwoToOneHexRefinement,
   RefineOptions,
+  RefinementSessionPatchOptions,
   RefinementPlanSummary,
   RefinementPreview,
   RefinementResult,
@@ -12,6 +14,7 @@ import type {
   TwoToOnePlanningErrorDto,
   TwoToOnePlanningStatus,
   TwoToOneTopologyClass,
+  planTwoToOneHexRefinement,
   serializeTwoToOnePlanningError
 } from "../../src/index.js";
 
@@ -101,6 +104,16 @@ type PlanningErrorSerializerContract = Expect<
 type RefineOptionsCompensationContract = Expect<Equal<
   RefineOptions["hexTwoToOneCompensation"],
   TwoToOneCompensationOptions | undefined
+>>;
+
+type SessionOptionsCompensationContract = Expect<Equal<
+  RefinementSessionPatchOptions["hexTwoToOneCompensation"],
+  TwoToOneCompensationOptions | undefined
+>>;
+
+type PlannerReturnContract = Expect<Equal<
+  ReturnType<typeof planTwoToOneHexRefinement>,
+  PlannedTwoToOneHexRefinement
 >>;
 
 type RefinementResultReportContract = Expect<Equal<

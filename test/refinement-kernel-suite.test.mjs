@@ -19,6 +19,7 @@ import {
 } from "../dist/two-to-one.js";
 import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
+import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
 const {
   auditHexRefinementPatchQuality,
@@ -58,6 +59,7 @@ const {
   minimumOrientedHexCornerScaledJacobian,
   cloneTwoToOneCapabilityReport,
   normalizeTwoToOneCompensation,
+  planTwoToOneHexRefinement,
   replayHexRefineCommandScript,
   parseMeshText,
   refineHexTo13Hex,
@@ -3966,6 +3968,227 @@ test("Hex 2:1 direct flat plan reports a mapped local-sweep capability", () => {
   });
 });
 
+test("Hex 2:1 selection compensation minimally expands one bounded parent layer", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const original = idsInIndexBlock(2, 2, 5, [0, 0, 1], [1, 1, 1]);
+  const expectedAdded = idsInIndexBlock(2, 2, 5, [0, 0, 0], [1, 1, 0]);
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    }
+  };
+  const planned = planTwoToOneHexRefinement(mesh, original, options);
+  const result = refineByElementIdsWithReport(mesh, original, options);
+  const affectedParentIds = [
+    ...new Set(planned.replacements.map((replacement) => replacement.elementId))
+  ].sort((first, second) => first - second);
+
+  assert.deepEqual(result.twoToOne, planned.report);
+  assert.equal(result.twoToOne.status, "compensated");
+  assert.equal(result.twoToOne.topologyClass, "periodic-ogrid");
+  assert.deepEqual(result.twoToOne.originalSelectedCellIds, original);
+  assert.deepEqual(
+    result.twoToOne.effectiveSelectedCellIds,
+    [...expectedAdded, ...original].sort((first, second) => first - second)
+  );
+  assert.deepEqual(result.twoToOne.actions, [{
+    kind: "selection-expand",
+    reason: "completed a conforming one-layer 2:1 template field",
+    addedParentCellIds: expectedAdded,
+    replacedTransitionCellIds: []
+  }]);
+  assert.deepEqual(result.twoToOne.affectedComponentCellIds, affectedParentIds);
+  assert.equal(result.twoToOne.preservedFarFieldCellCount, 8);
+  assert.equal(checkNoHangingNodes(result.mesh, 1e-9).ok, true);
+  assert.equal(result.quality.ok, true);
+  assert.ok(result.quality.childMinimumOrientedScaledJacobian > 0);
+  assert.deepEqual(
+    result.cellData.filter((cell) => cell.parentElementId === 20),
+    [{ parentElementId: 20, role: "unchanged", templateCode: 0 }]
+  );
+});
+
+test("Hex 2:1 selection compensation preserves an already direct core", () => {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    }
+  };
+  const planned = planTwoToOneHexRefinement(mesh, [selectedElementId], options);
+
+  assert.equal(planned.report.status, "direct");
+  assert.deepEqual(planned.report.actions, []);
+  assert.deepEqual(planned.report.originalSelectedCellIds, [selectedElementId]);
+  assert.deepEqual(planned.report.effectiveSelectedCellIds, [selectedElementId]);
+});
+
+test("Hex 2:1 selection compensation limit is atomic and retains attempted actions", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const snapshot = structuredClone(mesh);
+  const original = idsInIndexBlock(2, 2, 5, [0, 0, 1], [1, 1, 1]);
+  const error = captureError(() => refineByElementIdsWithReport(mesh, original, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 0
+    }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+  assert.ok(error.diagnostic.attemptedActions.length > 0);
+  assert.equal(mesh.elements.length, 20);
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("Hex 2:1 strict mode rejects a compensable selection without expansion", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const snapshot = structuredClone(mesh);
+  const original = idsInIndexBlock(2, 2, 5, [0, 0, 1], [1, 1, 1]);
+  const error = captureError(() => refineByElementIdsWithReport(mesh, original, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    regularizeHexSelection: false,
+    hexTwoToOneCompensation: {
+      mode: "none"
+    }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, original);
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("Hex 2:1 selection compensation treats zero added layers as a limit", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const original = idsInIndexBlock(2, 2, 5, [0, 0, 1], [1, 1, 1]);
+  const error = captureError(() => planTwoToOneHexRefinement(mesh, original, {
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 0,
+      maxAddedParentCount: 32
+    }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+  assert.ok(error.diagnostic.attemptedActions.length > 0);
+});
+
+test("Hex 2:1 selection compensation does not box-fill a non-rectangular selection", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const nonRectangular = [5, 6, 8];
+  const error = captureError(() => planTwoToOneHexRefinement(
+    mesh,
+    nonRectangular,
+    {
+      hexTwoToOneCompensation: {
+        mode: "selection",
+        maxAddedParentLayers: 1,
+        maxAddedParentCount: 32
+      }
+    }
+  ));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, nonRectangular);
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
+});
+
+test("Hex 2:1 selection compensation skips incomplete logical expansion ranges", () => {
+  const mesh = createButterflyOgridBar(5);
+  const selected = [25, 26, 27, 28];
+  const error = captureError(() => planTwoToOneHexRefinement(mesh, selected, {
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    }
+  }));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.equal(
+    error.diagnostic.attemptedActions.every(
+      (action) => action.addedParentCellIds.length > 0
+    ),
+    true
+  );
+});
+
+test("Hex 2:1 selection compensation ranks multiple successful candidates deterministically", () => {
+  const candidate = (
+    name,
+    addedCount,
+    replacementCount,
+    childMinimumOrientedScaledJacobian,
+    effectiveSelectedCellIds
+  ) => ({
+    name,
+    addedParentCellIds: Array.from(
+      { length: addedCount },
+      (_, index) => index + 1
+    ),
+    direct: {
+      replacements: Array.from(
+        { length: replacementCount },
+        (_, index) => ({ elementId: index + 1 })
+      )
+    },
+    childMinimumOrientedScaledJacobian,
+    effectiveSelectedCellIds
+  });
+  const candidates = [
+    candidate("more-added", 2, 2, 0.9, [1]),
+    candidate("more-replacements", 1, 5, 0.9, [1]),
+    candidate("lower-quality", 1, 4, 0.2, [1]),
+    candidate("lexicographically-later", 1, 4, 0.3, [9]),
+    candidate("lexicographically-first", 1, 4, 0.3, [2])
+  ];
+
+  const ranked = twoToOnePlannerModule
+    .rankSuccessfulTwoToOneCandidates(candidates);
+
+  assert.deepEqual(
+    ranked.map((item) => item.name),
+    [
+      "lexicographically-first",
+      "lexicographically-later",
+      "lower-quality",
+      "more-replacements",
+      "more-added"
+    ]
+  );
+  assert.deepEqual(
+    candidates.map((item) => item.name),
+    [
+      "more-added",
+      "more-replacements",
+      "lower-quality",
+      "lexicographically-later",
+      "lexicographically-first"
+    ]
+  );
+});
+
 test("Hex 2:1 direct session plan maps and deep-copies capability ids", () => {
   const mesh = createHexUnitCubeMesh(5, 5, 5);
   const session = createRefinementSession(mesh);
@@ -3991,6 +4214,118 @@ test("Hex 2:1 direct session plan maps and deep-copies capability ids", () => {
     preview.twoToOne.affectedComponentCellIds,
     command.twoToOne.affectedComponentCellIds
   );
+});
+
+test("Hex 2:1 session selection compensation maps planning ids to cell ids", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const originalElementIds = idsInIndexBlock(
+    2,
+    2,
+    5,
+    [0, 0, 1],
+    [1, 1, 1]
+  );
+  const addedElementIds = idsInIndexBlock(2, 2, 5, [0, 0, 0], [1, 1, 0]);
+  const originalCellIds = originalElementIds.map((elementId) =>
+    activeBuildCellIdByElementId(active, elementId)
+  );
+  const addedCellIds = addedElementIds.map((elementId) =>
+    activeBuildCellIdByElementId(active, elementId)
+  );
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    },
+    activeBuild: active
+  };
+  const preview = previewSessionPatch(session, originalCellIds, options);
+  const command = refineSessionPatch(session, originalCellIds, options);
+  const refined = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  assert.deepEqual(preview.twoToOne, command.twoToOne);
+  assert.equal(command.twoToOne.status, "compensated");
+  assert.deepEqual(command.twoToOne.originalSelectedCellIds, originalCellIds);
+  assert.deepEqual(command.twoToOne.actions[0].addedParentCellIds, addedCellIds);
+  assert.deepEqual(
+    command.twoToOne.effectiveSelectedCellIds,
+    [...addedCellIds, ...originalCellIds]
+  );
+  assert.equal(command.twoToOne.preservedFarFieldCellCount, 8);
+  assert.equal(command.quality.ok, true);
+  assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
+  assert.ok(minimumCornerScaledJacobian(refined) > 0);
+});
+
+test("Hex 2:1 session strict mode rejects selection compensation atomically", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const originalCellIds = idsInIndexBlock(
+    2,
+    2,
+    5,
+    [0, 0, 1],
+    [1, 1, 1]
+  ).map((elementId) => activeBuildCellIdByElementId(active, elementId));
+  const before = structuredClone(session);
+  const error = captureError(() => refineSessionPatch(
+    session,
+    originalCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: {
+        mode: "none"
+      },
+      activeBuild: active
+    }
+  ));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, originalCellIds);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 session legacy rebuild false normalizes to strict compensation", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const session = createRefinementSession(mesh);
+  const active = buildActiveMeshWithMap(session);
+  const originalCellIds = idsInIndexBlock(
+    2,
+    2,
+    5,
+    [0, 0, 1],
+    [1, 1, 1]
+  ).map((elementId) => activeBuildCellIdByElementId(active, elementId));
+  const before = structuredClone(session);
+  const error = captureError(() => refineSessionPatch(
+    session,
+    originalCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      rebuildExistingTransitions: false,
+      activeBuild: active
+    }
+  ));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, originalCellIds);
+  assert.deepEqual(session, before);
 });
 
 test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", () => {
@@ -6810,6 +7145,33 @@ test("Hex 2:1 local refinement can reject rebuilding an existing transition shel
     }),
     /would create a nonconforming interface with an existing transition layer/
   );
+});
+
+test("Hex 2:1 selection compensation never rebuilds an existing transition shell", () => {
+  const {
+    session,
+    firstRefined,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const before = structuredClone(session);
+  const error = captureError(() => refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    hexTwoToOneCompensation: {
+      mode: "selection",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    },
+    activeBuild: firstRefined
+  }));
+
+  assert.equal(
+    error instanceof TwoToOnePlanningError
+      || error?.code === "EXISTING_TRANSITION_COLLISION",
+    true
+  );
+  assert.deepEqual(session, before);
 });
 
 test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () => {

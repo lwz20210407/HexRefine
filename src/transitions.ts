@@ -2,7 +2,7 @@ import type { BoundaryPair, Mesh, RefineOptions, RefinementRole, ReplaceElement 
 import { elementVertices, findBoundaryPairs, instantiateOnElement, minElementEdgeLength } from "./mesh.js";
 import { alignHexEdgeToVertical, alignHexFaceToBottom, sharedNodes } from "./topology.js";
 import { refineHexTo13Hex, refineHexTo27Hex, refineHexTo5Hex, refineHexTo8Hex } from "./templates.js";
-import { buildDirectTwoToOneHexPlanFromNormalizedSelection } from "./two-to-one.js";
+import { planTwoToOneHexRefinement } from "./two-to-one-planner.js";
 import {
   type TwoToOneCapabilityReport,
   type TwoToOneTopologyClass
@@ -61,15 +61,10 @@ function buildHexClassifiedPlanFromNormalizedSelection(
       twoToOne: buildDirectReport(mesh, selected, replacements, "mapped")
     };
   }
-  const direct = buildDirectTwoToOneHexPlanFromNormalizedSelection(mesh, selected);
+  const planned = planTwoToOneHexRefinement(mesh, selected, options);
   return {
-    replacements: direct.replacements,
-    twoToOne: buildDirectReport(
-      mesh,
-      selected,
-      direct.replacements,
-      direct.strategy === "local-sweep" ? "mapped" : "periodic-ogrid"
-    )
+    replacements: planned.replacements,
+    twoToOne: planned.report
   };
 }
 

@@ -7,7 +7,8 @@ import type {
   Point,
   ReadonlyMesh,
   RefinementPreview,
-  RefinementRole
+  RefinementRole,
+  RefineOptions
 } from "./types.js";
 import {
   elementVertices,
@@ -32,9 +33,12 @@ import { H1_FACES } from "./topology.js";
 import {
   cloneTwoToOneCapabilityReport,
   DirectTwoToOnePlanningError,
+  normalizeTwoToOneCompensation,
   TwoToOnePlanningError,
   type ReadonlyTwoToOneCapabilityReport,
-  type TwoToOneCapabilityReport
+  type TwoToOneCapabilityReport,
+  type TwoToOneCompensationCarrier,
+  type TwoToOneCompensationOptions
 } from "./two-to-one-capability.js";
 import {
   GeometricFaceIndex,
@@ -263,6 +267,7 @@ export interface RefinementSessionPatchOptions {
   includeTransitions?: boolean;
   hexRefinementRatio?: 2 | 3;
   hexTwoToOneSelectionMode?: "section" | "local";
+  hexTwoToOneCompensation?: TwoToOneCompensationOptions;
   /**
    * Rebuild one untouched supporting 2:1 shell when a nested local patch
    * reaches it. Set false to preserve strict collision rejection.
@@ -1808,8 +1813,12 @@ function resolveExistingTransitionShellRebuild(
   options: RefinementSessionPatchOptions,
   error: unknown
 ): SessionFaceResolution | undefined {
+  const compensation = normalizeTwoToOneCompensation(
+    new Set(cellIds).size,
+    options
+  );
   if (
-    options.rebuildExistingTransitions === false
+    compensation.mode !== "local-topology"
     || options.hexRefinementRatio !== 2
     || options.hexTwoToOneSelectionMode !== "local"
     || !(error instanceof Error)
@@ -1821,7 +1830,11 @@ function resolveExistingTransitionShellRebuild(
     return undefined;
   }
   const mayRebuild = error instanceof ExistingTransitionCollisionError
-    || (error instanceof HexPatchQualityError && error.code === "HEX_PATCH_VOLUME");
+    || (error instanceof HexPatchQualityError && error.code === "HEX_PATCH_VOLUME")
+    || (
+      error instanceof TwoToOnePlanningError
+      && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+    );
   if (!mayRebuild) {
     return undefined;
   }
@@ -2092,8 +2105,14 @@ function buildCompletedRebuiltSupportPlan(
     return buildRefinementSessionPatchPlan(session, selectedCellIds, options);
   } catch (error) {
     if (
-      !(error instanceof DirectTwoToOnePlanningError)
-      || error.kind !== "selection-signature"
+      !(
+        error instanceof DirectTwoToOnePlanningError
+        && error.kind === "selection-signature"
+      )
+      && !(
+        error instanceof TwoToOnePlanningError
+        && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+      )
     ) {
       throw error;
     }
@@ -3062,17 +3081,39 @@ function buildRefinementSessionPatchPlan(
     throw new Error("refinement selection contains cells outside the active mesh");
   }
 
-  const classifiedPlan = buildDefaultRefinementPlan(mutableMeshView(active.mesh), selectedElementIds, {
+  const planningOptions: RefineOptions & TwoToOneCompensationCarrier = {
     includeTransitions: options.includeTransitions ?? true,
     ...(options.hexRefinementRatio !== undefined
       ? { hexRefinementRatio: options.hexRefinementRatio }
       : {}),
+    ...(options.hexTwoToOneSelectionMode === undefined
+      ? {}
+      : { hexTwoToOneSelectionMode: options.hexTwoToOneSelectionMode }),
+    ...(options.hexTwoToOneCompensation === undefined
+      ? {}
+      : { hexTwoToOneCompensation: options.hexTwoToOneCompensation }),
+    ...(options.rebuildExistingTransitions === undefined
+      ? {}
+      : { rebuildExistingTransitions: options.rebuildExistingTransitions }),
     transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
       .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
       .filter((elementId): elementId is number => elementId !== undefined),
     regularizeHexSelection: false,
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
-  });
+  };
+  let classifiedPlan: ReturnType<typeof buildDefaultRefinementPlan>;
+  try {
+    classifiedPlan = buildDefaultRefinementPlan(
+      mutableMeshView(active.mesh),
+      selectedElementIds,
+      planningOptions
+    );
+  } catch (error) {
+    if (error instanceof TwoToOnePlanningError) {
+      throw mapTwoToOnePlanningErrorToCellIds(active, error);
+    }
+    throw error;
+  }
   const replacements = classifiedPlan.replacements;
   const replacementParentIds = replacementParentCellIds(active, replacements);
   assertActiveBuildCoversSessionCells(session, active, replacementParentIds);
@@ -3186,6 +3227,63 @@ function mapTwoToOneReportToCellIds(
     preservedFarFieldCellCount:
       sourceActiveLeafCount - new Set(affectedComponentCellIds).size
   };
+}
+
+function mapTwoToOnePlanningErrorToCellIds(
+  active: ActiveMeshBuildResult,
+  error: TwoToOnePlanningError<number>
+): TwoToOnePlanningError<CellId> {
+  const mapElementId = (elementId: number): CellId => {
+    const cellId = activeBuildCellIdByElementId(active, elementId);
+    if (cellId === undefined) {
+      throw new Error(`2:1 planning diagnostic element ${elementId} is outside the active mesh`);
+    }
+    return cellId;
+  };
+  const suggestion = error.diagnostic.suggestion;
+  return new TwoToOnePlanningError<CellId>(
+    error.code,
+    error.message,
+    {
+      conflictingCellIds: error.diagnostic.conflictingCellIds.map(mapElementId),
+      conflictingInterfaces: error.diagnostic.conflictingInterfaces.map((entry) => ({
+        firstCellId: mapElementId(entry.firstCellId),
+        ...(entry.secondCellId === undefined
+          ? {}
+          : { secondCellId: mapElementId(entry.secondCellId) }),
+        faceNodeIds: [...entry.faceNodeIds]
+      })),
+      attemptedActions: error.diagnostic.attemptedActions.map((action) => ({
+        kind: action.kind,
+        reason: action.reason,
+        addedParentCellIds: action.addedParentCellIds.map(mapElementId),
+        replacedTransitionCellIds:
+          action.replacedTransitionCellIds.map(mapElementId),
+        ...(action.templateId === undefined
+          ? {}
+          : { templateId: action.templateId })
+      })),
+      ...(suggestion === undefined
+        ? {}
+        : {
+            suggestion: {
+              kind: suggestion.kind,
+              ...(suggestion.axis === undefined
+                ? {}
+                : { axis: suggestion.axis }),
+              ...(suggestion.side === undefined
+                ? {}
+                : { side: suggestion.side }),
+              ...(suggestion.parentCellIds === undefined
+                ? {}
+                : {
+                    parentCellIds:
+                      suggestion.parentCellIds.map(mapElementId)
+                  })
+            }
+          })
+    }
+  );
 }
 
 function mapPlanningReplacementsToSource(
