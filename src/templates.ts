@@ -231,12 +231,24 @@ function trilinear(corners: readonly Point[], u: number, v: number, w: number): 
 }
 
 function relativeLerpPoint(first: Point, second: Point, amount: number): Point {
+  if (amount === 0) {
+    return [...first];
+  }
+  if (amount === 1) {
+    return [...second];
+  }
   return first.map((coordinate, index) => {
     const target = second[index]!;
-    const delta = target - coordinate;
-    return Number.isFinite(delta)
-      ? coordinate + delta * amount
-      : coordinate * (1 - amount) + target * amount;
+    const delta = amount <= 0.5
+      ? target - coordinate
+      : coordinate - target;
+    const relative = amount <= 0.5
+      ? coordinate + amount * delta
+      : target + (1 - amount) * delta;
+    if (Number.isFinite(relative)) {
+      return relative;
+    }
+    return coordinate * (1 - amount) + target * amount;
   });
 }
 
@@ -268,6 +280,13 @@ function distanceBetween(a: Point, b: Point): number {
 function hex(vertices: readonly Point[]): [Point, Point, Point, Point, Point, Point, Point, Point] {
   if (vertices.length !== 8) {
     throw new Error(`H1/Hex refinement requires 8 vertices, got ${vertices.length}`);
+  }
+  if (vertices.some((point) =>
+    point.length !== 3 || !point.every(Number.isFinite)
+  )) {
+    throw new Error(
+      "H1/Hex refinement requires eight finite three-dimensional vertices"
+    );
   }
   return [
     vertices[0]!,

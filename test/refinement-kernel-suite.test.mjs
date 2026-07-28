@@ -22,6 +22,9 @@ import {
   asTwoToOneFlatPlanningError,
   HexPatchQualityError
 } from "../dist/refinement-errors.js";
+import {
+  determinant3 as robustDeterminant3
+} from "../dist/hex-numeric-internal.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
@@ -245,6 +248,42 @@ function createAnisotropicHexVertices(
     [xScale, yScale, zScale],
     [0, yScale, zScale]
   ].map(transform);
+}
+
+function createParallelepipedHexVertices(a, b, c, origin = [0, 0, 0]) {
+  const point = (u, v, w) => origin.map((coordinate, index) =>
+    coordinate + u * a[index] + v * b[index] + w * c[index]
+  );
+  return [
+    point(0, 0, 0),
+    point(1, 0, 0),
+    point(1, 1, 0),
+    point(0, 1, 0),
+    point(0, 0, 1),
+    point(1, 0, 1),
+    point(1, 1, 1),
+    point(0, 1, 1)
+  ];
+}
+
+function createNearMaxSafeDuplicateQuadMesh(reverse = false) {
+  const base = Number.MAX_SAFE_INTEGER - 5;
+  const first = [
+    [base, 0],
+    [base + 4, 0],
+    [base + 4, 4],
+    [base, 4]
+  ];
+  const second = first.map(([x, y]) => [x + 1, y]);
+  const blocks = reverse ? [second, first] : [first, second];
+  return {
+    kind: "Q1",
+    nodes: blocks.flatMap((block) => block.map((point) => [...point])),
+    elements: [
+      [1, 2, 3, 4],
+      [5, 6, 7, 8]
+    ]
+  };
 }
 
 function createSevenDistinctNodeHexMesh() {
@@ -2276,6 +2315,111 @@ test("Hex volume remains stable for mixed exponents and axis permutations", () =
   assert.equal(warpedVolume < 1.3e-200, true);
 });
 
+test("Hex determinant preserves tiny components beside huge column components", () => {
+  const columns = [
+    [1e200, 0, 0],
+    [0, 1e200, 0],
+    [1e200, 1e200, 1e-200]
+  ];
+  const permutations = [
+    { order: [0, 1, 2], sign: 1 },
+    { order: [0, 2, 1], sign: -1 },
+    { order: [1, 0, 2], sign: -1 },
+    { order: [1, 2, 0], sign: 1 },
+    { order: [2, 0, 1], sign: 1 },
+    { order: [2, 1, 0], sign: -1 }
+  ];
+
+  for (const { order, sign } of permutations) {
+    const vertices = createParallelepipedHexVertices(
+      columns[order[0]],
+      columns[order[1]],
+      columns[order[2]]
+    );
+    const volume = hexElementSignedVolume(vertices);
+    assert.equal(Number.isFinite(volume), true, `${order}`);
+    assert.equal(Math.abs(volume / (sign * 1e200) - 1) < 1e-12, true, `${order}`);
+  }
+
+  const huge = 2 ** 665;
+  const increment = 2 ** 614;
+  const tiny = 2 ** -665;
+  const cancellation = [
+    [huge, huge, 0],
+    [huge, huge + increment, 0],
+    [0, 0, tiny]
+  ];
+  const cancellationDeterminant = robustDeterminant3(cancellation);
+  assert.equal(Number.isFinite(cancellationDeterminant), true);
+  assert.equal(
+    Math.abs(cancellationDeterminant / increment - 1) < 1e-12,
+    true
+  );
+  assert.equal(Object.is(robustDeterminant3([
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 0]
+  ]), 0), true);
+  assert.equal(Number.isNaN(robustDeterminant3([
+    [Number.NaN, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]
+  ])), true);
+  assert.equal(Number.isNaN(robustDeterminant3([
+    [Number.POSITIVE_INFINITY, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]
+  ])), true);
+});
+
+test("underflowed Hex volume retains orientation for quality checks", () => {
+  const tiny = 2 ** -400;
+  const positive = createAnisotropicHexVertices(tiny, tiny, tiny);
+  const negative = createAnisotropicHexVertices(
+    tiny,
+    tiny,
+    tiny,
+    ([x, y, z]) => [y, x, z]
+  );
+
+  assert.equal(Object.is(hexElementSignedVolume(positive), 0), true);
+  assert.equal(Object.is(hexElementSignedVolume(negative), -0), true);
+  for (const vertices of [positive, negative]) {
+    const report = auditHexRefinementQuality(
+      vertices,
+      refineHexTo8Hex(vertices)
+    );
+    assert.equal(report.ok, true);
+    assert.equal(report.parentMinimumOrientedScaledJacobian > 0.99, true);
+    assert.equal(report.childMinimumOrientedScaledJacobian > 0.99, true);
+  }
+
+  const negativeMesh = {
+    kind: "H1",
+    nodes: negative.map((point) => [...point]),
+    elements: [[1, 2, 3, 4, 5, 6, 7, 8]]
+  };
+  const snapshot = structuredClone(negativeMesh);
+  for (const entry of [
+    previewRefinementByElementIds,
+    refineByElementIdsWithReport
+  ]) {
+    const result = entry(negativeMesh, [1], {
+      hexRefinementRatio: 3,
+      includeTransitions: false,
+      regularizeHexSelection: false,
+      mergeTolerance: 0
+    });
+    assert.equal(result.quality.ok, true, entry.name);
+    assert.equal(
+      result.quality.childMinimumOrientedScaledJacobian > 0.99,
+      true,
+      entry.name
+    );
+    assert.deepEqual(negativeMesh, snapshot);
+  }
+});
+
 test("anisotropic Hex volume loss remains visible to the quality gate", () => {
   const vertices = createAnisotropicHexVertices(1e200, 1e-200, 1e-200);
   const complete = refineHexTo8Hex(vertices);
@@ -2320,6 +2464,56 @@ test("3:1 trilinear Hex refinement preserves extreme anisotropic quality", () =>
   }
 });
 
+test("3:1 trilinear interpolation preserves endpoints and shared faces", () => {
+  const shared = 1e-50;
+  const left = [
+    [1e200, 0, 0],
+    [shared, 0, 0],
+    [shared, 3, 0],
+    [1e200, 3, 0],
+    [1e200, 0, 5],
+    [shared, 0, 5],
+    [shared, 3, 5],
+    [1e200, 3, 5]
+  ];
+  const right = [
+    [shared, 0, 0],
+    [-1e200, 0, 0],
+    [-1e200, 3, 0],
+    [shared, 3, 0],
+    [shared, 0, 5],
+    [-1e200, 0, 5],
+    [-1e200, 3, 5],
+    [shared, 3, 5]
+  ];
+  const leftRefinement = refineHexTo27Hex(left);
+  const rightRefinement = refineHexTo27Hex(right);
+  const gridIndex = (i, j, k) => i * 16 + j * 4 + k;
+
+  assert.deepEqual(leftRefinement.nodes[gridIndex(3, 0, 0)], left[1]);
+  assert.deepEqual(leftRefinement.nodes[gridIndex(3, 3, 3)], left[6]);
+  for (let j = 0; j <= 3; j += 1) {
+    for (let k = 0; k <= 3; k += 1) {
+      assert.deepEqual(
+        leftRefinement.nodes[gridIndex(3, j, k)],
+        rightRefinement.nodes[gridIndex(0, j, k)]
+      );
+    }
+  }
+
+  for (const invalid of [
+    left.map((point, index) => index === 7 ? point.slice(0, 2) : point),
+    left.map((point, index) => index === 4
+      ? [point[0], Number.NaN, point[2]]
+      : point)
+  ]) {
+    assert.throws(
+      () => refineHexTo27Hex(invalid),
+      /three-dimensional|finite|dimension/i
+    );
+  }
+});
+
 test("generic session Hex refinement rejects nonfinite quality before mutation", () => {
   const operations = [
     {
@@ -2351,6 +2545,36 @@ test("generic session Hex refinement rejects nonfinite quality before mutation",
     assert.match(error.message, /non-finite.*volume/i);
     assert.deepEqual(session, before);
   }
+});
+
+test("session batch aggregate quality rejects overflowing totals atomically", () => {
+  const vertices = createAnisotropicHexVertices(1e308, 1, 1);
+  const mesh = {
+    kind: "H1",
+    nodes: [
+      ...vertices.map((point) => [...point]),
+      ...vertices.map((point) => [...point])
+    ],
+    elements: [
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [9, 10, 11, 12, 13, 14, 15, 16]
+    ]
+  };
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  const error = captureError(() =>
+    refineSessionCells(session, ["e1", "e2"], (parentVertices) => ({
+      kind: "H1",
+      source: "identity_overflow_aggregate",
+      nodes: parentVertices.map((point) => [...point]),
+      elements: [[1, 2, 3, 4, 5, 6, 7, 8]]
+    }))
+  );
+
+  assert.equal(error instanceof HexPatchQualityError, true);
+  assert.equal(error.code, "HEX_PATCH_VOLUME");
+  assert.match(error.message, /non-finite.*volume/i);
+  assert.deepEqual(session, before);
 });
 
 test("Hierarchical refinement session rejects incomplete Hex replacement volume atomically", () => {
@@ -6128,6 +6352,28 @@ test("extreme anisotropic node buckets merge duplicate Hex geometry correctly", 
   assert.equal(active.mesh.nodes.length, 8);
   assert.deepEqual(active.mesh.elements[0], active.mesh.elements[1]);
   assert.deepEqual(session, before);
+});
+
+test("merge buckets use one stable axis mode near MAX_SAFE_INTEGER", () => {
+  for (const reverse of [false, true]) {
+    const mesh = createNearMaxSafeDuplicateQuadMesh(reverse);
+    const snapshot = structuredClone(mesh);
+    const merged = mergeCoincidentNodesWithMap(mesh, 1);
+
+    assert.equal(merged.mesh.nodes.length, 4, `${reverse}`);
+    assert.deepEqual(merged.mesh.elements[0], merged.mesh.elements[1]);
+    assert.deepEqual(mesh, snapshot);
+
+    const session = createRefinementSession(mesh);
+    const before = structuredClone(session);
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1
+    });
+    assert.equal(active.mesh.nodes.length, 4, `${reverse}`);
+    assert.deepEqual(active.mesh.elements[0], active.mesh.elements[1]);
+    assert.deepEqual(session, before);
+  }
 });
 
 test("final conformance failures use structured conformance diagnostics", () => {

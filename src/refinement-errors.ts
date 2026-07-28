@@ -392,7 +392,10 @@ function auditFinalHexPatchQuality(
       }
       return point;
     });
-    const orientation = hexElementSignedVolume(vertices) < 0 ? -1 : 1;
+    const signedVolume = hexElementSignedVolume(vertices);
+    const orientation = signedVolume < 0 || Object.is(signedVolume, -0)
+      ? -1
+      : 1;
     finalMinimumOrientedScaledJacobian = Math.min(
       finalMinimumOrientedScaledJacobian,
       minimumOrientedHexCornerScaledJacobian(vertices, orientation)

@@ -1,46 +1,89 @@
 import type { Point } from "./types.js";
 
-export function mergeBucketOrigin(points: readonly Point[]): Point {
+interface RelativeBucketAxis {
+  kind: "relative";
+  origin: number;
+}
+
+interface BinaryBucketAxis {
+  kind: "binary";
+}
+
+interface ExactBucketAxis {
+  kind: "exact";
+}
+
+type MergeBucketAxis =
+  | RelativeBucketAxis
+  | BinaryBucketAxis
+  | ExactBucketAxis;
+
+export interface MergeBucketLayout {
+  dimensions: 2 | 3;
+  tolerance: number;
+  axes: readonly MergeBucketAxis[];
+}
+
+export function createMergeBucketLayout(
+  points: readonly Point[],
+  tolerance: number
+): MergeBucketLayout {
   const dimensions = points.some((point) => point.length > 2) ? 3 : 2;
-  const origin = Array.from(
+  const axes = Array.from(
     { length: dimensions },
-    () => Number.POSITIVE_INFINITY
-  );
-  for (const point of points) {
-    for (let dimension = 0; dimension < dimensions; dimension += 1) {
-      const coordinate = point[dimension] ?? 0;
-      origin[dimension] = Math.min(origin[dimension]!, coordinate);
+    (_, dimension): MergeBucketAxis => {
+      if (tolerance === 0) {
+        return { kind: "exact" };
+      }
+      let minimum = Number.POSITIVE_INFINITY;
+      let maximum = Number.NEGATIVE_INFINITY;
+      for (const point of points) {
+        const coordinate = point[dimension] ?? 0;
+        minimum = Math.min(minimum, coordinate);
+        maximum = Math.max(maximum, coordinate);
+      }
+      const extent = maximum - minimum;
+      const bucketSpan = extent / tolerance;
+      if (
+        Number.isFinite(minimum)
+        && Number.isFinite(maximum)
+        && Number.isFinite(bucketSpan)
+        && bucketSpan <= Number.MAX_SAFE_INTEGER - 2
+      ) {
+        return { kind: "relative", origin: minimum };
+      }
+      return { kind: "binary" };
     }
-  }
-  return origin.map((coordinate) =>
-    Number.isFinite(coordinate) ? coordinate : 0
   );
+  return {
+    dimensions,
+    tolerance,
+    axes
+  };
 }
 
 export function mergeBucketKey(
   point: Point,
-  origin: Point,
-  tolerance: number
+  layout: MergeBucketLayout
 ): string {
-  return pointDimensions(point).map((dimension) =>
-    axisBucket(point[dimension] ?? 0, origin[dimension] ?? 0, tolerance)
+  return layout.axes.map((axis, dimension) =>
+    axisBucket(point[dimension] ?? 0, axis, layout.tolerance)
   ).join(":");
 }
 
 export function forEachCandidateMergeBucketKey(
   point: Point,
-  origin: Point,
-  tolerance: number,
+  layout: MergeBucketLayout,
   visit: (key: string) => void
 ): void {
-  const candidates = pointDimensions(point).map((dimension) =>
+  const candidates = layout.axes.map((axis, dimension) =>
     axisBucketCandidates(
       point[dimension] ?? 0,
-      origin[dimension] ?? 0,
-      tolerance
+      axis,
+      layout.tolerance
     )
   );
-  if (candidates.length === 2) {
+  if (layout.dimensions === 2) {
     for (const first of candidates[0]!) {
       for (const second of candidates[1]!) {
         visit(`${first}:${second}`);
@@ -59,54 +102,85 @@ export function forEachCandidateMergeBucketKey(
 
 function axisBucketCandidates(
   coordinate: number,
-  origin: number,
+  axis: MergeBucketAxis,
   tolerance: number
 ): string[] {
-  const bucket = safeAxisBucket(coordinate, origin, tolerance);
-  if (bucket.kind === "exact") {
-    return [`e${bucket.coordinate}`];
+  if (axis.kind === "exact" || !Number.isFinite(coordinate)) {
+    return [`e${coordinate}`];
   }
+  if (axis.kind === "relative") {
+    const index = Math.floor((coordinate - axis.origin) / tolerance);
+    return [
+      `r${index - 1}`,
+      `r${index}`,
+      `r${index + 1}`
+    ];
+  }
+  const index = floorFiniteRatioToBigInt(coordinate, tolerance);
   return [
-    `${bucket.kind}${bucket.index - 1}`,
-    `${bucket.kind}${bucket.index}`,
-    `${bucket.kind}${bucket.index + 1}`
+    `b${index - 1n}`,
+    `b${index}`,
+    `b${index + 1n}`
   ];
 }
 
 function axisBucket(
   coordinate: number,
-  origin: number,
+  axis: MergeBucketAxis,
   tolerance: number
 ): string {
-  const bucket = safeAxisBucket(coordinate, origin, tolerance);
-  return bucket.kind === "exact"
-    ? `e${bucket.coordinate}`
-    : `${bucket.kind}${bucket.index}`;
-}
-
-function safeAxisBucket(
-  coordinate: number,
-  origin: number,
-  tolerance: number
-):
-  | { kind: "d" | "r"; index: number }
-  | { kind: "exact"; coordinate: number } {
-  const direct = Math.floor(coordinate / tolerance);
-  if (isNeighborSafeInteger(direct)) {
-    return { kind: "d", index: direct };
+  if (axis.kind === "exact" || !Number.isFinite(coordinate)) {
+    return `e${coordinate}`;
   }
-  const relative = Math.floor((coordinate - origin) / tolerance);
-  if (isNeighborSafeInteger(relative)) {
-    return { kind: "r", index: relative };
+  if (axis.kind === "relative") {
+    return `r${Math.floor((coordinate - axis.origin) / tolerance)}`;
   }
-  return { kind: "exact", coordinate };
+  return `b${floorFiniteRatioToBigInt(coordinate, tolerance)}`;
 }
 
-function isNeighborSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value)
-    && Math.abs(value) < Number.MAX_SAFE_INTEGER;
+function floorFiniteRatioToBigInt(
+  numeratorValue: number,
+  denominatorValue: number
+): bigint {
+  if (numeratorValue === 0) {
+    return 0n;
+  }
+  const numerator = binaryMagnitude(Math.abs(numeratorValue));
+  const denominator = binaryMagnitude(denominatorValue);
+  const exponent = numerator.exponent - denominator.exponent;
+  const dividend = exponent >= 0
+    ? numerator.significand << BigInt(exponent)
+    : numerator.significand;
+  const divisor = exponent >= 0
+    ? denominator.significand
+    : denominator.significand << BigInt(-exponent);
+  const quotient = dividend / divisor;
+  const remainder = dividend % divisor;
+  if (numeratorValue > 0) {
+    return quotient;
+  }
+  return remainder === 0n ? -quotient : -quotient - 1n;
 }
 
-function pointDimensions(point: Point): number[] {
-  return point.length <= 2 ? [0, 1] : [0, 1, 2];
+function binaryMagnitude(value: number): {
+  significand: bigint;
+  exponent: number;
+} {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, false);
+  const high = view.getUint32(0, false);
+  const low = view.getUint32(4, false);
+  const exponentBits = (high >>> 20) & 0x7ff;
+  const fraction = (BigInt(high & 0xfffff) << 32n) | BigInt(low);
+  if (exponentBits === 0) {
+    return {
+      significand: fraction,
+      exponent: -1074
+    };
+  }
+  return {
+    significand: (1n << 52n) | fraction,
+    exponent: exponentBits - 1023 - 52
+  };
 }

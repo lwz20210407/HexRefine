@@ -11,9 +11,10 @@ import type {
 import { boundaryKey, boundariesOf, elementKindFromNodeCount } from "./topology.js";
 import { centroid, pointEquals } from "./vector.js";
 import {
+  createMergeBucketLayout,
   forEachCandidateMergeBucketKey,
   mergeBucketKey,
-  mergeBucketOrigin
+  type MergeBucketLayout
 } from "./merge-buckets-internal.js";
 
 export interface NodeMergeResult {
@@ -150,7 +151,7 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
   const inputNodeIdsByNodeIdArray: number[][] = [];
   const buckets = new Map<string, number[]>();
   const exactNodeIndexByKey = new Map<string, number>();
-  const bucketOrigin = mergeBucketOrigin(mesh.nodes);
+  const bucketLayout = createMergeBucketLayout(mesh.nodes, tolerance);
 
   mesh.nodes.forEach((node, oldIndex) => {
     const inputNodeId = oldIndex + 1;
@@ -160,7 +161,7 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
       node,
       nodes,
       buckets,
-      bucketOrigin,
+      bucketLayout,
       tolerance
     );
     const newNodeId = existingIndex === undefined ? nodes.length + 1 : existingIndex + 1;
@@ -171,7 +172,7 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
         node,
         nodes.length - 1,
         buckets,
-        bucketOrigin,
+        bucketLayout,
         tolerance
       );
     }
@@ -267,11 +268,11 @@ function findCoincidentNodeIndex(
   node: Point,
   nodes: readonly Point[],
   buckets: ReadonlyMap<string, readonly number[]>,
-  origin: Point,
+  layout: MergeBucketLayout,
   tolerance: number
 ): number | undefined {
   let bestIndex: number | undefined;
-  forEachCandidateMergeBucketKey(node, origin, tolerance, (key) => {
+  forEachCandidateMergeBucketKey(node, layout, (key) => {
     for (const candidateIndex of buckets.get(key) ?? []) {
       if (
         (bestIndex === undefined || candidateIndex < bestIndex) &&
@@ -288,10 +289,10 @@ function addNodeToMergeBucket(
   node: Point,
   nodeIndex: number,
   buckets: Map<string, number[]>,
-  origin: Point,
+  layout: MergeBucketLayout,
   tolerance: number
 ): void {
-  const key = mergeBucketKey(node, origin, tolerance);
+  const key = mergeBucketKey(node, layout);
   const bucket = buckets.get(key) ?? [];
   bucket.push(nodeIndex);
   buckets.set(key, bucket);

@@ -46,9 +46,10 @@ import {
   type GeometricFace
 } from "./geometric-face-index.js";
 import {
+  createMergeBucketLayout,
   forEachCandidateMergeBucketKey,
   mergeBucketKey,
-  mergeBucketOrigin
+  type MergeBucketLayout
 } from "./merge-buckets-internal.js";
 import {
   assertHexPatchQualitySummary,
@@ -554,7 +555,7 @@ function buildMergedActiveMeshDirect(
   const sessionNodeIdsByNodeId = includeSessionNodeIdsByNodeId ? new Map<number, number[]>() : undefined;
   const exactNodeIndexByKey = tolerance === 0 ? new Map<string, number>() : undefined;
   const buckets = tolerance === 0 ? undefined : new Map<string, number[]>();
-  const bucketOrigin = mergeBucketOrigin(sessionNodes);
+  const bucketLayout = createMergeBucketLayout(sessionNodes, tolerance);
 
   for (let index = 0; index < activeIds.length; index += 1) {
     const cellId = activeIds[index]!;
@@ -592,7 +593,7 @@ function buildMergedActiveMeshDirect(
             point,
             nodes,
             buckets,
-            bucketOrigin,
+            bucketLayout,
             tolerance
           );
           if (nodeIndex === undefined) {
@@ -602,7 +603,7 @@ function buildMergedActiveMeshDirect(
               point,
               nodeIndex,
               buckets,
-              bucketOrigin,
+              bucketLayout,
               tolerance
             );
           }
@@ -1166,11 +1167,11 @@ function findMergedActiveNodeIndex(
   point: Point,
   nodes: readonly Point[],
   buckets: ReadonlyMap<string, readonly number[]>,
-  origin: Point,
+  layout: MergeBucketLayout,
   tolerance: number
 ): number | undefined {
   let bestIndex: number | undefined;
-  forEachCandidateMergeBucketKey(point, origin, tolerance, (key) => {
+  forEachCandidateMergeBucketKey(point, layout, (key) => {
     for (const candidateIndex of buckets.get(key) ?? []) {
       if (bestIndex !== undefined && candidateIndex >= bestIndex) {
         continue;
@@ -1192,10 +1193,10 @@ function addActiveMergeBucket(
   point: Point,
   nodeIndex: number,
   buckets: Map<string, number[]>,
-  origin: Point,
+  layout: MergeBucketLayout,
   tolerance: number
 ): void {
-  const key = mergeBucketKey(point, origin, tolerance);
+  const key = mergeBucketKey(point, layout);
   const bucket = buckets.get(key) ?? [];
   bucket.push(nodeIndex);
   buckets.set(key, bucket);
@@ -2765,7 +2766,9 @@ function summarizeHexSessionCells(
     }
     const vertices = elementVertices(sessionMeshView(session), cell.element);
     const signedVolume = hexElementSignedVolume(vertices);
-    const orientation = signedVolume < 0 ? -1 : 1;
+    const orientation = signedVolume < 0 || Object.is(signedVolume, -0)
+      ? -1
+      : 1;
     orientedVolume += orientation * signedVolume;
     minimumOrientedScaledJacobian = Math.min(
       minimumOrientedScaledJacobian,

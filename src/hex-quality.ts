@@ -4,6 +4,15 @@ import type {
   Mesh,
   Point
 } from "./types.js";
+import {
+  determinant3Scaled,
+  materializeScaledValue,
+  relativeDifferenceRatioScaled,
+  scaleScaledValue,
+  scaledValueSign,
+  sumScaledValues,
+  type ScaledValue
+} from "./hex-numeric-internal.js";
 
 export interface HexRefinementPatchEntry {
   elementId: number;
@@ -37,15 +46,33 @@ export function auditHexRefinementQuality(
   refinement: LocalRefinement,
   relativeVolumeTolerance = 1e-8
 ): HexRefinementQualityReport {
+  return auditHexRefinementQualityInternal(
+    parentVertices,
+    refinement,
+    relativeVolumeTolerance
+  ).report;
+}
+
+function auditHexRefinementQualityInternal(
+  parentVertices: readonly Point[],
+  refinement: LocalRefinement,
+  relativeVolumeTolerance: number
+): {
+  report: HexRefinementQualityReport;
+  parentVolume: ScaledValue;
+  childVolume: ScaledValue;
+  orientation: number;
+} {
   assertHexVertices(parentVertices, "parent Hex");
   if (refinement.kind !== "H1") {
     throw new Error(`Hex quality audit requires H1 children, received ${refinement.kind}`);
   }
-  const parentSignedVolume = hexElementSignedVolume(parentVertices);
-  const orientation = parentSignedVolume < 0 ? -1 : 1;
+  const parentVolume = hexElementSignedVolumeScaled(parentVertices);
+  const parentSignedVolume = materializeScaledValue(parentVolume);
+  const orientation = scaledValueSign(parentVolume) < 0 ? -1 : 1;
   const parentMinimumOrientedScaledJacobian =
     minimumOrientedHexCornerScaledJacobian(parentVertices, orientation);
-  let childSignedVolume = 0;
+  const childVolumes: ScaledValue[] = [];
   let childMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
   for (const [index, element] of refinement.elements.entries()) {
     const vertices = element.map((nodeId) => {
@@ -58,17 +85,19 @@ export function auditHexRefinementQuality(
       return point;
     });
     assertHexVertices(vertices, `Hex child ${index + 1}`);
-    childSignedVolume += hexElementSignedVolume(vertices);
+    childVolumes.push(hexElementSignedVolumeScaled(vertices));
     childMinimumOrientedScaledJacobian = Math.min(
       childMinimumOrientedScaledJacobian,
       minimumOrientedHexCornerScaledJacobian(vertices, orientation)
     );
   }
-  const relativeVolumeError = relativeVolumeErrorFor(
-    parentSignedVolume,
-    childSignedVolume
+  const childVolume = sumScaledValues(childVolumes);
+  const childSignedVolume = materializeScaledValue(childVolume);
+  const relativeVolumeError = relativeDifferenceRatioScaled(
+    parentVolume,
+    childVolume
   );
-  return {
+  const report = {
     ok: Number.isFinite(parentSignedVolume)
       && Number.isFinite(childSignedVolume)
       && Number.isFinite(relativeVolumeError)
@@ -83,6 +112,12 @@ export function auditHexRefinementQuality(
     parentMinimumOrientedScaledJacobian,
     childMinimumOrientedScaledJacobian
   };
+  return {
+    report,
+    parentVolume,
+    childVolume,
+    orientation
+  };
 }
 
 export function auditHexRefinementPatchQuality(
@@ -93,8 +128,8 @@ export function auditHexRefinementPatchQuality(
   if (replacements.length === 0) {
     throw new Error("Hex patch quality audit requires at least one replacement");
   }
-  let parentOrientedVolume = 0;
-  let childOrientedVolume = 0;
+  const parentVolumes: ScaledValue[] = [];
+  const childVolumes: ScaledValue[] = [];
   let parentMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
   let childMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
   let childElementCount = 0;
@@ -115,14 +150,14 @@ export function auditHexRefinementPatchQuality(
       }
       return point;
     });
-    const report = auditHexRefinementQuality(
+    const audited = auditHexRefinementQualityInternal(
       parentVertices,
       replacement.refinement,
       Number.POSITIVE_INFINITY
     );
-    const orientation = report.parentSignedVolume < 0 ? -1 : 1;
-    parentOrientedVolume += orientation * report.parentSignedVolume;
-    childOrientedVolume += orientation * report.childSignedVolume;
+    const { report, orientation } = audited;
+    parentVolumes.push(scaleScaledValue(audited.parentVolume, orientation));
+    childVolumes.push(scaleScaledValue(audited.childVolume, orientation));
     parentMinimumOrientedScaledJacobian = Math.min(
       parentMinimumOrientedScaledJacobian,
       report.parentMinimumOrientedScaledJacobian
@@ -134,9 +169,17 @@ export function auditHexRefinementPatchQuality(
     childElementCount += replacement.refinement.elements.length;
   }
 
-  const relativeVolumeError = relativeVolumeErrorFor(
-    parentOrientedVolume,
-    childOrientedVolume
+  const parentOrientedVolumeScaled = sumScaledValues(parentVolumes);
+  const childOrientedVolumeScaled = sumScaledValues(childVolumes);
+  const parentOrientedVolume = materializeScaledValue(
+    parentOrientedVolumeScaled
+  );
+  const childOrientedVolume = materializeScaledValue(
+    childOrientedVolumeScaled
+  );
+  const relativeVolumeError = relativeDifferenceRatioScaled(
+    parentOrientedVolumeScaled,
+    childOrientedVolumeScaled
   );
   return {
     ok: Number.isFinite(parentOrientedVolume)
@@ -159,27 +202,23 @@ export function auditHexRefinementPatchQuality(
 
 export function hexElementSignedVolume(vertices: readonly Point[]): number {
   assertHexVertices(vertices, "Hex");
-  let volume = 0;
-  let correction = 0;
+  return materializeScaledValue(hexElementSignedVolumeScaled(vertices));
+}
+
+function hexElementSignedVolumeScaled(
+  vertices: readonly Point[]
+): ScaledValue {
+  const determinants: ScaledValue[] = [];
   for (const xi of GAUSS_POINTS) {
     for (const eta of GAUSS_POINTS) {
       for (const zeta of GAUSS_POINTS) {
-        const determinant = determinant3(
+        determinants.push(determinant3Scaled(
           hexJacobian(vertices, xi, eta, zeta)
-        );
-        if (!Number.isFinite(volume) || !Number.isFinite(determinant)) {
-          volume += determinant;
-          correction = 0;
-          continue;
-        }
-        const adjusted = determinant - correction;
-        const next = volume + adjusted;
-        correction = (next - volume) - adjusted;
-        volume = next;
+        ));
       }
     }
   }
-  return volume;
+  return sumScaledValues(determinants);
 }
 
 export function minimumHexCornerScaledJacobian(
@@ -199,9 +238,11 @@ export function minimumOrientedHexCornerScaledJacobian(
     const lengths = jacobian.map(vectorLength);
     const scaled = lengths.some((length) => length === 0)
       ? Number.NEGATIVE_INFINITY
-      : orientation * determinant3(jacobian.map((column, index) =>
-          column.map((component) => component / lengths[index]!)
-        ));
+      : orientation * materializeScaledValue(
+          determinant3Scaled(jacobian.map((column, index) =>
+            column.map((component) => component / lengths[index]!)
+          ))
+        );
     minimum = Math.min(minimum, scaled);
   }
   return minimum;
@@ -253,65 +294,6 @@ function weightedHexEdgeDifferences(
     }
     return sum;
   });
-}
-
-function determinant3(matrix: readonly number[][]): number {
-  const normalized: number[][] = [];
-  let totalExponent = 0;
-  for (const column of matrix) {
-    const maximum = Math.max(...column.map((component) => Math.abs(component)));
-    if (maximum === 0) {
-      return 0;
-    }
-    if (!Number.isFinite(maximum)) {
-      return Number.NaN;
-    }
-    const exponent = Math.floor(Math.log2(maximum));
-    const scale = 2 ** exponent;
-    normalized.push(column.map((component) => component / scale));
-    totalExponent += exponent;
-  }
-  return restoreBinaryExponent(
-    determinant3Normalized(normalized),
-    totalExponent
-  );
-}
-
-function determinant3Normalized(matrix: readonly number[][]): number {
-  const [a, b, c] = matrix;
-  return a![0]! * (b![1]! * c![2]! - b![2]! * c![1]!)
-    - b![0]! * (a![1]! * c![2]! - a![2]! * c![1]!)
-    + c![0]! * (a![1]! * b![2]! - a![2]! * b![1]!);
-}
-
-function restoreBinaryExponent(value: number, exponent: number): number {
-  if (value === 0 || !Number.isFinite(value)) {
-    return value;
-  }
-  const valueExponent = Math.floor(Math.log2(Math.abs(value)));
-  const mantissa = value / (2 ** valueExponent);
-  const combinedExponent = exponent + valueExponent;
-  if (combinedExponent > 1023) {
-    return value < 0
-      ? Number.NEGATIVE_INFINITY
-      : Number.POSITIVE_INFINITY;
-  }
-  if (combinedExponent < -1074) {
-    return value < 0 ? -0 : 0;
-  }
-  return mantissa * (2 ** combinedExponent);
-}
-
-function relativeVolumeErrorFor(
-  parentVolume: number,
-  childVolume: number
-): number {
-  const difference = Math.abs(childVolume - parentVolume);
-  const denominator = Math.abs(parentVolume);
-  if (denominator === 0) {
-    return difference === 0 ? 0 : Number.POSITIVE_INFINITY;
-  }
-  return difference / denominator;
 }
 
 function vectorLength(vector: readonly number[]): number {
