@@ -5,7 +5,7 @@ import type {
   RefinementSessionCell,
   RefinementSessionCommand
 } from "./refinement-session.js";
-import type { HexRefinementQualitySummary, Mesh, Point } from "./types.js";
+import type { HexRefinementQualitySummary, Mesh, Point, ReadonlyMesh } from "./types.js";
 import { cloneTwoToOneCapabilityReport } from "./two-to-one-capability.js";
 import {
   buildActiveMeshWithMap,
@@ -45,7 +45,7 @@ export interface ComformHexMaterial {
 
 export interface ComformHexReplayResult {
   session: RefinementSession;
-  mesh: Mesh;
+  mesh: ReadonlyMesh;
   mergeTolerance?: number;
   cellSets: Map<string, CellId[]>;
   nodeSets: Map<string, number[]>;
@@ -562,8 +562,8 @@ function replayDeleteElements(
     .filter((elementId) => mode === "keep" ? keptElementIds.has(elementId) : !deletedElementIds.has(elementId));
   const elements = keptSourceElementIds.map((elementId) => active.mesh.elements[elementId - 1]!);
   const mesh = {
-    nodes: active.mesh.nodes,
-    elements
+    nodes: active.mesh.nodes.map((point) => [...point]),
+    elements: elements.map((element) => [...element])
   };
   remapReplayCellSetsAfterElementCompaction(state, active, keptSourceElementIds);
   replaceReplaySession(state, active.mesh.kind ? { ...mesh, kind: active.mesh.kind } : mesh);
@@ -584,7 +584,7 @@ function replayQ1BoundaryLayerGrow(
   const selectedElementIds = replayUsesSelectionState(options) && state.selectedElementIds.size > 0
     ? activeElementIdsFromReplaySelectionState(state, active).elementIds
     : readNumberArray(payload.elementIds);
-  const result = growQ1BoundaryLayer(active.mesh, selectedElementIds, {
+  const result = growQ1BoundaryLayer(mutableMeshView(active.mesh), selectedElementIds, {
     height: readPositiveNumber(payload.height, 0.1),
     increments: readPositiveInteger(payload.increments, 3),
     growthRatio: readPositiveNumber(payload.growthRatio, 1),
@@ -629,7 +629,7 @@ function replayQ1TemplateRectangleCircle(
     omitCore: readBoolean(payload.omitCore, false),
     ...(state.mergeTolerance !== undefined ? { mergeTolerance: state.mergeTolerance } : {})
   };
-  const result = replaceQ1BlockWithRectangleCircleTemplate(active.mesh, selectedElementIds, {
+  const result = replaceQ1BlockWithRectangleCircleTemplate(mutableMeshView(active.mesh), selectedElementIds, {
     ...templateOptions,
     ...(innerCircleRadius === undefined ? {} : { innerCircleRadius }),
     ...(outerCircleRadius === undefined ? {} : { outerCircleRadius })
@@ -922,7 +922,7 @@ function replaySelectScreenRect(
 
   const next = selectionMode === "replace" ? new Set<number>() : new Set(state.selectedElementIds);
   if (mode === "surface") {
-    const items = buildReplaySurfaceItems(active.mesh, view, state.hiddenElementIds);
+    const items = buildReplaySurfaceItems(mutableMeshView(active.mesh), view, state.hiddenElementIds);
     for (const item of items) {
       if (surfaceFaceHitsRect(item, xMin, xMax, yMin, yMax)) {
         if (remove) {
@@ -938,7 +938,7 @@ function replaySelectScreenRect(
       if (state.hiddenElementIds.has(elementId)) {
         return;
       }
-      const projected = projectPointWithView(elementCenter3(active.mesh, element), view);
+      const projected = projectPointWithView(elementCenter3(mutableMeshView(active.mesh), element), view);
       if (projected.x >= xMin && projected.x <= xMax && projected.y >= yMin && projected.y <= yMax) {
         if (remove) {
           next.delete(elementId);
@@ -989,7 +989,7 @@ function replaySelectScreenCircle(
 
   const next = selectionMode === "replace" ? new Set<number>() : new Set(state.selectedElementIds);
   if (mode === "surface") {
-    const items = buildReplaySurfaceItems(active.mesh, view, state.hiddenElementIds);
+    const items = buildReplaySurfaceItems(mutableMeshView(active.mesh), view, state.hiddenElementIds);
     for (const item of items) {
       if (surfaceFaceHitsCircle(item, { x: center[0] ?? 0, y: center[1] ?? 0 }, radius)) {
         if (remove) {
@@ -1005,7 +1005,7 @@ function replaySelectScreenCircle(
       if (state.hiddenElementIds.has(elementId)) {
         return;
       }
-      const projected = projectPointWithView(elementCenter3(active.mesh, element), view);
+      const projected = projectPointWithView(elementCenter3(mutableMeshView(active.mesh), element), view);
       if (pointInCircle2(projected, { x: center[0] ?? 0, y: center[1] ?? 0 }, radius)) {
         if (remove) {
           next.delete(elementId);
@@ -1053,7 +1053,7 @@ function replaySelectCoordinateBox(state: ReplayState, payload: Record<string, u
     if (state.hiddenElementIds.has(elementId)) {
       return;
     }
-    if (pointInBounds(elementCenter3(active.mesh, element), box)) {
+    if (pointInBounds(elementCenter3(mutableMeshView(active.mesh), element), box)) {
       if (remove) {
         next.delete(elementId);
       } else {
@@ -1621,7 +1621,7 @@ function stabilizeReplaySelectionForPatch(
     const selectedElementIds = currentCellIds
       .map((cellId) => active.elementIdByCellId.get(cellId))
       .filter((elementId): elementId is number => elementId !== undefined);
-    const replacements = buildDefaultRefinementReplacements(active.mesh, selectedElementIds, {
+    const replacements = buildDefaultRefinementReplacements(mutableMeshView(active.mesh), selectedElementIds, {
       includeTransitions: options.includeTransitions,
       regularizeHexSelection: false,
       ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
@@ -1723,7 +1723,7 @@ function activeElementIdsFromReplayRankSelection(
       warning: `offline replay could not find refinable cells at recorded level ${rankSelection.level}.`
     };
   }
-  const index = centerRankIndexForElementIds(build.mesh, sortedDomainElementIds);
+  const index = centerRankIndexForElementIds(mutableMeshView(build.mesh), sortedDomainElementIds);
   const currentDimensions = index.coordinates.map((values) => values.length) as [number, number, number];
   const scaledRange = scaleReplayRankRange(rankSelection.range, rankSelection.domainDimensions, currentDimensions);
   return {
@@ -1935,6 +1935,10 @@ function cloneMesh(mesh: Mesh): Mesh {
     nodes: mesh.nodes.map((point) => [...point]),
     elements: mesh.elements.map((element) => [...element])
   };
+}
+
+function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  return mesh as Mesh;
 }
 
 function cloneRefinementSessionState(session: RefinementSession): RefinementSession {

@@ -5189,6 +5189,46 @@ test("session patch rejects stale active cell planning metadata before direct re
   }
 });
 
+test("session patch rejects every invalid active cell ordinal without mapping fallback", () => {
+  const invalidOrdinals = [
+    0,
+    -1,
+    999,
+    Number.NaN,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1
+  ];
+  for (const ordinal of invalidOrdinals) {
+    for (const operation of ["refine", "preview"]) {
+      const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+      const active = buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      });
+      session.cells.get("e1").ordinal = ordinal;
+      const before = structuredClone(session);
+      const invoke = operation === "refine"
+        ? () => refineSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          })
+        : () => previewSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          });
+
+      const error = captureError(invoke);
+
+      assert.equal(error instanceof TwoToOnePlanningError, true, `${operation}: ${ordinal}`);
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /ordinal|expected element|activeBuild.*stale/i);
+      assert.deepEqual(session, before);
+      assert.equal(session.cells.get("e2").active, true);
+      assert.equal(session.cells.get("e2").hidden, false);
+    }
+  }
+});
+
 test("structured-cloned builds reject stale active cell planning metadata", () => {
   for (const mutation of ["role", "level", "parentId"]) {
     for (const operation of ["refine", "preview"]) {
@@ -5342,6 +5382,122 @@ test("same-realm active build validation does not rescan session geometry", () =
   );
 
   assert.equal(nodeCollectionReads, 0);
+});
+
+test("same-realm active build validation does not iterate active leaves or cells", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(8, 8, 8));
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const activeIterator = session.activeLeafIds[Symbol.iterator].bind(session.activeLeafIds);
+  const cellIterator = session.cells[Symbol.iterator].bind(session.cells);
+  let activeLeafIterations = 0;
+  let cellIterations = 0;
+  Object.defineProperty(session.activeLeafIds, Symbol.iterator, {
+    configurable: true,
+    value() {
+      activeLeafIterations += 1;
+      return activeIterator();
+    }
+  });
+  Object.defineProperty(session.cells, Symbol.iterator, {
+    configurable: true,
+    value() {
+      cellIterations += 1;
+      return cellIterator();
+    }
+  });
+
+  assert.throws(
+    () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+    /missing|does not exist/
+  );
+
+  assert.equal(activeLeafIterations, 0);
+  assert.equal(cellIterations, 0);
+});
+
+test("structured-cloned active build validation scans linearly once then caches trust", () => {
+  const workerSession = createRefinementSession(createHexUnitCubeMesh(8, 8, 8));
+  const session = createRefinementSession(createHexUnitCubeMesh(8, 8, 8));
+  const active = structuredClone(buildActiveMeshWithMap(workerSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }));
+  const activeIterator = session.activeLeafIds[Symbol.iterator].bind(session.activeLeafIds);
+  const cellIterator = session.cells[Symbol.iterator].bind(session.cells);
+  let activeLeafIterations = 0;
+  let cellIterations = 0;
+  Object.defineProperty(session.activeLeafIds, Symbol.iterator, {
+    configurable: true,
+    value() {
+      activeLeafIterations += 1;
+      return activeIterator();
+    }
+  });
+  Object.defineProperty(session.cells, Symbol.iterator, {
+    configurable: true,
+    value() {
+      cellIterations += 1;
+      return cellIterator();
+    }
+  });
+
+  assert.throws(
+    () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+    /missing|does not exist/
+  );
+  assert.equal(activeLeafIterations, 0);
+  assert.ok(cellIterations <= 1);
+
+  activeLeafIterations = 0;
+  cellIterations = 0;
+  assert.throws(
+    () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+    /missing|does not exist/
+  );
+  assert.equal(activeLeafIterations, 0);
+  assert.equal(cellIterations, 0);
+});
+
+test("trusted active builds isolate planning and remap from public mapping tamper", () => {
+  for (const transfer of ["same-realm", "structured-clone"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const built = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const active = transfer === "same-realm" ? built : structuredClone(built);
+    if (transfer === "structured-clone") {
+      assert.throws(
+        () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+        /missing|does not exist/
+      );
+    }
+
+    Map.prototype.set.call(active.cellIdByElementId, 1, "e2");
+    Map.prototype.set.call(active.elementIdByCellId, "e1", 2);
+    Map.prototype.set.call(active.nodeIdBySessionNodeId, 1, 999);
+    active.elementIdByCellOrdinalArray[session.cells.get("e1").ordinal] = 2;
+
+    assert.equal(activeBuildCellIdByElementId(active, 1), "e1");
+    assert.equal(activeBuildElementIdByCellId(session, active, "e1"), 1);
+    const remapped = remapSessionSetsToActiveMesh(active, {
+      cellSets: { CORE: ["e1"] },
+      nodeSets: { CORNER: [1] }
+    });
+    assert.deepEqual(remapped.cellSets.get("CORE"), [1]);
+    assert.deepEqual(remapped.nodeSets.get("CORNER"), [1]);
+
+    const command = refineSessionPatch(session, ["e1"], {
+      includeTransitions: false,
+      activeBuild: active
+    });
+    assert.ok(command.createdCellIds.length > 0);
+    assert.equal(session.cells.get("e1").hidden, true);
+    assert.equal(session.cells.get("e2").hidden, false);
+  }
 });
 
 test("active build provenance stays scalar-sized and survives structured clone", () => {

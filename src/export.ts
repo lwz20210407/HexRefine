@@ -6,7 +6,7 @@ import type {
   RefinementSessionNamedSets,
   RefinementSessionSetRemapInput
 } from "./refinement-session.js";
-import type { Element, ElementKind, Mesh, Point } from "./types.js";
+import type { Element, ElementKind, Mesh, Point, ReadonlyMesh } from "./types.js";
 import { inferMeshKind } from "./mesh.js";
 
 export interface VtkOptions {
@@ -119,9 +119,9 @@ export function prepareExportMesh(
   exported: RefinementSessionExportResult,
   requestedKind?: ExportTargetKind
 ): PreparedExportResult {
-  const meshKind = inferMeshKind(exported.mesh);
+  const meshKind = inferMeshKind(mutableMeshView(exported.mesh));
   const exportKind = normalizeExportKind(meshKind, requestedKind);
-  const converted = convertMeshForExport(exported.mesh, exportKind);
+  const converted = convertMeshForExport(mutableMeshView(exported.mesh), exportKind);
   return {
     mesh: converted.mesh,
     sourceElementIds: converted.sourceElementIds,
@@ -235,7 +235,10 @@ export function* iterateLegacyVtkLines(mesh: Mesh | ExportMesh, options: VtkOpti
     yield formatPoint3(point);
   }
 
-  const cellIntCount = mesh.elements.reduce((total, element) => total + element.length + 1, 0);
+  let cellIntCount = 0;
+  for (const element of mesh.elements) {
+    cellIntCount += element.length + 1;
+  }
   yield `CELLS ${mesh.elements.length} ${cellIntCount}`;
   for (const element of mesh.elements) {
     if (element.length !== spec.expectedNodeCount) {
@@ -1176,4 +1179,8 @@ function sanitizeTitle(title: string): string {
 
 function toPoint3(point: readonly number[]): [number, number, number] {
   return [point[0] ?? 0, point[1] ?? 0, point[2] ?? 0];
+}
+
+function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  return mesh as Mesh;
 }

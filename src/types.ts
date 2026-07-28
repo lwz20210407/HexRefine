@@ -9,18 +9,22 @@ export type MutablePoint = number[];
 export type Element = readonly number[];
 export type ElementKind = "Q1" | "H1";
 
-export interface ReadonlyMesh {
+export interface Mesh {
   /**
    * Coordinates are stored in array order, while element connectivity uses
    * 1-based node ids to stay compatible with the Mathematica notebooks and
    * Abaqus-style input files.
    */
+  nodes: Point[];
+  elements: Element[];
+  kind?: ElementKind;
+}
+
+export interface ReadonlyMesh {
   readonly nodes: readonly Point[];
   readonly elements: readonly Element[];
   readonly kind?: ElementKind;
 }
-
-export type Mesh = ReadonlyMesh;
 
 export interface LocalRefinement {
   nodes: Point[];

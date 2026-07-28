@@ -5,6 +5,7 @@ import type {
   HexIndexRange,
   Mesh,
   Point,
+  ReadonlyMesh,
   RefineOptions,
   RegularizedHexSelection
 } from "./types.js";
@@ -113,7 +114,7 @@ export function prepareSessionRefineSelection(
           filtered,
           regularizationOptions
         )
-      : regularizeTwoToOneHexSelection(active.mesh, filtered.elementIds, regularizationOptions);
+      : regularizeTwoToOneHexSelection(mutableMeshView(active.mesh), filtered.elementIds, regularizationOptions);
     if (regularization.selectedElementIds.length === 0) {
       return {
         elementIds: filtered.elementIds,
@@ -144,9 +145,13 @@ export function prepareSessionRefineSelection(
   }
 
   const filteredCellIds = mapCellIdsFromElementIds(active, filtered.elementIds);
-  const components = connectedElementComponents(active.mesh, filtered.elementIds);
+  const components = connectedElementComponents(mutableMeshView(active.mesh), filtered.elementIds);
   const regularizedComponents = components.map((component) => {
-    const componentDomainElementIds = componentConnectedDomainElementIds(active.mesh, component, filtered.domainElementIdSet);
+    const componentDomainElementIds = componentConnectedDomainElementIds(
+      mutableMeshView(active.mesh),
+      component,
+      filtered.domainElementIdSet
+    );
     const componentDomain = filtered.level === undefined
       ? undefined
       : buildActiveRegularizationDomain(session, active, filtered.level, componentDomainElementIds);
@@ -175,7 +180,7 @@ export function prepareSessionRefineSelection(
   const outerElementIds = uniqueSorted(successfulComponents.flatMap((component) => component.regularization.selectedElementIds));
   const regularization = combineRegularizedComponents(successfulComponents.map((component) => component.regularization));
 
-  const containmentPreview = previewRefinementByElementIds(active.mesh, boundedElementIds, {
+  const containmentPreview = previewRefinementByElementIds(mutableMeshView(active.mesh), boundedElementIds, {
     ...options,
     regularizeHexSelection: false
   });
@@ -214,7 +219,7 @@ function regularizeLocalTwoToOneSessionLevel(
   }
 ): StructuredRegularizedHexSelection {
   if (filtered.level === undefined || filtered.domainElementIds.length === 0) {
-    return regularizeHexSelection(active.mesh, filtered.elementIds, options);
+    return regularizeHexSelection(mutableMeshView(active.mesh), filtered.elementIds, options);
   }
   const domain = buildActiveRegularizationDomain(
     session,
@@ -316,7 +321,7 @@ function prepareRegularizedComponentAttempt(
   let supportFallback: ReturnType<typeof topologicalSupportRegularization> | undefined;
   const getSupportFallback = (): NonNullable<ReturnType<typeof topologicalSupportRegularization>> | null => {
     supportFallback ??= topologicalSupportRegularization(
-      active.mesh,
+      mutableMeshView(active.mesh),
       componentElementIds,
       domainElementIds,
       growTopologyLayers
@@ -344,7 +349,7 @@ function prepareRegularizedComponentAttempt(
       warnings
     };
   }
-  const blockCheck = validateRegularizedBlock(active.mesh, regularization);
+  const blockCheck = validateRegularizedBlock(mutableMeshView(active.mesh), regularization);
   if (!blockCheck.ok) {
     const fallback = getSupportFallback();
     if (fallback) {
@@ -366,7 +371,7 @@ function prepareRegularizedComponentAttempt(
       warnings: [...warnings, blockCheck.warning]
     };
   }
-  const bounded = boundedTransitionCoreElementIds(active.mesh, regularization);
+  const bounded = boundedTransitionCoreElementIds(mutableMeshView(active.mesh), regularization);
   if (bounded.elementIds.length === 0) {
     const fallback = getSupportFallback();
     if (fallback) {
@@ -613,7 +618,7 @@ function structuredRegularizationFromSessionResult(
     addedElementIds: mapElementIdsFromCellIds(session, active, result.addedCellIds),
     removedElementIds: mapElementIdsFromCellIds(session, active, result.removedCellIds),
     ...(result.regularization.indexRange || result.regularization.gridDimensions
-      ? { rankIndex: centerRankIndexForElementIds(active.mesh, domainElementIds) }
+      ? { rankIndex: centerRankIndexForElementIds(mutableMeshView(active.mesh), domainElementIds) }
       : {})
   };
 }
@@ -1434,6 +1439,10 @@ function makeIndexRange(min: readonly [number, number, number], max: readonly [n
 
 function uniqueSorted(values: readonly number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  return mesh as Mesh;
 }
 
 function uniqueSortedStrings(values: readonly string[]): string[] {

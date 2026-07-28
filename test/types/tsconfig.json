@@ -4,6 +4,7 @@
     "noEmit": true
   },
   "include": [
+    "./active-mesh-build.contract.ts",
     "./two-to-one-capability.contract.ts"
   ]
 }

@@ -241,3 +241,61 @@ test("HexRefine browser command snapshots isolate optional arrays and capability
     }
   });
 });
+
+test("HexRefine GUI delete restore preserves revision and permits preview then refine", async () => {
+  const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
+  const standalone = await readFile(
+    new URL("examples/browser/hexrefine-standalone.html", projectRoot),
+    "utf8"
+  );
+  const cloneSource = extractNamedFunction(gui, "cloneRefinementSessionState");
+  const restoreSource = extractNamedFunction(gui, "restoreRefinementSessionState");
+  assert.equal(
+    extractNamedFunction(standalone, "cloneRefinementSessionState"),
+    cloneSource
+  );
+  assert.equal(
+    extractNamedFunction(standalone, "restoreRefinementSessionState"),
+    restoreSource
+  );
+  const cloneRefinementSessionState = Function(
+    "cloneMeshForCommand",
+    "cloneRefinementSessionCommand",
+    `${cloneSource}; return cloneRefinementSessionState;`
+  )(
+    (mesh) => ({
+      ...(mesh.kind ? { kind: mesh.kind } : {}),
+      nodes: mesh.nodes.map((point) => [...point]),
+      elements: mesh.elements.map((element) => [...element])
+    }),
+    (command) => structuredClone(command)
+  );
+  const restoreRefinementSessionState = Function(
+    "cloneRefinementSessionState",
+    `${restoreSource}; return restoreRefinementSessionState;`
+  )(cloneRefinementSessionState);
+  const runtime = await import("../dist/index.js");
+  const session = runtime.createRefinementSession(runtime.createHexUnitCubeMesh(2, 1, 1));
+  const snapshot = cloneRefinementSessionState(session);
+  const deleted = runtime.createRefinementSession(runtime.createHexUnitCubeMesh(1, 1, 1));
+  deleted.revision = 4;
+
+  assert.equal(snapshot.revision, 0);
+  const restored = restoreRefinementSessionState(deleted, snapshot, true);
+  assert.equal(restored.revision, 5);
+  const active = runtime.buildActiveMeshWithMap(restored, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const preview = runtime.previewSessionPatch(restored, ["e1"], {
+    includeTransitions: false,
+    activeBuild: active
+  });
+  assert.ok(preview.plan.length > 0);
+  const command = runtime.refineSessionPatch(restored, ["e1"], {
+    includeTransitions: false,
+    activeBuild: active
+  });
+  assert.ok(command.createdCellIds.length > 0);
+  assert.equal(restored.revision, 6);
+});

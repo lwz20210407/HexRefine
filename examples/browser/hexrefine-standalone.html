@@ -2254,6 +2254,7 @@
           });
         }
         return {
+          revision: source.revision,
           baseMesh: cloneMeshForCommand(source.baseMesh),
           kind: source.kind,
           nodes: source.nodes.map((point) => [...point]),
@@ -2269,6 +2270,14 @@
           nextCommandId: source.nextCommandId,
           nextCellOrdinal: source.nextCellOrdinal
         };
+      }
+
+      function restoreRefinementSessionState(currentSession, snapshotSession, cloneSnapshot = true) {
+        const restored = cloneSnapshot
+          ? cloneRefinementSessionState(snapshotSession)
+          : snapshotSession;
+        restored.revision = Math.max(currentSession.revision, snapshotSession.revision) + 1;
+        return restored;
       }
 
       function cloneNamedSetMap(source) {
@@ -2313,9 +2322,11 @@
       }
 
       function restoreDeleteUndoSnapshot(snapshot) {
-        refinementSession = snapshot.storesRefinementSessionByReference
-          ? snapshot.refinementSession
-          : cloneRefinementSessionState(snapshot.refinementSession);
+        refinementSession = restoreRefinementSessionState(
+          refinementSession,
+          snapshot.refinementSession,
+          !snapshot.storesRefinementSessionByReference
+        );
         meshMergeTolerance = snapshot.meshMergeTolerance;
         refreshMeshFromSession();
         hiddenElements = new Set(snapshot.hiddenElements);
