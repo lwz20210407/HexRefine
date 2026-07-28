@@ -2293,6 +2293,7 @@ test("HexRefine command script can replay delete undo and redo", () => {
   });
 
   assert.equal(replay.replayedCommandCount, 4);
+  assert.equal(replay.session.revision, 3);
   assert.equal(replay.warnings.length, 0);
   assert.equal(replay.mesh.elements.length, 2);
   assert.equal(checkNoHangingNodes(replay.mesh).ok, true);
@@ -5158,6 +5159,244 @@ test("session patch direct refine and preview reject activeBuild tolerance misma
   }
 });
 
+test("session patch rejects stale active cell planning metadata before direct refine and preview", () => {
+  for (const operation of ["refine", "preview"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    session.cells.get("e1").ordinal = 2;
+    const before = structuredClone(session);
+    const invoke = operation === "refine"
+      ? () => refineSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          activeBuild: active
+        })
+      : () => previewSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          activeBuild: active
+        });
+
+    const error = captureError(invoke);
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*stale|expected element/i);
+    assert.deepEqual(session, before);
+    assert.equal(session.cells.get("e2").active, true);
+    assert.equal(session.cells.get("e2").hidden, false);
+  }
+});
+
+test("structured-cloned builds reject stale active cell planning metadata", () => {
+  for (const mutation of ["role", "level", "parentId"]) {
+    for (const operation of ["refine", "preview"]) {
+      const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+      const active = structuredClone(buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }));
+      const cell = session.cells.get("e1");
+      if (mutation === "role") {
+        cell.role = "face-transition";
+      } else if (mutation === "level") {
+        cell.level = 1;
+      } else {
+        cell.parentId = "e2";
+      }
+      const before = structuredClone(session);
+      const invoke = operation === "refine"
+        ? () => refineSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          })
+        : () => previewSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: active
+          });
+
+      const error = captureError(invoke);
+
+      assert.equal(error instanceof TwoToOnePlanningError, true, mutation);
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /activeBuild.*stale|session.*changed/i);
+      assert.deepEqual(session, before);
+      assert.equal(session.cells.get("e2").active, true);
+      assert.equal(session.cells.get("e2").hidden, false);
+    }
+  }
+});
+
+test("session revision invalidates builds across refine undo and redo", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  assert.equal(session.revision, 0);
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  refineSessionPatch(session, ["e1"], {
+    includeTransitions: false,
+    activeBuild: initial
+  });
+  assert.equal(session.revision, 1);
+  const refined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  undoRefinementSession(session);
+  assert.equal(session.revision, 2);
+  assert.throws(
+    () => previewSessionPatch(session, [], { activeBuild: refined }),
+    (error) => error instanceof TwoToOnePlanningError
+      && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+  );
+  const undone = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  redoRefinementSession(session);
+  assert.equal(session.revision, 3);
+  assert.throws(
+    () => previewSessionPatch(session, [], { activeBuild: undone }),
+    (error) => error instanceof TwoToOnePlanningError
+      && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+  );
+});
+
+test("structured-cloned active builds validate once and remain reusable in an equivalent realm", () => {
+  const workerSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const mainSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const workerBuild = buildActiveMeshWithMap(workerSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9,
+    includeCellIdByElementId: false,
+    includeElementIdByCellId: false,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false
+  });
+  const transferredBuild = structuredClone(workerBuild);
+  const nodes = mainSession.nodes;
+  let nodeCollectionReads = 0;
+  Object.defineProperty(mainSession, "nodes", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      nodeCollectionReads += 1;
+      return nodes;
+    }
+  });
+
+  assert.throws(
+    () => previewSessionPatch(mainSession, ["missing"], { activeBuild: transferredBuild }),
+    /missing|does not exist/
+  );
+  assert.ok(nodeCollectionReads > 0);
+  nodeCollectionReads = 0;
+
+  assert.throws(
+    () => previewSessionPatch(mainSession, ["missing"], { activeBuild: transferredBuild }),
+    /missing|does not exist/
+  );
+  assert.equal(nodeCollectionReads, 0);
+  const command = refineSessionPatch(mainSession, ["e1"], {
+    includeTransitions: false,
+    activeBuild: transferredBuild
+  });
+  assert.ok(command.createdCellIds.length > 0);
+  assert.equal(mainSession.revision, 1);
+  assert.throws(
+    () => previewSessionPatch(mainSession, [], { activeBuild: transferredBuild }),
+    (error) => error instanceof TwoToOnePlanningError
+      && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+  );
+});
+
+test("same-realm active build validation does not rescan session geometry", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const nodes = session.nodes;
+  let nodeCollectionReads = 0;
+  Object.defineProperty(session, "nodes", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      nodeCollectionReads += 1;
+      return nodes;
+    }
+  });
+
+  assert.throws(
+    () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+    /missing|does not exist/
+  );
+  assert.throws(
+    () => previewSessionPatch(session, ["missing"], { activeBuild: active }),
+    /missing|does not exist/
+  );
+
+  assert.equal(nodeCollectionReads, 0);
+});
+
+test("active build provenance stays scalar-sized and survives structured clone", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(8, 8, 8));
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const provenance = active.provenance;
+
+  assert.ok(provenance);
+  assert.deepEqual(Object.keys(provenance).sort(), [
+    "geometryResolution",
+    "mappingFingerprint",
+    "mergeTolerance",
+    "sessionFingerprint",
+    "sessionRevision",
+    "version"
+  ]);
+  assert.equal(provenance.version, 1);
+  assert.equal(provenance.sessionRevision, session.revision);
+  assert.equal(typeof provenance.sessionFingerprint, "string");
+  assert.equal(typeof provenance.mappingFingerprint, "string");
+  assert.equal(Object.values(provenance).some(Array.isArray), false);
+  assert.equal(Object.values(provenance).some((value) => value instanceof Map), false);
+  assert.deepEqual(structuredClone(provenance), provenance);
+  assert.equal(
+    Reflect.ownKeys(active).some((key) => /snapshot|cells|nodes/i.test(String(key))),
+    false
+  );
+});
+
+test("structured-clone mapping fingerprint distinguishes sparse index zero values", () => {
+  for (const indexZeroValue of [undefined, null, Number.NaN]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const transferredBuild = structuredClone(active);
+    assert.equal(0 in transferredBuild.cellIdsByElementIdArray, false);
+    transferredBuild.cellIdsByElementIdArray[0] = indexZeroValue;
+    const before = structuredClone(session);
+
+    const error = captureError(() => previewSessionPatch(session, [], {
+      activeBuild: transferredBuild
+    }));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /mapping.*fingerprint|metadata.*tamper/i);
+    assert.deepEqual(session, before);
+  }
+});
+
 test("active mesh builds snapshot geometry before deferred metadata reads", () => {
   const firstSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const secondSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
@@ -5202,6 +5441,7 @@ test("session patch rejects stale activeBuild geometry, connectivity, and active
         mergeNodes: true,
         mergeTolerance: 1e-9
       });
+      const transferredBuild = structuredClone(active);
       const secondCell = session.cells.get("e2");
       const firstCellNodeIds = new Set(session.cells.get("e1").element);
       const secondOnlyNodeId = secondCell.element.find(
@@ -5230,11 +5470,11 @@ test("session patch rejects stale activeBuild geometry, connectivity, and active
       const invoke = operation === "refine"
         ? () => refineSessionPatch(session, ["e1"], {
             includeTransitions: false,
-            activeBuild: active
+            activeBuild: transferredBuild
           })
         : () => previewSessionPatch(session, ["e1"], {
             includeTransitions: false,
-            activeBuild: active
+            activeBuild: transferredBuild
           });
 
       const error = captureError(invoke);
@@ -5284,6 +5524,12 @@ test("active mesh build metadata is immutable and mapping tamper is rejected", (
       value: 99
     });
   }, TypeError);
+  assert.throws(() => {
+    immutableBuild.cellIdByElementId.set(1, "tampered");
+  }, TypeError);
+  assert.throws(() => {
+    immutableBuild.cellIdsByElementIdArray[1] = "tampered";
+  }, TypeError);
 
   for (const tamper of ["map", "array"]) {
     const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
@@ -5291,16 +5537,17 @@ test("active mesh build metadata is immutable and mapping tamper is rejected", (
       mergeNodes: true,
       mergeTolerance: 1e-9
     });
+    const transferredBuild = structuredClone(active);
     if (tamper === "map") {
-      active.cellIdByElementId.set(1, "tampered");
+      transferredBuild.cellIdByElementId.set(1, "tampered");
     } else {
-      active.cellIdsByElementIdArray[1] = "tampered";
+      transferredBuild.cellIdsByElementIdArray[1] = "tampered";
     }
     const before = structuredClone(session);
 
     const error = captureError(() => refineSessionPatch(session, ["e1"], {
       includeTransitions: false,
-      activeBuild: active
+      activeBuild: transferredBuild
     }));
 
     assert.equal(error instanceof TwoToOnePlanningError, true);
@@ -5310,13 +5557,33 @@ test("active mesh build metadata is immutable and mapping tamper is rejected", (
   }
 });
 
-test("session patch direct refine and preview use the full-geometry default tolerance", () => {
+test("session patch direct refine and preview use the nonuniform full-geometry default tolerance", () => {
+  const mesh = { kind: "H1", nodes: [], elements: [] };
+  const appendCube = (offset, size) => {
+    const cube = createHexUnitCubeMesh(1, 1, 1);
+    const nodeOffset = mesh.nodes.length;
+    mesh.nodes.push(...cube.nodes.map((point) => point.map(
+      (coordinate, axis) => offset[axis] + coordinate * size
+    )));
+    mesh.elements.push(...cube.elements.map((element) =>
+      element.map((nodeId) => nodeId + nodeOffset)
+    ));
+  };
+  appendCube([0, 0, 0], 1);
+  appendCube([1 + 5e-9, 0, 0], 1);
+  appendCube([3, 0, 0], 0.01);
+
   for (const operation of ["refine", "preview"]) {
-    const implicitSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
-    const explicitSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
-    const implicitOptions = { includeTransitions: false };
+    const implicitSession = createRefinementSession(mesh);
+    const explicitSession = createRefinementSession(mesh);
+    const localToleranceSession = createRefinementSession(mesh);
+    const implicitOptions = { includeTransitions: true };
     const explicitOptions = {
-      includeTransitions: false,
+      includeTransitions: true,
+      mergeTolerance: 1e-10
+    };
+    const localToleranceOptions = {
+      includeTransitions: true,
       mergeTolerance: 1e-8
     };
     assert.equal(Object.hasOwn(implicitOptions, "activeBuild"), false);
@@ -5328,11 +5595,78 @@ test("session patch direct refine and preview use the full-geometry default tole
     const explicitResult = operation === "refine"
       ? refineSessionPatch(explicitSession, ["e1"], explicitOptions)
       : previewSessionPatch(explicitSession, ["e1"], explicitOptions);
+    const localToleranceResult = operation === "refine"
+      ? refineSessionPatch(localToleranceSession, ["e1"], localToleranceOptions)
+      : previewSessionPatch(localToleranceSession, ["e1"], localToleranceOptions);
 
     assert.deepEqual(implicitResult, explicitResult);
     assert.deepEqual(implicitSession, explicitSession);
+    assert.notDeepEqual(implicitResult, localToleranceResult);
     assert.equal(Object.hasOwn(implicitOptions, "activeBuild"), false);
     assert.equal(Object.hasOwn(implicitOptions, "mergeTolerance"), false);
+  }
+});
+
+test("active mesh build and session patch reject invalid recorded merge tolerances", () => {
+  for (const mergeTolerance of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    assert.throws(
+      () => buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance
+      }),
+      {
+        name: "RangeError",
+        message: /mergeTolerance must be finite and nonnegative/
+      }
+    );
+
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const transferredBuild = structuredClone(active);
+    transferredBuild.mergeTolerance = mergeTolerance;
+    if (transferredBuild.provenance) {
+      transferredBuild.provenance.mergeTolerance = mergeTolerance;
+    }
+    for (const operation of ["refine", "preview"]) {
+      const before = structuredClone(session);
+      const invoke = operation === "refine"
+        ? () => refineSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: transferredBuild
+          })
+        : () => previewSessionPatch(session, ["e1"], {
+            includeTransitions: false,
+            activeBuild: transferredBuild
+          });
+
+      const error = captureError(invoke);
+
+      assert.equal(error instanceof TwoToOnePlanningError, true);
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /activeBuild.*merge tolerance/i);
+      assert.deepEqual(session, before);
+    }
+  }
+});
+
+test("session patch maps non-finite complete geometry to a structured atomic error", () => {
+  for (const operation of ["refine", "preview"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    session.nodes[0] = [Number.NaN, 0, 0];
+    const before = structuredClone(session);
+    const invoke = operation === "refine"
+      ? () => refineSessionPatch(session, ["e1"], { includeTransitions: false })
+      : () => previewSessionPatch(session, ["e1"], { includeTransitions: false });
+
+    const error = captureError(invoke);
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /non-finite coordinate/i);
+    assert.deepEqual(session, before);
   }
 });
 

@@ -339,7 +339,7 @@ function replayGridGenerate(
     : createHexUnitCubeMesh(nx, ny, nz);
   const mesh = transformMeshToBounds(unit, bounds);
 
-  state.session = createRefinementSession(mesh);
+  replaceReplaySession(state, mesh);
   state.mergeTolerance = readOptionalNumber(payload.mergeTolerance) ?? defaultMergeTolerance(bounds);
   state.cellSets.clear();
   state.nodeSets.clear();
@@ -351,7 +351,7 @@ function replayGridGenerate(
 
 function replayGridImport(state: ReplayState, payload: Record<string, unknown>): void {
   const mesh = meshFromSerializable("mesh" in payload ? payload.mesh : payload);
-  state.session = createRefinementSession(mesh);
+  replaceReplaySession(state, mesh);
   state.mergeTolerance = readOptionalNumber(payload.mergeTolerance) ?? defaultMergeTolerance(boundsOfMesh(mesh));
   state.cellSets.clear();
   state.nodeSets.clear();
@@ -566,7 +566,7 @@ function replayDeleteElements(
     elements
   };
   remapReplayCellSetsAfterElementCompaction(state, active, keptSourceElementIds);
-  state.session = createRefinementSession(active.mesh.kind ? { ...mesh, kind: active.mesh.kind } : mesh);
+  replaceReplaySession(state, active.mesh.kind ? { ...mesh, kind: active.mesh.kind } : mesh);
   resetReplayViewState(state);
 }
 
@@ -593,7 +593,7 @@ function replayQ1BoundaryLayerGrow(
   });
   state.deleteUndoSnapshots.push(captureReplaySnapshot(state));
   state.deleteRedoSnapshots = [];
-  state.session = createRefinementSession(result.mesh);
+  replaceReplaySession(state, result.mesh);
   const setPrefix = sanitizeName(readString(payload.setPrefix, "BL")) || "BL";
   state.cellSets.set(`${setPrefix}_ALL`, result.generatedElementIds.map(baseCellIdFromElementId));
   result.layerElementIds.forEach((ids, index) => {
@@ -637,7 +637,7 @@ function replayQ1TemplateRectangleCircle(
   state.deleteUndoSnapshots.push(captureReplaySnapshot(state));
   state.deleteRedoSnapshots = [];
   remapReplayCellSetsAfterQ1TemplateReplacement(state, active, result);
-  state.session = createRefinementSession(result.mesh);
+  replaceReplaySession(state, result.mesh);
   state.nodeSets.clear();
   const setPrefix = sanitizeName(readString(payload.setPrefix, "RCT")) || "RCT";
   state.cellSets.set(`${setPrefix}_CORE`, result.regionElementIds.core.map(baseCellIdFromElementId));
@@ -1184,6 +1184,15 @@ function requireSession(state: ReplayState): RefinementSession {
   return state.session;
 }
 
+function replaceReplaySession(state: ReplayState, mesh: Mesh): void {
+  const previousRevision = state.session?.revision;
+  const replacement = createRefinementSession(mesh);
+  if (previousRevision !== undefined) {
+    replacement.revision = previousRevision + 1;
+  }
+  state.session = replacement;
+}
+
 function captureReplaySnapshot(state: ReplayState): ReplaySnapshot {
   const session = requireSession(state);
   return {
@@ -1199,7 +1208,9 @@ function captureReplaySnapshot(state: ReplayState): ReplaySnapshot {
 }
 
 function restoreReplaySnapshot(state: ReplayState, snapshot: ReplaySnapshot): void {
+  const currentRevision = state.session?.revision ?? snapshot.session.revision;
   state.session = cloneRefinementSessionState(snapshot.session);
+  state.session.revision = Math.max(currentRevision, state.session.revision) + 1;
   state.mergeTolerance = snapshot.mergeTolerance;
   state.cellSets = cloneCellSets(snapshot.cellSets);
   state.nodeSets = cloneNodeSets(snapshot.nodeSets);
@@ -1936,6 +1947,7 @@ function cloneRefinementSessionState(session: RefinementSession): RefinementSess
     });
   }
   return {
+    revision: session.revision,
     baseMesh: cloneMesh(session.baseMesh),
     kind: session.kind,
     nodes: session.nodes.map((point) => [...point]),

@@ -1,6 +1,13 @@
 import type { ActiveMeshBuildResult, CellId, RefinementSession } from "./refinement-session.js";
 import { activeBuildCellIdByElementId, activeBuildElementIdByCellId } from "./refinement-session.js";
-import type { HexIndexRange, Mesh, RefineOptions, RegularizedHexSelection } from "./types.js";
+import type {
+  Element,
+  HexIndexRange,
+  Mesh,
+  Point,
+  RefineOptions,
+  RegularizedHexSelection
+} from "./types.js";
 import { previewRefinementByElementIds } from "./refinement-ops.js";
 import {
   regularizeHexSelection,
@@ -426,8 +433,8 @@ function buildActiveRegularizationDomain(
   activeElementIds: readonly number[]
 ): HexSessionRegularizationDomain {
   const oldToNewNodeId = new Map<number, number>();
-  const nodes: Mesh["nodes"] = [];
-  const elements: Mesh["elements"] = [];
+  const nodes: Point[] = [];
+  const elements: Element[] = [];
   const cellIds: CellId[] = [];
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();

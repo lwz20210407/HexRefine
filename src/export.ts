@@ -19,8 +19,8 @@ export type ExportTargetKind = "native" | ExportElementKind | ElementKind;
 
 export interface ExportMesh {
   kind: ExportElementKind;
-  nodes: Point[];
-  elements: Element[];
+  readonly nodes: readonly Point[];
+  readonly elements: readonly Element[];
 }
 
 export interface PreparedExportResult {

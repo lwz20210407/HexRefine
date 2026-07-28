@@ -165,8 +165,8 @@ export function refineHexTo13Hex(vertices: readonly Point[], mergeTolerance?: nu
   return {
     kind: "H1",
     source: "RefineH1To13H1",
-    nodes: merged.nodes,
-    elements: merged.elements
+    nodes: [...merged.nodes],
+    elements: [...merged.elements]
   };
 }
 
