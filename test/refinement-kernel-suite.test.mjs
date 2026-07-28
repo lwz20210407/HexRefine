@@ -5976,6 +5976,46 @@ test("local command conformance requires every recorded active-created cell to r
   }
 });
 
+test("local command conformance rejects recorded active cells missing from a current build", () => {
+  for (const buildMode of ["omitted", "rebuilt"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const initial = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const command = refineSessionPatch(session, ["e1"], {
+      includeTransitions: false,
+      activeBuild: initial
+    });
+    const recordedCommand = {
+      ...command,
+      activeCreatedCellIds: [...command.createdCellIds]
+    };
+    const cellId = recordedCommand.activeCreatedCellIds[0];
+    Set.prototype.delete.call(session.activeLeafIds, cellId);
+    const active = buildMode === "rebuilt"
+      ? buildActiveMeshWithMap(session, {
+          mergeNodes: true,
+          mergeTolerance: 1e-9,
+          includeElementIdsByNodeId: true
+        })
+      : undefined;
+
+    const error = captureError(() =>
+      checkRefinementSessionCommandConformance(
+        session,
+        recordedCommand,
+        1e-9,
+        active
+      )
+    );
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, buildMode);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /recorded active cell|active element/i);
+  }
+});
+
 test("trusted active builds isolate planning and remap from public mapping tamper", () => {
   for (const transfer of ["same-realm", "structured-clone"]) {
     const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));

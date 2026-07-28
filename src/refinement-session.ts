@@ -1431,7 +1431,16 @@ export function checkRefinementSessionCommandConformance(
     : command.activeCreatedCellIds;
   validateActiveBuildCellsForSession(session, active, seedCellIds);
   const seedElementIds = seedCellIds
-    .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
+    .map((cellId) => {
+      const elementId = activeBuildElementIdByCellId(session, active, cellId);
+      if (elementId === undefined && command.activeCreatedCellIds !== undefined) {
+        throw sessionFaceResolutionError(
+          seedCellIds,
+          `command recorded active cell ${cellId}, but it does not map to an active element`
+        );
+      }
+      return elementId;
+    })
     .filter((elementId): elementId is number => elementId !== undefined)
     .sort((a, b) => a - b);
   const local = buildLocalActiveMeshAroundElements(active, seedElementIds);
