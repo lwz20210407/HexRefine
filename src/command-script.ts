@@ -8,6 +8,9 @@ import type {
 import type { HexRefinementQualitySummary, Mesh, Point, ReadonlyMesh } from "./types.js";
 import { cloneTwoToOneCapabilityReport } from "./two-to-one-capability.js";
 import {
+  activeBuildCellIdByElementId,
+  activeBuildElementIdByCellId,
+  activeBuildSessionNodeIdsByNodeId,
   buildActiveMeshWithMap,
   createRefinementSession,
   isRefinableSessionCell,
@@ -401,7 +404,7 @@ function replayRefinePatch(
     : cellIds.length > 0
       ? cellIds
       : elementIds
-        .map((elementId) => active.cellIdByElementId.get(elementId))
+        .map((elementId) => activeBuildCellIdByElementId(active, elementId))
         .filter((cellId): cellId is CellId => cellId !== undefined);
   const transitionSupportCellIds = replaySelection.usedReplaySelectionSource
     ? replaySelection.transitionSupportCellIds
@@ -655,7 +658,7 @@ function remapReplayCellSetsAfterElementCompaction(
 ): void {
   const replacementsByOldCellId = new Map<CellId, CellId[]>();
   keptSourceElementIds.forEach((oldElementId, index) => {
-    const oldCellId = active.cellIdByElementId.get(oldElementId);
+    const oldCellId = activeBuildCellIdByElementId(active, oldElementId);
     if (oldCellId) {
       replacementsByOldCellId.set(oldCellId, [baseCellIdFromElementId(index + 1)]);
     }
@@ -673,7 +676,7 @@ function remapReplayCellSetsAfterQ1TemplateReplacement(
   const replacementsByOldCellId = new Map<CellId, CellId[]>();
   let nextKeptElementId = 1;
   for (let oldElementId = 1; oldElementId <= active.mesh.elements.length; oldElementId += 1) {
-    const oldCellId = active.cellIdByElementId.get(oldElementId);
+    const oldCellId = activeBuildCellIdByElementId(active, oldElementId);
     if (!oldCellId) {
       continue;
     }
@@ -757,7 +760,9 @@ function replaySaveNodeSet(
   const nodeIds = replayUsesSelectionState(options) && state.selectedNodeIds.size > 0
     ? [...state.selectedNodeIds]
     : readNumberArray(payload.nodeIds);
-  const mapped = nodeIds.flatMap((nodeId) => active.sessionNodeIdsByNodeId.get(nodeId) ?? []);
+  const mapped = nodeIds.flatMap((nodeId) =>
+    activeBuildSessionNodeIdsByNodeId(active, nodeId)
+  );
   if (mapped.length === 0 && sessionNodeIds.length > 0) {
     state.nodeSets.set(name, sessionNodeIds);
     return;
@@ -786,7 +791,7 @@ function replaySaveCellSet(
       ? [...state.selectedElementIds]
       : readNumberArray(payload.elementIds);
     const replayedCellIds = elementIds
-      .map((elementId) => active.cellIdByElementId.get(elementId))
+      .map((elementId) => activeBuildCellIdByElementId(active, elementId))
       .filter((cellId): cellId is CellId => cellId !== undefined);
     state.cellSets.set(name, replayedCellIds.length > 0 ? replayedCellIds : cellIds);
   }
@@ -1127,7 +1132,7 @@ function replaySelectCellSet(state: ReplayState, payload: Record<string, unknown
     includeSessionNodeIdsByNodeId: false
   });
   const elementIds = cellIds
-    .map((cellId) => active.elementIdByCellId.get(cellId))
+    .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
     .filter((elementId): elementId is number => elementId !== undefined && !state.hiddenElementIds.has(elementId));
   state.selectedElementIds = new Set(elementIds);
   state.selectedNodeIds = new Set();
@@ -1188,7 +1193,7 @@ function replaceReplaySession(state: ReplayState, mesh: Mesh): void {
   const previousRevision = state.session?.revision;
   const replacement = createRefinementSession(mesh);
   if (previousRevision !== undefined) {
-    replacement.revision = previousRevision + 1;
+    mutableRevisionView(replacement).revision = previousRevision + 1;
   }
   state.session = replacement;
 }
@@ -1210,7 +1215,8 @@ function captureReplaySnapshot(state: ReplayState): ReplaySnapshot {
 function restoreReplaySnapshot(state: ReplayState, snapshot: ReplaySnapshot): void {
   const currentRevision = state.session?.revision ?? snapshot.session.revision;
   state.session = cloneRefinementSessionState(snapshot.session);
-  state.session.revision = Math.max(currentRevision, state.session.revision) + 1;
+  mutableRevisionView(state.session).revision =
+    Math.max(currentRevision, state.session.revision) + 1;
   state.mergeTolerance = snapshot.mergeTolerance;
   state.cellSets = cloneCellSets(snapshot.cellSets);
   state.nodeSets = cloneNodeSets(snapshot.nodeSets);
@@ -1591,7 +1597,11 @@ function activeElementIdsFromReplaySelectionState(
   state: ReplayState,
   build: ActiveMeshBuildResult
 ): { elementIds: number[]; warning?: string } {
-  const next = uniqueSorted([...state.selectedElementIds].filter((elementId) => build.cellIdByElementId.has(elementId)));
+  const next = uniqueSorted(
+    [...state.selectedElementIds].filter((elementId) =>
+      activeBuildCellIdByElementId(build, elementId) !== undefined
+    )
+  );
   const droppedCount = state.selectedElementIds.size - next.length;
   return {
     elementIds: next,
@@ -1619,7 +1629,7 @@ function stabilizeReplaySelectionForPatch(
   const selectedLevel = session.cells.get(currentCellIds[0] ?? "")?.level;
   for (let iteration = 0; iteration < 8 && currentCellIds.length > 0; iteration += 1) {
     const selectedElementIds = currentCellIds
-      .map((cellId) => active.elementIdByCellId.get(cellId))
+      .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
       .filter((elementId): elementId is number => elementId !== undefined);
     const replacements = buildDefaultRefinementReplacements(mutableMeshView(active.mesh), selectedElementIds, {
       includeTransitions: options.includeTransitions,
@@ -1630,7 +1640,7 @@ function stabilizeReplaySelectionForPatch(
       .map((replacement) => replacement.elementId)
       .filter((elementId, index, array) => array.indexOf(elementId) === index)
       .filter((elementId) => {
-        const parentId = active.cellIdByElementId.get(elementId);
+        const parentId = activeBuildCellIdByElementId(active, elementId);
         if (!parentId) {
           return false;
         }
@@ -1657,7 +1667,7 @@ function stabilizeReplaySelectionForPatch(
       }
     }
     const nextCellIds = currentCellIds.filter((cellId) => {
-      const elementId = active.elementIdByCellId.get(cellId);
+      const elementId = activeBuildElementIdByCellId(session, active, cellId);
       const element = elementId ? active.mesh.elements[elementId - 1] : undefined;
       return Boolean(element && !element.some((nodeId) => offendingNodeIds.has(nodeId)));
     });
@@ -1706,7 +1716,7 @@ function activeElementIdsFromReplayRankSelection(
   const domainElementIds: number[] = [];
   for (const cellId of session.activeLeafIds) {
     const cell = session.cells.get(cellId);
-    const elementId = build.elementIdByCellId.get(cellId);
+    const elementId = activeBuildElementIdByCellId(session, build, cellId);
     if (
       elementId !== undefined
       && cell
@@ -1929,7 +1939,7 @@ function defaultMergeTolerance(bounds: { min: Point; max: Point }): number {
   return Math.max(span * 1e-10, 1e-10);
 }
 
-function cloneMesh(mesh: Mesh): Mesh {
+function cloneMesh(mesh: ReadonlyMesh): Mesh {
   return {
     ...(mesh.kind ? { kind: mesh.kind } : {}),
     nodes: mesh.nodes.map((point) => [...point]),
@@ -1938,7 +1948,14 @@ function cloneMesh(mesh: Mesh): Mesh {
 }
 
 function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  // These replay helpers only read geometry; legacy kernels still accept Mesh.
   return mesh as Mesh;
+}
+
+function mutableRevisionView(
+  session: RefinementSession
+): { revision: number } {
+  return session as { revision: number };
 }
 
 function cloneRefinementSessionState(session: RefinementSession): RefinementSession {

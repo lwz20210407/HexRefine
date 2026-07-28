@@ -1182,5 +1182,6 @@ function toPoint3(point: readonly number[]): [number, number, number] {
 }
 
 function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  // Export conversion reads this frozen build output; legacy converters accept Mesh.
   return mesh as Mesh;
 }

@@ -1442,6 +1442,7 @@ function uniqueSorted(values: readonly number[]): number[] {
 }
 
 function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  // Selection kernels only read active geometry; their legacy signatures accept Mesh.
   return mesh as Mesh;
 }
 

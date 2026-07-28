@@ -44,18 +44,18 @@ export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
 
 export interface RefinementSessionCell {
-  id: CellId;
-  ordinal: number;
-  parentId?: CellId;
-  level: number;
-  role: RefinementSessionCellRole;
-  kind: ElementKind;
-  element: Element;
-  children: CellId[];
-  active: boolean;
-  hidden: boolean;
-  sourceElementId?: number;
-  template?: string;
+  readonly id: CellId;
+  readonly ordinal: number;
+  readonly parentId?: CellId;
+  readonly level: number;
+  readonly role: RefinementSessionCellRole;
+  readonly kind: ElementKind;
+  readonly element: readonly number[];
+  readonly children: readonly CellId[];
+  readonly active: boolean;
+  readonly hidden: boolean;
+  readonly sourceElementId?: number;
+  readonly template?: string;
 }
 
 export interface RefinementSessionCommand {
@@ -71,11 +71,46 @@ export interface RefinementSessionCommand {
 }
 
 export interface RefinementSession {
+  /**
+   * Public session state is read-only. Mutate it through refine/undo/redo/replay
+   * APIs so revision and reusable-build invalidation remain coherent.
+   */
+  readonly revision: number;
+  readonly baseMesh: ReadonlyMesh;
+  readonly kind: ElementKind;
+  readonly nodes: readonly Readonly<Point>[];
+  readonly cells: ReadonlyMap<CellId, RefinementSessionCell>;
+  readonly activeLeafIds: ReadonlySet<CellId>;
+  readonly sortedActiveLeafIds: readonly CellId[];
+  readonly sortedActiveLeafIdsDirty: boolean;
+  readonly activeLeafIdsByNodeKey: ReadonlyMap<string, readonly CellId[]>;
+  readonly undoStack: readonly RefinementSessionCommand[];
+  readonly redoStack: readonly RefinementSessionCommand[];
+  readonly nextCommandId: number;
+  readonly nextCellOrdinal: number;
+}
+
+interface MutableRefinementSessionCell {
+  id: CellId;
+  ordinal: number;
+  parentId?: CellId;
+  level: number;
+  role: RefinementSessionCellRole;
+  kind: ElementKind;
+  element: Element;
+  children: CellId[];
+  active: boolean;
+  hidden: boolean;
+  sourceElementId?: number;
+  template?: string;
+}
+
+interface MutableRefinementSession {
   revision: number;
   baseMesh: Mesh;
   kind: ElementKind;
   nodes: Point[];
-  cells: Map<CellId, RefinementSessionCell>;
+  cells: Map<CellId, MutableRefinementSessionCell>;
   activeLeafIds: Set<CellId>;
   sortedActiveLeafIds: CellId[];
   sortedActiveLeafIdsDirty: boolean;
@@ -135,6 +170,7 @@ interface TrustedActiveMeshBuild {
   readonly provenance: ActiveMeshBuildProvenance;
   readonly mergeTolerance?: number;
   readonly mappings: TrustedActiveMeshMappings;
+  readonly sessionGuard: TrustedSessionBuildGuard;
 }
 
 interface TrustedActiveMeshMappings {
@@ -148,13 +184,25 @@ interface TrustedActiveMeshMappings {
   readonly elementIdsByNodeId?: ReadonlyMap<number, readonly number[]>;
 }
 
+interface TrustedSessionBuildGuard {
+  readonly nodes: RefinementSession["nodes"];
+  readonly cells: RefinementSession["cells"];
+  readonly activeLeafIds: RefinementSession["activeLeafIds"];
+  readonly nodeCount: number;
+  readonly cellCount: number;
+  readonly activeLeafCount: number;
+  readonly cellFingerprintByElementId: readonly (string | undefined)[];
+}
+
 const activeMeshBuildTrust = new WeakMap<ActiveMeshBuildResult, TrustedActiveMeshBuild>();
+const activeMeshBuildMappings = new WeakMap<ActiveMeshBuildResult, TrustedActiveMeshMappings>();
 const internalActiveMeshBuildTrust = new WeakMap<
   ActiveMeshBuildResult,
   {
     readonly sessionToken: object;
     readonly sessionRevision: number;
     readonly mappings: TrustedActiveMeshMappings;
+    readonly sessionGuard: TrustedSessionBuildGuard;
   }
 >();
 const refinementSessionTokens = new WeakMap<RefinementSession, object>();
@@ -234,7 +282,7 @@ interface RefinementSessionPatchPlan {
 
 export function createRefinementSession(mesh: Mesh): RefinementSession {
   const kind = inferMeshKind(mesh);
-  const cells = new Map<CellId, RefinementSessionCell>();
+  const cells = new Map<CellId, MutableRefinementSessionCell>();
   const activeLeafIds = new Set<CellId>();
   const activeLeafIdsByNodeKey = new Map<string, CellId[]>();
 
@@ -600,11 +648,14 @@ function finalizeActiveMeshBuild(
     });
   }
   const mappings = snapshotTrustedActiveMeshMappings(result);
+  const sessionGuard = createTrustedSessionBuildGuard(session, activeIds);
+  activeMeshBuildMappings.set(result, mappings);
   if (!includeProvenance) {
     internalActiveMeshBuildTrust.set(result, Object.freeze({
       sessionToken: refinementSessionToken(session),
       sessionRevision: session.revision,
-      mappings
+      mappings,
+      sessionGuard
     }));
     return result;
   }
@@ -634,6 +685,7 @@ function finalizeActiveMeshBuild(
     geometryResolution,
     provenance,
     mappings,
+    sessionGuard,
     ...(mergeTolerance === undefined ? {} : { mergeTolerance })
   }));
   return result;
@@ -693,13 +745,6 @@ function snapshotTrustedActiveMeshMappings(
       ? {}
       : { elementIdsByNodeId: copyNumberArrayMap(build.elementIdsByNodeId) })
   });
-}
-
-function trustedActiveMeshMappings(
-  build: ActiveMeshBuildResult
-): TrustedActiveMeshMappings | undefined {
-  return activeMeshBuildTrust.get(build)?.mappings
-    ?? internalActiveMeshBuildTrust.get(build)?.mappings;
 }
 
 function freezeActiveMesh(mesh: ReadonlyMesh): ReadonlyMesh {
@@ -832,6 +877,74 @@ function refinementSessionFingerprint(session: RefinementSession): string {
   return fingerprint.digest();
 }
 
+function refinementSessionCellFingerprint(
+  session: RefinementSession,
+  cellId: CellId,
+  cell: RefinementSessionCell
+): string {
+  const fingerprint = new StableFingerprint();
+  addStableValue(fingerprint, cellId);
+  addStableValue(fingerprint, cell.id);
+  addStableValue(fingerprint, cell.ordinal);
+  addStableValue(fingerprint, cell.parentId);
+  addStableValue(fingerprint, cell.level);
+  addStableValue(fingerprint, cell.role);
+  addStableValue(fingerprint, cell.kind);
+  addStableValue(fingerprint, cell.element);
+  addStableValue(fingerprint, cell.children);
+  addStableValue(fingerprint, cell.active);
+  addStableValue(fingerprint, cell.hidden);
+  addStableValue(fingerprint, cell.sourceElementId);
+  addStableValue(fingerprint, cell.template);
+  addStableValue(fingerprint, session.activeLeafIds.has(cellId));
+  return fingerprint.digest();
+}
+
+function createTrustedSessionBuildGuard(
+  session: RefinementSession,
+  cellIdsByElementId: readonly CellId[]
+): TrustedSessionBuildGuard {
+  const cellFingerprintByElementId: Array<string | undefined> =
+    new Array(cellIdsByElementId.length + 1);
+  for (let index = 0; index < cellIdsByElementId.length; index += 1) {
+    const cellId = cellIdsByElementId[index]!;
+    const cell = session.cells.get(cellId);
+    if (cell === undefined) {
+      throw new RangeError(`active cell ${cellId} does not exist`);
+    }
+    cellFingerprintByElementId[index + 1] =
+      refinementSessionCellFingerprint(session, cellId, cell);
+  }
+  Object.freeze(cellFingerprintByElementId);
+  return Object.freeze({
+    nodes: session.nodes,
+    cells: session.cells,
+    activeLeafIds: session.activeLeafIds,
+    nodeCount: session.nodes.length,
+    cellCount: session.cells.size,
+    activeLeafCount: session.activeLeafIds.size,
+    cellFingerprintByElementId
+  });
+}
+
+function createTrustedSessionBuildGuardFromMappings(
+  session: RefinementSession,
+  mappings: TrustedActiveMeshMappings
+): TrustedSessionBuildGuard {
+  const cellIds: CellId[] = [];
+  for (
+    let elementId = 1;
+    elementId < mappings.cellIdsByElementIdArray.length;
+    elementId += 1
+  ) {
+    const cellId = mappings.cellIdsByElementIdArray[elementId];
+    if (cellId !== undefined) {
+      cellIds.push(cellId);
+    }
+  }
+  return createTrustedSessionBuildGuard(session, cellIds);
+}
+
 function refinementSessionCellsByOrdinal(
   session: RefinementSession
 ): Array<{ readonly cellId: CellId; readonly cell: RefinementSessionCell } | undefined> {
@@ -914,6 +1027,65 @@ function lockActiveMeshBuildMappings(build: ActiveMeshBuildResult): void {
   for (const map of maps) {
     lockMap(map as Map<unknown, unknown>);
   }
+}
+
+function activeBuildProvenanceForValidation(
+  build: ActiveMeshBuildResult,
+  diagnosticCellIds: readonly CellId[]
+): ActiveMeshBuildProvenance {
+  const provenance = build.provenance;
+  if (
+    provenance === undefined
+    || provenance.version !== 1
+    || !Number.isSafeInteger(provenance.sessionRevision)
+    || provenance.sessionRevision < 0
+    || build.geometryResolution === undefined
+    || build.geometryResolution !== provenance.geometryResolution
+    || !Object.is(build.mergeTolerance, provenance.mergeTolerance)
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "external activeBuild metadata or mappings were tampered with"
+    );
+  }
+  return provenance;
+}
+
+function ensureTrustedActiveMeshMappings(
+  build: ActiveMeshBuildResult,
+  diagnosticCellIds: readonly CellId[] = []
+): TrustedActiveMeshMappings {
+  const trusted = activeMeshBuildMappings.get(build);
+  if (trusted !== undefined) {
+    return trusted;
+  }
+  const provenance = activeBuildProvenanceForValidation(build, diagnosticCellIds);
+  let mappingFingerprint: string;
+  let mappings: TrustedActiveMeshMappings;
+  try {
+    mappingFingerprint = activeMeshBuildMappingFingerprint(build);
+    mappings = snapshotTrustedActiveMeshMappings(build);
+  } catch (error) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      error instanceof Error
+        ? `external activeBuild validation failed: ${error.message}`
+        : "external activeBuild validation failed"
+    );
+  }
+  if (provenance.mappingFingerprint !== mappingFingerprint) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "external activeBuild mapping fingerprint indicates tampering"
+    );
+  }
+  Object.freeze(build.geometryResolution);
+  Object.freeze(provenance);
+  freezeActiveMesh(build.mesh);
+  lockActiveMeshBuildMappings(build);
+  Object.freeze(build);
+  activeMeshBuildMappings.set(build, mappings);
+  return mappings;
 }
 
 function measureActiveMeshGeometryResolution(
@@ -1051,10 +1223,14 @@ function exactActiveMergeKey(point: Point): string {
 }
 
 export function activeBuildCellIdByElementId(build: ActiveMeshBuildResult, elementId: number): CellId | undefined {
-  const mappings = trustedActiveMeshMappings(build);
-  return mappings === undefined
-    ? build.cellIdsByElementIdArray?.[elementId] ?? build.cellIdByElementId.get(elementId)
-    : mappings.cellIdsByElementIdArray[elementId];
+  return ensureTrustedActiveMeshMappings(build).cellIdsByElementIdArray[elementId];
+}
+
+export function activeBuildSessionNodeIdsByNodeId(
+  build: ActiveMeshBuildResult,
+  nodeId: number
+): readonly number[] {
+  return ensureTrustedActiveMeshMappings(build).sessionNodeIdsByNodeId.get(nodeId) ?? [];
 }
 
 export function activeBuildElementIdByCellId(
@@ -1062,15 +1238,21 @@ export function activeBuildElementIdByCellId(
   build: ActiveMeshBuildResult,
   cellId: CellId
 ): number | undefined {
+  assertActiveBuildCoversSessionCells(session, build, [cellId]);
+  return trustedElementIdByCellId(session, ensureTrustedActiveMeshMappings(build), cellId);
+}
+
+function trustedElementIdByCellId(
+  session: RefinementSession,
+  mappings: TrustedActiveMeshMappings,
+  cellId: CellId
+): number | undefined {
   const ordinal = session.cells.get(cellId)?.ordinal;
   if (!isValidCellOrdinal(ordinal)) {
     return undefined;
   }
-  const mappings = trustedActiveMeshMappings(build);
-  const ordinalArray = mappings?.elementIdByCellOrdinalArray
-    ?? build.elementIdByCellOrdinalArray;
-  const cellIdsByElementId = mappings?.cellIdsByElementIdArray
-    ?? build.cellIdsByElementIdArray;
+  const ordinalArray = mappings.elementIdByCellOrdinalArray;
+  const cellIdsByElementId = mappings.cellIdsByElementIdArray;
   if (ordinalArray === undefined || ordinal >= ordinalArray.length) {
     return undefined;
   }
@@ -1084,12 +1266,8 @@ export function activeBuildElementIdByCellId(
   ) {
     return undefined;
   }
-  const reverseElementId = mappings === undefined
-    ? build.elementIdByCellId.get(cellId)
-    : mappings.elementIdByCellId.get(cellId);
-  const reverseCellId = mappings === undefined
-    ? build.cellIdByElementId.get(elementId)
-    : mappings.cellIdByElementId.get(elementId);
+  const reverseElementId = mappings.elementIdByCellId.get(cellId);
+  const reverseCellId = mappings.cellIdByElementId.get(elementId);
   return reverseElementId === elementId && reverseCellId === cellId
     ? elementId
     : undefined;
@@ -1120,9 +1298,9 @@ export function remapSessionSetsToActiveMesh(
   build: ActiveMeshBuildResult,
   sets: RefinementSessionSetRemapInput
 ): ActiveMeshSetRemapResult {
-  const mappings = trustedActiveMeshMappings(build);
-  const elementIdByCellId = mappings?.elementIdByCellId ?? build.elementIdByCellId;
-  const nodeIdBySessionNodeId = mappings?.nodeIdBySessionNodeId ?? build.nodeIdBySessionNodeId;
+  const mappings = ensureTrustedActiveMeshMappings(build);
+  const elementIdByCellId = mappings.elementIdByCellId;
+  const nodeIdBySessionNodeId = mappings.nodeIdBySessionNodeId;
   const cellSets = new Map<string, number[]>();
   const nodeSets = new Map<string, number[]>();
   const missingCellIdsBySet = new Map<string, CellId[]>();
@@ -1231,6 +1409,7 @@ export function refineSessionCells(
   cellIds: CellId[],
   factory: LocalRefinementFactory
 ): RefinementSessionCommand {
+  const mutable = mutableRefinementSession(session);
   const validation = validateRefinementSessionSelection(session, cellIds);
   if (!validation.ok) {
     throw new Error(validation.errors.join("; "));
@@ -1254,7 +1433,7 @@ export function refineSessionCells(
     ? auditHexRefinementPatchQuality(
         {
           kind: "H1",
-          nodes: session.nodes,
+          nodes: mutable.nodes,
           elements: planned.map(({ parent }) => parent.element)
         },
         planned.map(({ refinement }, index) => ({
@@ -1268,9 +1447,9 @@ export function refineSessionCells(
   const hiddenCellIds: CellId[] = [];
 
   for (const { parentId, parent, refinement } of planned) {
-    const nodeOffset = session.nodes.length;
+    const nodeOffset = mutable.nodes.length;
     for (const [index, point] of refinement.nodes.entries()) {
-      session.nodes.push([...point]);
+      mutable.nodes.push([...point]);
       createdNodeIds.push(nodeOffset + index + 1);
     }
 
@@ -1280,7 +1459,7 @@ export function refineSessionCells(
       const childId = `${parentId}/${firstChildIndex + index}`;
       parentCreatedCellIds.push(childId);
       createdCellIds.push(childId);
-      const child: RefinementSessionCell = {
+      const child: MutableRefinementSessionCell = {
         id: childId,
         ordinal: nextCellOrdinal(session),
         parentId,
@@ -1296,7 +1475,7 @@ export function refineSessionCells(
       if (parent.sourceElementId !== undefined) {
         child.sourceElementId = parent.sourceElementId;
       }
-      session.cells.set(childId, child);
+      mutable.cells.set(childId, child);
       addActiveLeafCellId(session, childId);
     });
 
@@ -1308,17 +1487,17 @@ export function refineSessionCells(
   }
 
   const command: RefinementSessionCommand = {
-    id: `cmd-${session.nextCommandId}`,
+    id: `cmd-${mutable.nextCommandId}`,
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
     createdNodeIds,
     ...(quality ? { quality } : {})
   };
-  session.nextCommandId += 1;
-  session.undoStack.push(command);
-  session.redoStack = [];
-  session.revision += 1;
+  mutable.nextCommandId += 1;
+  mutable.undoStack.push(command);
+  mutable.redoStack = [];
+  mutable.revision += 1;
   return command;
 }
 
@@ -1461,6 +1640,7 @@ function applyRefinementSessionPatchPlan(
   session: RefinementSession,
   plan: RefinementSessionPatchPlan
 ): RefinementSessionCommand {
+  const mutable = mutableRefinementSession(session);
   const {
     planningActive: active,
     replacements,
@@ -1472,9 +1652,9 @@ function applyRefinementSessionPatchPlan(
   for (const replacement of replacements) {
     const parentId = activeBuildCellIdByElementId(active, replacement.elementId)!;
     const parent = requiredCell(session, parentId);
-    const nodeOffset = session.nodes.length;
+    const nodeOffset = mutable.nodes.length;
     for (const [index, point] of replacement.refinement.nodes.entries()) {
-      session.nodes.push([...point]);
+      mutable.nodes.push([...point]);
       createdNodeIds.push(nodeOffset + index + 1);
     }
 
@@ -1484,7 +1664,7 @@ function applyRefinementSessionPatchPlan(
       const childId = `${parentId}/${firstChildIndex + index}`;
       parentCreatedCellIds.push(childId);
       createdCellIds.push(childId);
-      const child: RefinementSessionCell = {
+      const child: MutableRefinementSessionCell = {
         id: childId,
         ordinal: nextCellOrdinal(session),
         parentId,
@@ -1500,7 +1680,7 @@ function applyRefinementSessionPatchPlan(
       if (parent.sourceElementId !== undefined) {
         child.sourceElementId = parent.sourceElementId;
       }
-      session.cells.set(childId, child);
+      mutable.cells.set(childId, child);
       addActiveLeafCellId(session, childId);
     });
     parent.children.push(...parentCreatedCellIds);
@@ -1514,7 +1694,7 @@ function applyRefinementSessionPatchPlan(
   }
 
   const command: RefinementSessionCommand = {
-    id: `cmd-${session.nextCommandId}`,
+    id: `cmd-${mutable.nextCommandId}`,
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
@@ -1524,10 +1704,10 @@ function applyRefinementSessionPatchPlan(
       ? { twoToOne: cloneTwoToOneCapabilityReport(plan.twoToOne) }
       : {})
   };
-  session.nextCommandId += 1;
-  session.undoStack.push(command);
-  session.redoStack = [];
-  session.revision += 1;
+  mutable.nextCommandId += 1;
+  mutable.undoStack.push(command);
+  mutable.redoStack = [];
+  mutable.revision += 1;
   return command;
 }
 
@@ -2193,7 +2373,9 @@ function assertActiveBuildCoversSessionCells(
   diagnosticCellIds: readonly CellId[]
 ): void {
   const token = refinementSessionToken(session);
+  const mappings = ensureTrustedActiveMeshMappings(build, diagnosticCellIds);
   const internalTrust = internalActiveMeshBuildTrust.get(build);
+  let sessionGuard: TrustedSessionBuildGuard;
   if (internalTrust !== undefined) {
     if (
       internalTrust.sessionToken !== token
@@ -2204,98 +2386,105 @@ function assertActiveBuildCoversSessionCells(
         "internal activeBuild is stale because the session revision changed"
       );
     }
-    return;
+    sessionGuard = internalTrust.sessionGuard;
+  } else {
+    const provenance = activeBuildProvenanceForValidation(build, diagnosticCellIds);
+    const trusted = activeMeshBuildTrust.get(build);
+    if (trusted !== undefined && trusted.sessionToken === token) {
+      if (trusted.sessionRevision !== session.revision) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          "external activeBuild is stale because the session revision changed"
+        );
+      }
+      if (
+        trusted.mesh !== build.mesh
+        || trusted.geometryResolution !== build.geometryResolution
+        || trusted.provenance !== provenance
+        || !Object.is(trusted.mergeTolerance, build.mergeTolerance)
+      ) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          "external activeBuild metadata or mappings were tampered with"
+        );
+      }
+      sessionGuard = trusted.sessionGuard;
+    } else {
+      let sessionFingerprint: string;
+      try {
+        sessionFingerprint = refinementSessionFingerprint(session);
+      } catch (error) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          error instanceof Error
+            ? `external activeBuild validation failed: ${error.message}`
+            : "external activeBuild validation failed"
+        );
+      }
+      if (
+        provenance.sessionRevision !== session.revision
+        || provenance.sessionFingerprint !== sessionFingerprint
+      ) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          "external activeBuild is stale because the session geometry, connectivity, active leaves, or metadata changed"
+        );
+      }
+      sessionGuard = createTrustedSessionBuildGuardFromMappings(session, mappings);
+      activeMeshBuildTrust.set(build, Object.freeze({
+        sessionToken: token,
+        sessionRevision: session.revision,
+        mesh: build.mesh,
+        geometryResolution: build.geometryResolution!,
+        provenance,
+        mappings,
+        sessionGuard,
+        ...(build.mergeTolerance === undefined ? {} : { mergeTolerance: build.mergeTolerance })
+      }));
+    }
   }
-  const provenance = build.provenance;
   if (
-    provenance === undefined
-    || provenance.version !== 1
-    || !Number.isSafeInteger(provenance.sessionRevision)
-    || provenance.sessionRevision < 0
-    || build.geometryResolution === undefined
-    || build.geometryResolution !== provenance.geometryResolution
-    || !Object.is(build.mergeTolerance, provenance.mergeTolerance)
+    sessionGuard.nodes !== session.nodes
+    || sessionGuard.cells !== session.cells
+    || sessionGuard.activeLeafIds !== session.activeLeafIds
+    || sessionGuard.nodeCount !== session.nodes.length
+    || sessionGuard.cellCount !== session.cells.size
+    || sessionGuard.activeLeafCount !== session.activeLeafIds.size
   ) {
     throw sessionFaceResolutionError(
       diagnosticCellIds,
-      "external activeBuild metadata or mappings were tampered with"
+      "external activeBuild is stale because a session collection changed"
     );
-  }
-  const trusted = activeMeshBuildTrust.get(build);
-  if (trusted !== undefined && trusted.sessionToken === token) {
-    if (trusted.sessionRevision !== session.revision) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        "external activeBuild is stale because the session revision changed"
-      );
-    }
-    if (
-      trusted.mesh !== build.mesh
-      || trusted.geometryResolution !== build.geometryResolution
-      || trusted.provenance !== provenance
-      || !Object.is(trusted.mergeTolerance, build.mergeTolerance)
-    ) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        "external activeBuild metadata or mappings were tampered with"
-      );
-    }
-  } else {
-    let sessionFingerprint: string;
-    let mappingFingerprint: string;
-    let mappings: TrustedActiveMeshMappings;
-    try {
-      sessionFingerprint = refinementSessionFingerprint(session);
-      mappingFingerprint = activeMeshBuildMappingFingerprint(build);
-      mappings = snapshotTrustedActiveMeshMappings(build);
-    } catch (error) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        error instanceof Error
-          ? `external activeBuild validation failed: ${error.message}`
-          : "external activeBuild validation failed"
-      );
-    }
-    if (
-      provenance.sessionRevision !== session.revision
-      || provenance.sessionFingerprint !== sessionFingerprint
-    ) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        "external activeBuild is stale because the session geometry, connectivity, active leaves, or metadata changed"
-      );
-    }
-    if (provenance.mappingFingerprint !== mappingFingerprint) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        "external activeBuild metadata or mappings were tampered with"
-      );
-    }
-    const geometryResolution = Object.freeze(build.geometryResolution);
-    const lockedProvenance = Object.freeze(provenance);
-    freezeActiveMesh(build.mesh);
-    lockActiveMeshBuildMappings(build);
-    Object.freeze(build);
-    activeMeshBuildTrust.set(build, Object.freeze({
-      sessionToken: token,
-      sessionRevision: session.revision,
-      mesh: build.mesh,
-      geometryResolution,
-      provenance: lockedProvenance,
-      mappings,
-      ...(build.mergeTolerance === undefined ? {} : { mergeTolerance: build.mergeTolerance })
-    }));
   }
   for (const cellId of diagnosticCellIds) {
     const cell = session.cells.get(cellId);
-    if (cell === undefined || !cell.active || cell.hidden) {
-      continue;
+    if (cell === undefined) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `external activeBuild is stale because selected cell ${cellId} no longer exists`
+      );
     }
-    const elementId = activeBuildElementIdByCellId(session, build, cellId);
+    const elementId = trustedElementIdByCellId(session, mappings, cellId);
     if (elementId === undefined) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
         `external activeBuild is stale because cell ${cellId} has an invalid ordinal or no longer maps to its expected element`
+      );
+    }
+    const expectedFingerprint = sessionGuard.cellFingerprintByElementId[elementId];
+    if (
+      expectedFingerprint === undefined
+      || expectedFingerprint !== refinementSessionCellFingerprint(session, cellId, cell)
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `external activeBuild is stale because selected cell ${cellId} changed`
+      );
+    }
+    if (!cell.active || cell.hidden || !session.activeLeafIds.has(cellId)) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `external activeBuild is stale because selected cell ${cellId} is not an active leaf`
       );
     }
   }
@@ -2475,7 +2664,7 @@ function refinementCellGeometryKey(
     .join("|");
 }
 
-function cloneRefinementSession(session: RefinementSession): RefinementSession {
+function cloneRefinementSession(session: RefinementSession): MutableRefinementSession {
   return {
     revision: session.revision,
     baseMesh: cloneMesh(session.baseMesh),
@@ -2522,20 +2711,22 @@ function replaceRefinementSessionState(
   target: RefinementSession,
   source: RefinementSession
 ): void {
-  const nextRevision = target.revision + 1;
-  target.baseMesh = source.baseMesh;
-  target.kind = source.kind;
-  target.nodes = source.nodes;
-  target.cells = source.cells;
-  target.activeLeafIds = source.activeLeafIds;
-  target.sortedActiveLeafIds = source.sortedActiveLeafIds;
-  target.sortedActiveLeafIdsDirty = source.sortedActiveLeafIdsDirty;
-  target.activeLeafIdsByNodeKey = source.activeLeafIdsByNodeKey;
-  target.undoStack = source.undoStack;
-  target.redoStack = source.redoStack;
-  target.nextCommandId = source.nextCommandId;
-  target.nextCellOrdinal = source.nextCellOrdinal;
-  target.revision = nextRevision;
+  const mutableTarget = mutableRefinementSession(target);
+  const mutableSource = mutableRefinementSession(source);
+  const nextRevision = mutableTarget.revision + 1;
+  mutableTarget.baseMesh = mutableSource.baseMesh;
+  mutableTarget.kind = mutableSource.kind;
+  mutableTarget.nodes = mutableSource.nodes;
+  mutableTarget.cells = mutableSource.cells;
+  mutableTarget.activeLeafIds = mutableSource.activeLeafIds;
+  mutableTarget.sortedActiveLeafIds = mutableSource.sortedActiveLeafIds;
+  mutableTarget.sortedActiveLeafIdsDirty = mutableSource.sortedActiveLeafIdsDirty;
+  mutableTarget.activeLeafIdsByNodeKey = mutableSource.activeLeafIdsByNodeKey;
+  mutableTarget.undoStack = mutableSource.undoStack;
+  mutableTarget.redoStack = mutableSource.redoStack;
+  mutableTarget.nextCommandId = mutableSource.nextCommandId;
+  mutableTarget.nextCellOrdinal = mutableSource.nextCellOrdinal;
+  mutableTarget.revision = nextRevision;
 }
 
 export function previewSessionPatch(
@@ -2934,7 +3125,8 @@ function isTransitionSessionRole(role: RefinementSessionCellRole): boolean {
 }
 
 export function undoRefinementSession(session: RefinementSession): RefinementSessionCommand | undefined {
-  const command = session.undoStack.pop();
+  const mutable = mutableRefinementSession(session);
+  const command = mutable.undoStack.pop();
   if (!command) {
     return undefined;
   }
@@ -2956,13 +3148,14 @@ export function undoRefinementSession(session: RefinementSession): RefinementSes
     cell.hidden = false;
     addActiveLeafCellId(session, cellId);
   }
-  session.redoStack.push(command);
-  session.revision += 1;
+  mutable.redoStack.push(command);
+  mutable.revision += 1;
   return command;
 }
 
 export function redoRefinementSession(session: RefinementSession): RefinementSessionCommand | undefined {
-  const command = session.redoStack.pop();
+  const mutable = mutableRefinementSession(session);
+  const command = mutable.redoStack.pop();
   if (!command) {
     return undefined;
   }
@@ -2984,8 +3177,8 @@ export function redoRefinementSession(session: RefinementSession): RefinementSes
     cell.hidden = false;
     addActiveLeafCellId(session, cellId);
   }
-  session.undoStack.push(command);
-  session.revision += 1;
+  mutable.undoStack.push(command);
+  mutable.revision += 1;
   return command;
 }
 
@@ -2993,7 +3186,7 @@ function baseCellId(elementId: number): CellId {
   return `e${elementId}`;
 }
 
-function cloneMesh(mesh: Mesh): Mesh {
+function cloneMesh(mesh: ReadonlyMesh): Mesh {
   const clone = {
     nodes: mesh.nodes.map((point) => [...point]),
     elements: mesh.elements.map((element) => [...element])
@@ -3002,72 +3195,90 @@ function cloneMesh(mesh: Mesh): Mesh {
 }
 
 function mutableMeshView(mesh: ReadonlyMesh): Mesh {
+  // These call sites only read mesh geometry; legacy kernels still accept Mesh.
   return mesh as Mesh;
 }
 
-function requiredCell(session: RefinementSession, cellId: CellId): RefinementSessionCell {
+function mutableRefinementSession(session: RefinementSession): MutableRefinementSession {
+  return session as unknown as MutableRefinementSession;
+}
+
+function mutableRefinementSessionCell(
+  cell: RefinementSessionCell
+): MutableRefinementSessionCell {
+  return cell as unknown as MutableRefinementSessionCell;
+}
+
+function requiredCell(
+  session: RefinementSession,
+  cellId: CellId
+): MutableRefinementSessionCell {
   const cell = session.cells.get(cellId);
   if (!cell) {
     throw new Error(`cell ${cellId} does not exist`);
   }
-  return cell;
+  return mutableRefinementSessionCell(cell);
 }
 
 function addActiveLeafCellId(session: RefinementSession, cellId: CellId): void {
+  const mutable = mutableRefinementSession(session);
   if (session.activeLeafIds.has(cellId)) {
     return;
   }
   const cell = requiredCell(session, cellId);
-  session.activeLeafIds.add(cellId);
-  session.sortedActiveLeafIdsDirty = true;
+  mutable.activeLeafIds.add(cellId);
+  mutable.sortedActiveLeafIdsDirty = true;
   for (const sessionNodeId of cell.element) {
     const point = session.nodes[sessionNodeId - 1];
     if (!point) {
       throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
     }
     const key = exactActiveMergeKey(point);
-    const ownerIds = session.activeLeafIdsByNodeKey.get(key) ?? [];
+    const ownerIds = mutable.activeLeafIdsByNodeKey.get(key) ?? [];
     ownerIds.push(cellId);
-    session.activeLeafIdsByNodeKey.set(key, ownerIds);
+    mutable.activeLeafIdsByNodeKey.set(key, ownerIds);
   }
 }
 
 function removeActiveLeafCellId(session: RefinementSession, cellId: CellId): void {
+  const mutable = mutableRefinementSession(session);
   const cell = requiredCell(session, cellId);
-  if (!session.activeLeafIds.delete(cellId)) {
+  if (!mutable.activeLeafIds.delete(cellId)) {
     return;
   }
-  session.sortedActiveLeafIdsDirty = true;
+  mutable.sortedActiveLeafIdsDirty = true;
   for (const sessionNodeId of cell.element) {
     const point = session.nodes[sessionNodeId - 1];
     if (!point) {
       throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
     }
     const key = exactActiveMergeKey(point);
-    const ownerIds = session.activeLeafIdsByNodeKey.get(key);
+    const ownerIds = mutable.activeLeafIdsByNodeKey.get(key);
     if (!ownerIds) {
       continue;
     }
     const nextOwnerIds = ownerIds.filter((ownerId) => ownerId !== cellId);
     if (nextOwnerIds.length === 0) {
-      session.activeLeafIdsByNodeKey.delete(key);
+      mutable.activeLeafIdsByNodeKey.delete(key);
     } else {
-      session.activeLeafIdsByNodeKey.set(key, nextOwnerIds);
+      mutable.activeLeafIdsByNodeKey.set(key, nextOwnerIds);
     }
   }
 }
 
 function sortedActiveLeafIds(session: RefinementSession): readonly CellId[] {
+  const mutable = mutableRefinementSession(session);
   if (session.sortedActiveLeafIdsDirty) {
-    session.sortedActiveLeafIds = [...session.activeLeafIds].sort((a, b) => cellOrdinal(session, a) - cellOrdinal(session, b));
-    session.sortedActiveLeafIdsDirty = false;
+    mutable.sortedActiveLeafIds = [...session.activeLeafIds].sort((a, b) => cellOrdinal(session, a) - cellOrdinal(session, b));
+    mutable.sortedActiveLeafIdsDirty = false;
   }
-  return session.sortedActiveLeafIds;
+  return mutable.sortedActiveLeafIds;
 }
 
 function nextCellOrdinal(session: RefinementSession): number {
-  const ordinal = session.nextCellOrdinal ?? session.cells.size + 1;
-  session.nextCellOrdinal = ordinal + 1;
+  const mutable = mutableRefinementSession(session);
+  const ordinal = mutable.nextCellOrdinal ?? session.cells.size + 1;
+  mutable.nextCellOrdinal = ordinal + 1;
   return ordinal;
 }
 
@@ -3078,7 +3289,7 @@ function cellOrdinal(session: RefinementSession, cellId: CellId): number {
 function sessionMeshView(session: RefinementSession): Mesh {
   return {
     kind: session.kind,
-    nodes: session.nodes,
+    nodes: mutableRefinementSession(session).nodes,
     elements: []
   };
 }
@@ -3146,8 +3357,7 @@ function checkedElementIdsAroundSeeds(
   seedElementIdSet: ReadonlySet<number>
 ): number[] {
   const checkedElementIds = new Set<number>(seedElementIds);
-  const elementIdsByNodeId = trustedActiveMeshMappings(build)?.elementIdsByNodeId
-    ?? build.elementIdsByNodeId;
+  const elementIdsByNodeId = ensureTrustedActiveMeshMappings(build).elementIdsByNodeId;
   if (elementIdsByNodeId) {
     for (const nodeId of seedNodeIds) {
       for (const elementId of elementIdsByNodeId.get(nodeId) ?? []) {
