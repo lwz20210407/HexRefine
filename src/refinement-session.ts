@@ -18,7 +18,7 @@ import {
   replaceElements
 } from "./mesh.js";
 import {
-  buildDefaultRefinementPlan,
+  buildDefaultRefinementPlanUnchecked as buildDefaultRefinementPlan,
   type ClassifiedReplacement
 } from "./refinement-planner.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
@@ -44,6 +44,11 @@ import {
   GeometricFaceIndex,
   type GeometricFace
 } from "./geometric-face-index.js";
+import {
+  assertHexPatchQuality,
+  HexPatchQualityError,
+  qualityPlanningErrorCode
+} from "./refinement-errors.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -1576,27 +1581,35 @@ export function refineSessionPatch(
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
   const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
-  let plan: RefinementSessionPatchPlan;
   try {
-    plan = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
-  } catch (error) {
-    const faceResolution = resolveExistingTransitionShellRebuild(
-      session,
-      cellIds,
-      resolvedOptions,
-      error
-    );
-    if (faceResolution !== undefined) {
-      return refineSessionPatchWithRebuiltTransitionShell(
+    let plan: RefinementSessionPatchPlan;
+    try {
+      plan = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
+    } catch (error) {
+      const faceResolution = resolveExistingTransitionShellRebuild(
         session,
         cellIds,
         resolvedOptions,
-        faceResolution
+        error
       );
+      if (faceResolution !== undefined) {
+        return refineSessionPatchWithRebuiltTransitionShell(
+          session,
+          cellIds,
+          resolvedOptions,
+          faceResolution
+        );
+      }
+      throw error;
     }
-    throw error;
+    return applyRefinementSessionPatchPlan(session, plan);
+  } catch (error) {
+    throw asTwoToOneSessionPlanningError(
+      error,
+      cellIds,
+      resolvedOptions.activeBuild
+    );
   }
-  return applyRefinementSessionPatchPlan(session, plan);
 }
 
 type ResolvedRefinementSessionPatchOptions = RefinementSessionPatchOptions & {
@@ -1786,18 +1799,6 @@ const EXISTING_TRANSITION_COLLISION_ERROR =
 
 class ExistingTransitionCollisionError extends Error {
   readonly code = "EXISTING_TRANSITION_COLLISION";
-}
-
-class HexPatchQualityError extends Error {
-  constructor(
-    readonly code:
-      | "HEX_PATCH_PARENT_JACOBIAN"
-      | "HEX_PATCH_CHILD_JACOBIAN"
-      | "HEX_PATCH_VOLUME",
-    message: string
-  ) {
-    super(message);
-  }
 }
 
 interface SessionFaceResolution {
@@ -2951,62 +2952,69 @@ export function previewSessionPatch(
 ): RefinementPreview<CellId> {
   const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
   const sourceActive = resolvedOptions.activeBuild;
-  let patch: RefinementSessionPatchPlan;
   try {
-    patch = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
-  } catch (error) {
-    const faceResolution = resolveExistingTransitionShellRebuild(
-      session,
-      cellIds,
-      resolvedOptions,
-      error
-    );
-    if (faceResolution !== undefined) {
-      return previewSessionPatchWithRebuiltTransitionShell(
+    let patch: RefinementSessionPatchPlan;
+    try {
+      patch = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
+    } catch (error) {
+      const faceResolution = resolveExistingTransitionShellRebuild(
         session,
         cellIds,
         resolvedOptions,
-        sourceActive,
-        faceResolution
+        error
       );
+      if (faceResolution !== undefined) {
+        return previewSessionPatchWithRebuiltTransitionShell(
+          session,
+          cellIds,
+          resolvedOptions,
+          sourceActive,
+          faceResolution
+        );
+      }
+      throw error;
     }
-    throw error;
-  }
-  const replacedIds = new Set(patch.sourceReplacements.map((replacement) => replacement.elementId));
-  const plan = patch.sourceReplacements
-    .map((replacement) => ({
-      parentElementId: replacement.elementId,
-      role: replacement.role,
-      templateCode: replacement.templateCode,
-      outputElementCount: replacement.refinement.elements.length
-    }))
-    .sort((first, second) =>
-      first.parentElementId - second.parentElementId
-      || first.templateCode - second.templateCode
+    const replacedIds = new Set(
+      patch.sourceReplacements.map((replacement) => replacement.elementId)
     );
-  const countRole = (role: RefinementRole): number =>
-    plan.filter((item) => item.role === role).length;
-  const unchangedElementCount = sourceActive.mesh.elements.length - replacedIds.size;
-  return {
-    kind: session.kind,
-    planMode: "per-parent",
-    plan,
-    summary: {
-      selectedElementCount: countRole("selected"),
-      faceTransitionElementCount: countRole("face-transition"),
-      edgeTransitionElementCount: countRole("edge-transition"),
-      cornerTransitionElementCount: countRole("corner-transition"),
-      unchangedElementCount,
-      estimatedOutputElementCount: unchangedElementCount
-        + plan.reduce((total, item) => total + item.outputElementCount, 0)
-    },
-    ...(patch.quality ? { quality: patch.quality } : {}),
-    ...(patch.twoToOne
-      ? {
-          twoToOne: cloneTwoToOneCapabilityReport(patch.twoToOne)
-        }
-      : {})
-  };
+    const plan = patch.sourceReplacements
+      .map((replacement) => ({
+        parentElementId: replacement.elementId,
+        role: replacement.role,
+        templateCode: replacement.templateCode,
+        outputElementCount: replacement.refinement.elements.length
+      }))
+      .sort((first, second) =>
+        first.parentElementId - second.parentElementId
+        || first.templateCode - second.templateCode
+      );
+    const countRole = (role: RefinementRole): number =>
+      plan.filter((item) => item.role === role).length;
+    const unchangedElementCount =
+      sourceActive.mesh.elements.length - replacedIds.size;
+    return {
+      kind: session.kind,
+      planMode: "per-parent",
+      plan,
+      summary: {
+        selectedElementCount: countRole("selected"),
+        faceTransitionElementCount: countRole("face-transition"),
+        edgeTransitionElementCount: countRole("edge-transition"),
+        cornerTransitionElementCount: countRole("corner-transition"),
+        unchangedElementCount,
+        estimatedOutputElementCount: unchangedElementCount
+          + plan.reduce((total, item) => total + item.outputElementCount, 0)
+      },
+      ...(patch.quality ? { quality: patch.quality } : {}),
+      ...(patch.twoToOne
+        ? {
+            twoToOne: cloneTwoToOneCapabilityReport(patch.twoToOne)
+          }
+        : {})
+    };
+  } catch (error) {
+    throw asTwoToOneSessionPlanningError(error, cellIds, sourceActive);
+  }
 }
 
 function previewSessionPatchWithRebuiltTransitionShell(
@@ -3109,8 +3117,14 @@ function buildRefinementSessionPatchPlan(
       planningOptions
     );
   } catch (error) {
-    if (error instanceof TwoToOnePlanningError) {
-      throw mapTwoToOnePlanningErrorToCellIds(active, error);
+    if (
+      error instanceof TwoToOnePlanningError
+      && !planningDiagnosticUsesCellIds(error)
+    ) {
+      planningActiveByNumericError.set(
+        error as TwoToOnePlanningError<number>,
+        active
+      );
     }
     throw error;
   }
@@ -3229,36 +3243,184 @@ function mapTwoToOneReportToCellIds(
   };
 }
 
-function mapTwoToOnePlanningErrorToCellIds(
-  active: ActiveMeshBuildResult,
-  error: TwoToOnePlanningError<number>
+const planningActiveByNumericError =
+  new WeakMap<TwoToOnePlanningError<number>, ActiveMeshBuildResult>();
+
+function asTwoToOneSessionPlanningError(
+  error: unknown,
+  selectedCellIds: readonly CellId[],
+  active: ActiveMeshBuildResult
 ): TwoToOnePlanningError<CellId> {
-  const mapElementId = (elementId: number): CellId => {
-    const cellId = activeBuildCellIdByElementId(active, elementId);
-    if (cellId === undefined) {
-      throw new Error(`2:1 planning diagnostic element ${elementId} is outside the active mesh`);
+  if (error instanceof TypeError || error instanceof RangeError) {
+    throw error;
+  }
+  if (error instanceof TwoToOnePlanningError) {
+    if (planningDiagnosticUsesCellIds(error)) {
+      return cloneCellIdPlanningError(error, selectedCellIds);
     }
-    return cellId;
-  };
-  const suggestion = error.diagnostic.suggestion;
-  return new TwoToOnePlanningError<CellId>(
+    const numericError = error as TwoToOnePlanningError<number>;
+    return mapNumericDiagnosticToCellIds(
+      numericError,
+      selectedCellIds,
+      planningActiveByNumericError.get(numericError) ?? active
+    );
+  }
+  if (error instanceof ExistingTransitionCollisionError) {
+    return new TwoToOnePlanningError(
+      "TWO_TO_ONE_CONFORMANCE",
+      error.message,
+      {
+        conflictingCellIds: stableCellIds(selectedCellIds),
+        conflictingInterfaces: [],
+        attemptedActions: [],
+        suggestion: {
+          kind: "expand-selection"
+        }
+      }
+    );
+  }
+  if (error instanceof HexPatchQualityError) {
+    return new TwoToOnePlanningError(
+      qualityPlanningErrorCode(error.code),
+      error.message,
+      {
+        conflictingCellIds: stableCellIds(selectedCellIds),
+        conflictingInterfaces: [],
+        attemptedActions: []
+      }
+    );
+  }
+  return new TwoToOnePlanningError(
+    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+    error instanceof Error ? error.message : String(error),
+    {
+      conflictingCellIds: stableCellIds(selectedCellIds),
+      conflictingInterfaces: [],
+      attemptedActions: [],
+      suggestion: {
+        kind: "remesh-source"
+      }
+    }
+  );
+}
+
+function mapNumericDiagnosticToCellIds(
+  error: TwoToOnePlanningError<number>,
+  selectedCellIds: readonly CellId[],
+  active: ActiveMeshBuildResult
+): TwoToOnePlanningError<CellId> {
+  const mapIds = (elementIds: readonly number[]): CellId[] =>
+    stableCellIds(elementIds.flatMap((elementId) => {
+      const cellId = activeBuildCellIdByElementId(active, elementId);
+      return cellId === undefined ? [] : [cellId];
+    }));
+  const diagnostic = error.diagnostic;
+  const conflictingCellIds = mapIds(diagnostic.conflictingCellIds);
+  const suggestion = diagnostic.suggestion;
+  return new TwoToOnePlanningError(
     error.code,
     error.message,
     {
-      conflictingCellIds: error.diagnostic.conflictingCellIds.map(mapElementId),
-      conflictingInterfaces: error.diagnostic.conflictingInterfaces.map((entry) => ({
-        firstCellId: mapElementId(entry.firstCellId),
-        ...(entry.secondCellId === undefined
-          ? {}
-          : { secondCellId: mapElementId(entry.secondCellId) }),
-        faceNodeIds: [...entry.faceNodeIds]
-      })),
-      attemptedActions: error.diagnostic.attemptedActions.map((action) => ({
+      conflictingCellIds:
+        conflictingCellIds.length > 0
+          ? conflictingCellIds
+          : stableCellIds(selectedCellIds),
+      conflictingInterfaces: diagnostic.conflictingInterfaces.flatMap((entry) => {
+        const firstCellId = activeBuildCellIdByElementId(
+          active,
+          entry.firstCellId
+        );
+        if (firstCellId === undefined) {
+          return [];
+        }
+        const secondCellId = entry.secondCellId === undefined
+          ? undefined
+          : activeBuildCellIdByElementId(active, entry.secondCellId);
+        return [{
+          firstCellId,
+          ...(secondCellId === undefined ? {} : { secondCellId }),
+          faceNodeIds: uniqueSortedNumbers(entry.faceNodeIds)
+        }];
+      }),
+      attemptedActions: diagnostic.attemptedActions.map((action) => ({
         kind: action.kind,
         reason: action.reason,
-        addedParentCellIds: action.addedParentCellIds.map(mapElementId),
+        addedParentCellIds: mapIds(action.addedParentCellIds),
         replacedTransitionCellIds:
-          action.replacedTransitionCellIds.map(mapElementId),
+          mapIds(action.replacedTransitionCellIds),
+        ...(action.templateId === undefined
+          ? {}
+          : { templateId: action.templateId })
+      })),
+      ...(suggestion === undefined
+        ? {}
+        : {
+            suggestion: {
+              kind: suggestion.kind,
+              ...(suggestion.axis === undefined
+                ? {}
+                : { axis: suggestion.axis }),
+              ...(suggestion.side === undefined
+                ? {}
+                : { side: suggestion.side }),
+              ...(suggestion.parentCellIds === undefined
+                ? {}
+                : {
+                    parentCellIds: mapIds(suggestion.parentCellIds)
+                  })
+            }
+          })
+    }
+  );
+}
+
+function planningDiagnosticUsesCellIds(
+  error: TwoToOnePlanningError<number | CellId>
+): error is TwoToOnePlanningError<CellId> {
+  const diagnostic = error.diagnostic;
+  const ids: Array<number | CellId> = [
+    ...diagnostic.conflictingCellIds,
+    ...diagnostic.conflictingInterfaces.flatMap((entry) => [
+      entry.firstCellId,
+      ...(entry.secondCellId === undefined ? [] : [entry.secondCellId])
+    ]),
+    ...diagnostic.attemptedActions.flatMap((action) => [
+      ...action.addedParentCellIds,
+      ...action.replacedTransitionCellIds
+    ]),
+    ...(diagnostic.suggestion?.parentCellIds ?? [])
+  ];
+  return ids.some((id) => typeof id === "string");
+}
+
+function cloneCellIdPlanningError(
+  error: TwoToOnePlanningError<CellId>,
+  selectedCellIds: readonly CellId[]
+): TwoToOnePlanningError<CellId> {
+  const diagnostic = error.diagnostic;
+  const conflictingCellIds = stableCellIds(diagnostic.conflictingCellIds);
+  const suggestion = diagnostic.suggestion;
+  return new TwoToOnePlanningError(
+    error.code,
+    error.message,
+    {
+      conflictingCellIds:
+        conflictingCellIds.length > 0
+          ? conflictingCellIds
+          : stableCellIds(selectedCellIds),
+      conflictingInterfaces: diagnostic.conflictingInterfaces.map((entry) => ({
+        firstCellId: entry.firstCellId,
+        ...(entry.secondCellId === undefined
+          ? {}
+          : { secondCellId: entry.secondCellId }),
+        faceNodeIds: uniqueSortedNumbers(entry.faceNodeIds)
+      })),
+      attemptedActions: diagnostic.attemptedActions.map((action) => ({
+        kind: action.kind,
+        reason: action.reason,
+        addedParentCellIds: stableCellIds(action.addedParentCellIds),
+        replacedTransitionCellIds:
+          stableCellIds(action.replacedTransitionCellIds),
         ...(action.templateId === undefined
           ? {}
           : { templateId: action.templateId })
@@ -3278,7 +3440,7 @@ function mapTwoToOnePlanningErrorToCellIds(
                 ? {}
                 : {
                     parentCellIds:
-                      suggestion.parentCellIds.map(mapElementId)
+                      stableCellIds(suggestion.parentCellIds)
                   })
             }
           })
@@ -3745,35 +3907,6 @@ function assertHexRefinementQuality(
       `${report.relativeVolumeError}`
     );
   }
-}
-
-function assertHexPatchQuality(
-  sourceMesh: Mesh,
-  replacements: readonly ClassifiedReplacement[]
-): HexRefinementQualitySummary {
-  const quality = auditHexRefinementPatchQuality(sourceMesh, replacements);
-  if (quality.parentMinimumOrientedScaledJacobian <= 0) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_PARENT_JACOBIAN",
-      "refinement patch starts from a parent with non-positive scaled Jacobian " +
-      `${quality.parentMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (quality.childMinimumOrientedScaledJacobian <= 0) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_CHILD_JACOBIAN",
-      "refinement patch produced a non-positive scaled Jacobian " +
-      `${quality.childMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (quality.relativeVolumeError > 1e-8) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_VOLUME",
-      "refinement patch does not conserve parent volume; relative error is " +
-      `${quality.relativeVolumeError}`
-    );
-  }
-  return quality;
 }
 
 function namedSetEntries<T extends string | number>(

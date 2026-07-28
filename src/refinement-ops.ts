@@ -33,6 +33,7 @@ import {
 } from "./mesh-selection.js";
 import { auditHexRefinementPatchQuality } from "./hex-quality.js";
 import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
+import { asTwoToOneFlatPlanningError } from "./refinement-errors.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -52,26 +53,29 @@ export function buildRefinementReplacements(
 }
 
 export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: readonly number[], options: RefineOptions = {}): RefinementResult {
-  const selected = uniqueSorted(selectedElementIds);
-  if (selected.length === 0) {
-    return buildRefinementResult(mesh, mesh, [], selected.length);
-  }
+  return atFlatTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    const selected = uniqueSorted(selectedElementIds);
+    if (selected.length === 0) {
+      return buildRefinementResult(mesh, mesh, [], selected.length);
+    }
 
-  const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
-  const plan = buildDefaultRefinementPlan(mesh, selected, {
-    ...options,
-    mergeTolerance
+    const mergeTolerance =
+      options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
+    const plan = buildDefaultRefinementPlan(mesh, selected, {
+      ...options,
+      mergeTolerance
+    });
+    const replacements = plan.replacements;
+
+    const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
+    return buildRefinementResult(
+      mesh,
+      refinedMesh,
+      replacements,
+      selected.length,
+      plan.twoToOne
+    );
   });
-  const replacements = plan.replacements;
-
-  const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
-  return buildRefinementResult(
-    mesh,
-    refinedMesh,
-    replacements,
-    selected.length,
-    plan.twoToOne
-  );
 }
 
 export function refineByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): Mesh {
@@ -130,10 +134,17 @@ export function refineByDistanceFunctionWithReport(
 }
 
 export function previewRefinementByElementIds(mesh: Mesh, selectedElementIds: readonly number[], options: RefineOptions = {}): RefinementPreview {
-  const kind = inferMeshKind(mesh);
-  const selected = uniqueSorted(selectedElementIds);
-  const plan = buildDefaultRefinementPlan(mesh, selected, options);
-  return buildRefinementPreview(mesh, kind, plan.replacements, plan.twoToOne);
+  return atFlatTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    const kind = inferMeshKind(mesh);
+    const selected = uniqueSorted(selectedElementIds);
+    const plan = buildDefaultRefinementPlan(mesh, selected, options);
+    return buildRefinementPreview(
+      mesh,
+      kind,
+      plan.replacements,
+      plan.twoToOne
+    );
+  });
 }
 
 export function previewRefinementByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): RefinementPreview {
@@ -202,10 +213,23 @@ function regularizeCandidateSelection(
   options: RefineOptions,
   regularizationOptions: HexSelectionRegularizationOptions
 ): RegularizedHexSelection {
-  return options.hexRefinementRatio === 2
-    && options.hexTwoToOneSelectionMode !== "local"
-    ? regularizeTwoToOneHexSelection(mesh, candidateElementIds, regularizationOptions)
-    : regularizeHexSelectionCore(mesh, candidateElementIds, regularizationOptions);
+  return atFlatTwoToOneBoundary(
+    mesh,
+    candidateElementIds,
+    options,
+    () => options.hexRefinementRatio === 2
+      && options.hexTwoToOneSelectionMode !== "local"
+      ? regularizeTwoToOneHexSelection(
+          mesh,
+          candidateElementIds,
+          regularizationOptions
+        )
+      : regularizeHexSelectionCore(
+          mesh,
+          candidateElementIds,
+          regularizationOptions
+        )
+  );
 }
 
 function refinementRegularizationOptions(
@@ -317,4 +341,23 @@ function buildRefinementPreview(
 
 function uniqueSorted(values: readonly number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function atFlatTwoToOneBoundary<T>(
+  mesh: Mesh,
+  selectedElementIds: readonly number[],
+  options: RefineOptions,
+  operation: () => T
+): T {
+  if (
+    options.hexRefinementRatio !== 2
+    || inferMeshKind(mesh) !== "H1"
+  ) {
+    return operation();
+  }
+  try {
+    return operation();
+  } catch (error) {
+    throw asTwoToOneFlatPlanningError(error, selectedElementIds);
+  }
 }

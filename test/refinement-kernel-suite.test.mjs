@@ -32,6 +32,7 @@ const {
   createQ1UnitSquareMesh,
   createRefinementSession,
   previewSessionPatch,
+  previewHexRefinementByElementIds,
   previewRefinementByDistanceFunction,
   previewRefinementByBox,
   previewRefinementByElementIds,
@@ -48,6 +49,7 @@ const {
   buildDefaultRefinementPlan,
   buildDefaultRefinementReplacements,
   buildHexClassifiedPlan,
+  buildHexClassifiedReplacements,
   buildRefinementReplacements,
   checkRefinementSessionCommandConformance,
   validateRefinementSessionSelection,
@@ -78,6 +80,7 @@ const {
   refineSessionCell,
   refineSessionCells,
   refineSessionPatch,
+  refineHexByElementIdsWithReport,
   growQ1BoundaryLayer,
   replaceQ1BlockWithRectangleCircleTemplate,
   DirectTwoToOnePlanningError,
@@ -118,6 +121,51 @@ function captureError(operation) {
     return error;
   }
   assert.fail("expected operation to throw");
+}
+
+const EXISTING_TRANSITION_COLLISION_TEST_MESSAGE =
+  "second-level local 2:1 refinement would create a nonconforming interface with an existing transition layer";
+
+function createTwoToOneQualityFailureCase(kind) {
+  const mesh = kind === "volume"
+    ? createHexUnitCubeMesh(2, 2, 1)
+    : createHexUnitCubeMesh(1, 1, 1);
+  if (kind === "parent-jacobian") {
+    mesh.nodes[0] = [1.5, 0, 0];
+  } else if (kind === "child-jacobian") {
+    mesh.nodes = [
+      [0, 0, 0],
+      [1.2489761001797772, -0.4782398313947985, -0.5198091936877567],
+      [-0.23509787147026623, 1.5637821085447112, -0.03615258902851291],
+      [1.1284237298803095, 0.4491931317512937, 0.24854395950469946],
+      [0.10620194688409575, 0.3528084106180188, 0.9871484617037125],
+      [1.4870707704693205, 0.28570873618419274, 0.6458316140019424],
+      [-0.4819413859233276, 1.256529064964015, 0.5198665943563208],
+      [0.9419042976425527, 0.6705364754575951, 1.2969270202018643]
+    ];
+  } else {
+    mesh.nodes[1] = [0.5, -0.4, 0];
+  }
+  mesh.data = {
+    source: `quality-${kind}`,
+    materialIds: Array.from(
+      { length: mesh.elements.length },
+      (_, index) => index + 1
+    )
+  };
+  return {
+    mesh,
+    selectedElementIds: [1],
+    options: {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: kind === "volume",
+      regularizeHexSelection: false,
+      hexTwoToOneCompensation: {
+        mode: "none"
+      }
+    }
+  };
 }
 
 const ALL_QUAD_PERMUTATIONS = [
@@ -221,7 +269,18 @@ test("geometric face identity rejects near and ambiguous faces", () => {
   assert.equal(error.message, "face owned by query has 2 matches");
   assert.deepEqual(error.diagnostic, {
     conflictingCellIds: ["a", "duplicate", "query"],
-    conflictingInterfaces: [],
+    conflictingInterfaces: [
+      {
+        firstCellId: "query",
+        secondCellId: "a",
+        faceNodeIds: [21, 22, 23, 24]
+      },
+      {
+        firstCellId: "query",
+        secondCellId: "duplicate",
+        faceNodeIds: [21, 22, 23, 24]
+      }
+    ],
     attemptedActions: []
   });
 
@@ -4327,6 +4386,62 @@ test("Hex 2:1 direct flat plan reports a mapped local-sweep capability", () => {
   assert.equal(result.summary.selectedElementCount, 1);
 });
 
+test("Hex 2:1 flat entry points map quality failures without mutating input", () => {
+  const cases = [
+    {
+      kind: "parent-jacobian",
+      code: "TWO_TO_ONE_PARENT_JACOBIAN",
+      message: /parent with non-positive scaled Jacobian/
+    },
+    {
+      kind: "child-jacobian",
+      code: "TWO_TO_ONE_CHILD_JACOBIAN",
+      message: /produced a non-positive scaled Jacobian/
+    },
+    {
+      kind: "volume",
+      code: "TWO_TO_ONE_VOLUME",
+      message: /does not conserve parent volume/
+    }
+  ];
+  const entries = [
+    buildHexClassifiedPlan,
+    buildDefaultRefinementPlan,
+    buildHexClassifiedReplacements,
+    buildDefaultRefinementReplacements,
+    buildRefinementReplacements,
+    previewRefinementByElementIds,
+    previewHexRefinementByElementIds,
+    refineByElementIdsWithReport,
+    refineHexByElementIdsWithReport
+  ];
+
+  for (const qualityCase of cases) {
+    for (const entry of entries) {
+      const {
+        mesh,
+        selectedElementIds,
+        options
+      } = createTwoToOneQualityFailureCase(qualityCase.kind);
+      const before = structuredClone(mesh);
+      const error = captureError(() => entry(
+        mesh,
+        selectedElementIds,
+        options
+      ));
+
+      assert.equal(error instanceof TwoToOnePlanningError, true);
+      assert.equal(error.code, qualityCase.code);
+      assert.match(error.message, qualityCase.message);
+      assert.deepEqual(error.diagnostic.conflictingCellIds, [1]);
+      assert.deepEqual(error.diagnostic.conflictingInterfaces, []);
+      assert.deepEqual(error.diagnostic.attemptedActions, []);
+      assert.equal(error.diagnostic.suggestion, undefined);
+      assert.deepEqual(mesh, before);
+    }
+  }
+});
+
 test("Hex 2:1 public transition planner rejects includeTransitions false", () => {
   const mesh = createHexUnitCubeMesh(5, 5, 5);
   const snapshot = structuredClone(mesh);
@@ -4851,6 +4966,57 @@ test("Hex 2:1 session selection compensation maps planning ids to cell ids", () 
   assert.ok(minimumCornerScaledJacobian(refined) > 0);
 });
 
+test("Hex 2:1 session maps quality failures and preserves complete state", () => {
+  const cases = [
+    {
+      kind: "parent-jacobian",
+      code: "TWO_TO_ONE_PARENT_JACOBIAN",
+      message: /parent with non-positive scaled Jacobian/
+    },
+    {
+      kind: "child-jacobian",
+      code: "TWO_TO_ONE_CHILD_JACOBIAN",
+      message: /produced a non-positive scaled Jacobian/
+    },
+    {
+      kind: "volume",
+      code: "TWO_TO_ONE_VOLUME",
+      message: /does not conserve parent volume/
+    }
+  ];
+
+  for (const qualityCase of cases) {
+    const {
+      mesh,
+      selectedElementIds,
+      options
+    } = createTwoToOneQualityFailureCase(qualityCase.kind);
+    const session = createRefinementSession(mesh);
+    const active = buildActiveMeshWithMap(session);
+    const selectedCellIds = selectedElementIds.map((elementId) =>
+      activeBuildCellIdByElementId(active, elementId)
+    );
+    const before = structuredClone(session);
+    const error = captureError(() => refineSessionPatch(
+      session,
+      selectedCellIds,
+      {
+        ...options,
+        activeBuild: active
+      }
+    ));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, qualityCase.code);
+    assert.match(error.message, qualityCase.message);
+    assert.deepEqual(error.diagnostic.conflictingCellIds, selectedCellIds);
+    assert.deepEqual(error.diagnostic.conflictingInterfaces, []);
+    assert.deepEqual(error.diagnostic.attemptedActions, []);
+    assert.equal(error.diagnostic.suggestion, undefined);
+    assert.deepEqual(session, before);
+  }
+});
+
 test("Hex 2:1 session strict mode rejects selection compensation atomically", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 5);
   const session = createRefinementSession(mesh);
@@ -4880,6 +5046,47 @@ test("Hex 2:1 session strict mode rejects selection compensation atomically", ()
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
   assert.deepEqual(error.diagnostic.conflictingCellIds, originalCellIds);
+  assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 session compensation limit maps complete attempted actions atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 2, 5));
+  const active = buildActiveMeshWithMap(session);
+  const selectedCellIds = [5, 6, 7, 8].map((elementId) =>
+    activeBuildCellIdByElementId(active, elementId)
+  );
+  const before = structuredClone(session);
+  const error = captureError(() => refineSessionPatch(
+    session,
+    selectedCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: {
+        mode: "selection",
+        maxAddedParentLayers: 1,
+        maxAddedParentCount: 0
+      },
+      activeBuild: active
+    }
+  ));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, selectedCellIds);
+  assert.deepEqual(error.diagnostic.attemptedActions[0].addedParentCellIds, [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+  ]);
+  assert.deepEqual(error.diagnostic.suggestion, {
+    kind: "expand-selection",
+    axis: 2,
+    side: -1,
+    parentCellIds: ["e1", "e2", "e3", "e4"]
+  });
   assert.deepEqual(session, before);
 });
 
@@ -5042,23 +5249,50 @@ test("Hex 2:1 normalized trusted paths match public and classified entries", () 
 
 test("Hex 2:1 entry points reject invalid ids as topology without mutation", () => {
   const mesh = createHexUnitCubeMesh(2, 2, 2);
+  mesh.data = {
+    source: "structured-rejection-snapshot",
+    materialIds: Array.from({ length: mesh.elements.length }, (_, index) => index + 1)
+  };
   const snapshot = structuredClone(mesh);
   const invalidElementIds = [0, mesh.elements.length + 1, Number.NaN, 1.5];
 
   for (const includeTransitions of [true, false]) {
     for (const invalidElementId of invalidElementIds) {
-      const error = captureError(() => buildHexClassifiedPlan(
-        mesh,
-        [invalidElementId],
-        {
-          hexRefinementRatio: 2,
-          includeTransitions
-        }
-      ));
-      assert.equal(error instanceof DirectTwoToOnePlanningError, true);
-      assert.equal(error.kind, "topology");
-      assert.equal(error.conflictingElementIds.length, 1);
-      assert.equal(Object.is(error.conflictingElementIds[0], invalidElementId), true);
+      for (const entry of [
+        buildHexClassifiedPlan,
+        buildDefaultRefinementPlan,
+        buildHexClassifiedReplacements,
+        buildDefaultRefinementReplacements,
+        buildRefinementReplacements,
+        previewRefinementByElementIds,
+        previewHexRefinementByElementIds,
+        refineByElementIdsWithReport,
+        refineHexByElementIdsWithReport
+      ]) {
+        const error = captureError(() => entry(
+          mesh,
+          [invalidElementId],
+          {
+            hexRefinementRatio: 2,
+            includeTransitions,
+            regularizeHexSelection: false
+          }
+        ));
+        assert.equal(error instanceof TwoToOnePlanningError, true);
+        assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+        assert.equal(error.diagnostic.conflictingCellIds.length, 1);
+        assert.equal(
+          Object.is(
+            error.diagnostic.conflictingCellIds[0],
+            invalidElementId
+          ),
+          true
+        );
+        assert.deepEqual(error.diagnostic.attemptedActions, []);
+        assert.deepEqual(error.diagnostic.suggestion, {
+          kind: "remesh-source"
+        });
+      }
     }
   }
 
@@ -7366,8 +7600,20 @@ test("Hex 2:1 transition-shell rebuilding rejects ambiguous face ownership atomi
     assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
     assert.equal(error.diagnostic.conflictingCellIds.includes(ambiguousOwner), true);
     assert.equal(error.diagnostic.conflictingCellIds.length, 3);
+    assert.ok(error.diagnostic.conflictingInterfaces.length > 0);
+    assert.equal(
+      error.diagnostic.conflictingInterfaces.every((entry) =>
+        error.diagnostic.conflictingCellIds.includes(entry.firstCellId)
+        && (
+          entry.secondCellId === undefined
+          || error.diagnostic.conflictingCellIds.includes(entry.secondCellId)
+        )
+        && entry.faceNodeIds.length === 4
+      ),
+      true
+    );
     assert.deepEqual(session, before);
-    diagnostics.push(error.diagnostic.conflictingCellIds);
+    diagnostics.push(structuredClone(error.diagnostic));
   }
   assert.deepEqual(diagnostics[1], diagnostics[0]);
 });
@@ -7659,77 +7905,102 @@ test("Hex 2:1 local refinement can reject rebuilding an existing transition shel
     .filter(Boolean)
     .sort((left, right) => left.centerTotal - right.centerTotal)[0];
   assert.ok(boundaryCandidate);
-  const before = {
-    activeLeafCount: session.activeLeafIds.size,
-    nodeCount: session.nodes.length,
-    undoCount: session.undoStack.length
-  };
-
-  assert.throws(
-    () => refineSessionPatch(session, [boundaryCandidate.cellId], {
+  const before = structuredClone(session);
+  const error = captureError(() => refineSessionPatch(
+    session,
+    [boundaryCandidate.cellId],
+    {
       hexRefinementRatio: 2,
       hexTwoToOneSelectionMode: "local",
       includeTransitions: true,
-      rebuildExistingTransitions: false,
+      hexTwoToOneCompensation: {
+        mode: "none"
+      },
       activeBuild: firstRefined
-    }),
-    (error) => !(error instanceof DirectTwoToOnePlanningError)
-      && error?.code === "EXISTING_TRANSITION_COLLISION"
-      && /would create a nonconforming interface with an existing transition layer/.test(error.message)
-  );
-  assert.deepEqual({
-    activeLeafCount: session.activeLeafIds.size,
-    nodeCount: session.nodes.length,
-    undoCount: session.undoStack.length
-  }, before);
-  assert.equal(checkNoHangingNodes(firstRefined.mesh, 1e-9).ok, true);
+    }
+  ));
 
-  assert.throws(
-    () => replayHexRefineCommandScript({
-      format: "hexrefine-command-script",
-      version: 1,
-      app: "HexRefine",
-      commands: [
-        {
-          kind: "grid.generate",
-          payload: {
-            kind: "H1",
-            nx: 7,
-            ny: 7,
-            nz: 7,
-            bounds: { min: [0, 0, 0], max: [1, 1, 1] },
-            mergeTolerance: 1e-9
-          }
-        },
-        {
-          kind: "refine.patch",
-          payload: {
-            cellIds: firstCoreCellIds,
-            options: {
-              hexRefinementRatio: 2,
-              hexTwoToOneSelectionMode: "local",
-              includeTransitions: true,
-              mergeTolerance: 1e-9
-            }
-          }
-        },
-        {
-          kind: "refine.patch",
-          payload: {
-            cellIds: [boundaryCandidate.cellId],
-            options: {
-              hexRefinementRatio: 2,
-              hexTwoToOneSelectionMode: "local",
-              includeTransitions: true,
-              rebuildExistingTransitions: false,
-              mergeTolerance: 1e-9
-            }
-          }
-        }
-      ]
-    }),
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_CONFORMANCE");
+  assert.match(
+    error.message,
     /would create a nonconforming interface with an existing transition layer/
   );
+  assert.deepEqual(error.diagnostic.conflictingCellIds, [
+    boundaryCandidate.cellId
+  ]);
+  assert.deepEqual(error.diagnostic.conflictingInterfaces, []);
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
+  assert.deepEqual(error.diagnostic.suggestion, {
+    kind: "expand-selection"
+  });
+  assert.deepEqual(session, before);
+  assert.equal(checkNoHangingNodes(firstRefined.mesh, 1e-9).ok, true);
+
+  const script = {
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: [
+      {
+        kind: "grid.generate",
+        payload: {
+          kind: "H1",
+          nx: 7,
+          ny: 7,
+          nz: 7,
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+          mergeTolerance: 1e-9
+        }
+      },
+      {
+        kind: "refine.patch",
+        payload: {
+          cellIds: firstCoreCellIds,
+          options: {
+            hexRefinementRatio: 2,
+            hexTwoToOneSelectionMode: "local",
+            includeTransitions: true,
+            mergeTolerance: 1e-9
+          }
+        }
+      },
+      {
+        kind: "refine.patch",
+        payload: {
+          cellIds: [boundaryCandidate.cellId],
+          options: {
+            hexRefinementRatio: 2,
+            hexTwoToOneSelectionMode: "local",
+            includeTransitions: true,
+            rebuildExistingTransitions: false,
+            mergeTolerance: 1e-9
+          }
+        }
+      }
+    ]
+  };
+  const strictError = captureError(() => replayHexRefineCommandScript(
+    script,
+    { strict: true }
+  ));
+  assert.equal(strictError instanceof TwoToOnePlanningError, true);
+  assert.equal(strictError.code, "TWO_TO_ONE_CONFORMANCE");
+  assert.deepEqual(strictError.diagnostic.conflictingCellIds, [
+    boundaryCandidate.cellId
+  ]);
+
+  const baseline = replayHexRefineCommandScript({
+    ...script,
+    commands: script.commands.slice(0, 2)
+  });
+  const replay = replayHexRefineCommandScript(script);
+  assert.deepEqual(replay.session, baseline.session);
+  assert.deepEqual(replay.mesh, baseline.mesh);
+  assert.deepEqual(replay.warnings, [
+    "refine.patch skipped after TWO_TO_ONE_CONFORMANCE: "
+      + EXISTING_TRANSITION_COLLISION_TEST_MESSAGE
+  ]);
 });
 
 test("Hex 2:1 selection compensation never rebuilds an existing transition shell", () => {
@@ -7751,11 +8022,11 @@ test("Hex 2:1 selection compensation never rebuilds an existing transition shell
     activeBuild: firstRefined
   }));
 
-  assert.equal(
-    error instanceof TwoToOnePlanningError
-      || error?.code === "EXISTING_TRANSITION_COLLISION",
-    true
-  );
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_CONFORMANCE");
+  assert.deepEqual(error.diagnostic.conflictingCellIds, [candidate]);
+  assert.deepEqual(error.diagnostic.conflictingInterfaces, []);
+  assert.deepEqual(error.diagnostic.attemptedActions, []);
   assert.deepEqual(session, before);
 });
 
@@ -7877,17 +8148,25 @@ test("Hex 2:1 transition-shell rebuilding preserves a warped mapped block", () =
     }
   );
 
-  assert.throws(
-    () => refineSessionPatch(session, [boundaryCellId], {
+  const beforeVolumeRejection = structuredClone(session);
+  const volumeError = captureError(() => refineSessionPatch(
+    session,
+    [boundaryCellId],
+    {
       hexRefinementRatio: 2,
       hexTwoToOneSelectionMode: "local",
       includeTransitions: true,
       rebuildExistingTransitions: false,
       activeBuild: firstRefined
-    }),
-    (error) => error?.code === "HEX_PATCH_VOLUME"
-      && /does not conserve parent volume/.test(error.message)
-  );
+    }
+  ));
+  assert.equal(volumeError instanceof TwoToOnePlanningError, true);
+  assert.equal(volumeError.code, "TWO_TO_ONE_VOLUME");
+  assert.match(volumeError.message, /does not conserve parent volume/);
+  assert.deepEqual(volumeError.diagnostic.conflictingCellIds, [boundaryCellId]);
+  assert.deepEqual(volumeError.diagnostic.conflictingInterfaces, []);
+  assert.deepEqual(volumeError.diagnostic.attemptedActions, []);
+  assert.deepEqual(session, beforeVolumeRejection);
   const boundaryCell = session.cells.get(boundaryCellId);
   const perturbedPoint = [...session.nodes[boundaryCell.element[0] - 1]];
   const coincidentSessionNodeIds = session.nodes

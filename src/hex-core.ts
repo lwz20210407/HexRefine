@@ -32,6 +32,7 @@ import {
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
 import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
+import { asTwoToOneFlatPlanningError } from "./refinement-errors.js";
 
 export {
   regularizeHexSessionSelection,
@@ -51,25 +52,28 @@ export function refineHexByElementIdsWithReport(
   options: RefineOptions = {}
 ): RefinementResult {
   assertHexMesh(mesh);
-  const selected = uniqueSorted(selectedElementIds);
-  if (selected.length === 0) {
-    return buildHexRefinementResult(mesh, mesh, [], 0);
-  }
+  return atHexTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    const selected = uniqueSorted(selectedElementIds);
+    if (selected.length === 0) {
+      return buildHexRefinementResult(mesh, mesh, [], 0);
+    }
 
-  const mergeTolerance = options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
-  const plan = buildSharedHexClassifiedPlan(mesh, selected, {
-    ...options,
-    mergeTolerance
+    const mergeTolerance =
+      options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005;
+    const plan = buildSharedHexClassifiedPlan(mesh, selected, {
+      ...options,
+      mergeTolerance
+    });
+    const replacements = plan.replacements;
+    const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
+    return buildHexRefinementResult(
+      mesh,
+      refinedMesh,
+      replacements,
+      selected.length,
+      plan.twoToOne
+    );
   });
-  const replacements = plan.replacements;
-  const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
-  return buildHexRefinementResult(
-    mesh,
-    refinedMesh,
-    replacements,
-    selected.length,
-    plan.twoToOne
-  );
 }
 
 export function refineHexByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): Mesh {
@@ -108,9 +112,11 @@ export function previewHexRefinementByElementIds(
   options: RefineOptions = {}
 ): RefinementPreview {
   assertHexMesh(mesh);
-  const selected = uniqueSorted(selectedElementIds);
-  const plan = buildSharedHexClassifiedPlan(mesh, selected, options);
-  return buildHexRefinementPreview(mesh, plan.replacements, plan.twoToOne);
+  return atHexTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    const selected = uniqueSorted(selectedElementIds);
+    const plan = buildSharedHexClassifiedPlan(mesh, selected, options);
+    return buildHexRefinementPreview(mesh, plan.replacements, plan.twoToOne);
+  });
 }
 
 export function previewHexRefinementByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): RefinementPreview {
@@ -153,37 +159,59 @@ export function refineHexCandidateIdsWithReport(
   candidateIds: readonly number[],
   options: RefineOptions
 ): RefinementResult {
-  const shouldRegularize = options.regularizeHexSelection ?? true;
-  if (!shouldRegularize) {
-    return refineHexByElementIdsWithReport(mesh, candidateIds, options);
-  }
-  const regularizationOptions = refinementRegularizationOptions(options);
-  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
-  const result = refineHexByElementIdsWithReport(mesh, regularization.selectedElementIds, {
-    ...options,
-    regularizeHexSelection: false
+  return atHexTwoToOneBoundary(mesh, candidateIds, options, () => {
+    const shouldRegularize = options.regularizeHexSelection ?? true;
+    if (!shouldRegularize) {
+      return refineHexByElementIdsWithReport(mesh, candidateIds, options);
+    }
+    const regularizationOptions = refinementRegularizationOptions(options);
+    const regularization = regularizeCandidateSelection(
+      mesh,
+      candidateIds,
+      options,
+      regularizationOptions
+    );
+    const result = refineHexByElementIdsWithReport(
+      mesh,
+      regularization.selectedElementIds,
+      {
+        ...options,
+        regularizeHexSelection: false
+      }
+    );
+    return {
+      ...result,
+      regularization
+    };
   });
-  return {
-    ...result,
-    regularization
-  };
 }
 
 export function previewHexCandidateIds(mesh: Mesh, candidateIds: readonly number[], options: RefineOptions): RefinementPreview {
-  const shouldRegularize = options.regularizeHexSelection ?? true;
-  if (!shouldRegularize) {
-    return previewHexRefinementByElementIds(mesh, candidateIds, options);
-  }
-  const regularizationOptions = refinementRegularizationOptions(options);
-  const regularization = regularizeCandidateSelection(mesh, candidateIds, options, regularizationOptions);
-  const preview = previewHexRefinementByElementIds(mesh, regularization.selectedElementIds, {
-    ...options,
-    regularizeHexSelection: false
+  return atHexTwoToOneBoundary(mesh, candidateIds, options, () => {
+    const shouldRegularize = options.regularizeHexSelection ?? true;
+    if (!shouldRegularize) {
+      return previewHexRefinementByElementIds(mesh, candidateIds, options);
+    }
+    const regularizationOptions = refinementRegularizationOptions(options);
+    const regularization = regularizeCandidateSelection(
+      mesh,
+      candidateIds,
+      options,
+      regularizationOptions
+    );
+    const preview = previewHexRefinementByElementIds(
+      mesh,
+      regularization.selectedElementIds,
+      {
+        ...options,
+        regularizeHexSelection: false
+      }
+    );
+    return {
+      ...preview,
+      regularization
+    };
   });
-  return {
-    ...preview,
-    regularization
-  };
 }
 
 export function buildHexClassifiedReplacements(
@@ -311,4 +339,23 @@ function pointInBox(point: Point, box: BoxRange): boolean {
 
 function uniqueSorted(values: readonly number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function atHexTwoToOneBoundary<T>(
+  mesh: Mesh,
+  selectedElementIds: readonly number[],
+  options: RefineOptions,
+  operation: () => T
+): T {
+  if (
+    options.hexRefinementRatio !== 2
+    || inferMeshKind(mesh) !== "H1"
+  ) {
+    return operation();
+  }
+  try {
+    return operation();
+  } catch (error) {
+    throw asTwoToOneFlatPlanningError(error, selectedElementIds);
+  }
 }

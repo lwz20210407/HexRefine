@@ -181,7 +181,13 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
           query.owner,
           ...matches.map((match) => match.owner)
         ]),
-        conflictingInterfaces: [],
+        conflictingInterfaces: matches.map((match) => ({
+          firstCellId: query.owner,
+          ...(match.owner === query.owner
+            ? {}
+            : { secondCellId: match.owner }),
+          faceNodeIds: [...query.nodeIds].sort((a, b) => a - b)
+        })),
         attemptedActions: []
       }
     );

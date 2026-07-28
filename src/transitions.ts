@@ -11,6 +11,10 @@ import {
   normalizeTwoToOneSelection,
   type NormalizedTwoToOneSelection
 } from "./two-to-one-selection.js";
+import {
+  asTwoToOneFlatPlanningError,
+  assertHexPatchQuality
+} from "./refinement-errors.js";
 
 export interface ClassifiedHexReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -23,6 +27,26 @@ export interface ClassifiedHexPlan {
 }
 
 export function buildHexClassifiedPlan(
+  mesh: Mesh,
+  selected: readonly number[],
+  options: RefineOptions = {}
+): ClassifiedHexPlan {
+  if ((options.hexRefinementRatio ?? 3) !== 2) {
+    return buildHexClassifiedPlanUnchecked(mesh, selected, options);
+  }
+  try {
+    const plan = buildHexClassifiedPlanUnchecked(mesh, selected, options);
+    if (plan.replacements.length > 0) {
+      assertHexPatchQuality(mesh, plan.replacements);
+    }
+    return plan;
+  } catch (error) {
+    throw asTwoToOneFlatPlanningError(error, selected);
+  }
+}
+
+/** @internal Raw planner used where callers must decide retry policy first. */
+export function buildHexClassifiedPlanUnchecked(
   mesh: Mesh,
   selected: readonly number[],
   options: RefineOptions = {}

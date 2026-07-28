@@ -2,8 +2,14 @@ import type { BoundaryPair, Mesh, RefineOptions, RefinementRole, ReplaceElement 
 import { elementVertices, findBoundaryPairs, inferMeshKind, instantiateOnElement, minElementEdgeLength } from "./mesh.js";
 import { alignQuadCornerToSecond, alignQuadEdgeToFirst, sharedNodes } from "./topology.js";
 import { refineQ1To3x3, refineQ1To4Q1, refineQ1To5Q1 } from "./templates.js";
-import { buildHexClassifiedPlan } from "./transitions.js";
+import {
+  buildHexClassifiedPlanUnchecked
+} from "./transitions.js";
 import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
+import {
+  asTwoToOneFlatPlanningError,
+  assertHexPatchQuality
+} from "./refinement-errors.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -37,14 +43,43 @@ export function buildDefaultRefinementPlan(
   options: RefineOptions = {}
 ): ClassifiedRefinementPlan {
   const kind = inferMeshKind(mesh);
+  if (kind !== "H1" || options.hexRefinementRatio !== 2) {
+    return buildDefaultRefinementPlanUnchecked(
+      mesh,
+      selectedElementIds,
+      options
+    );
+  }
+  try {
+    const plan = buildDefaultRefinementPlanUnchecked(
+      mesh,
+      selectedElementIds,
+      options
+    );
+    if (plan.replacements.length > 0) {
+      assertHexPatchQuality(mesh, plan.replacements);
+    }
+    return plan;
+  } catch (error) {
+    throw asTwoToOneFlatPlanningError(error, selectedElementIds);
+  }
+}
+
+/** @internal Raw planner used where callers must decide retry policy first. */
+export function buildDefaultRefinementPlanUnchecked(
+  mesh: Mesh,
+  selectedElementIds: readonly number[],
+  options: RefineOptions = {}
+): ClassifiedRefinementPlan {
+  const kind = inferMeshKind(mesh);
   const selected = uniqueSorted(selectedElementIds);
   if (selected.length === 0) {
     return kind === "H1" && options.hexRefinementRatio === 2
-      ? buildHexClassifiedPlan(mesh, selected, options)
+      ? buildHexClassifiedPlanUnchecked(mesh, selected, options)
       : { replacements: [] };
   }
   if (kind === "H1") {
-    return buildHexClassifiedPlan(mesh, selected, options);
+    return buildHexClassifiedPlanUnchecked(mesh, selected, options);
   }
 
   const includeTransitions = options.includeTransitions ?? true;
