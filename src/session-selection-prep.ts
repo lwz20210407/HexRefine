@@ -2,7 +2,7 @@ import type { ActiveMeshBuildResult, CellId, RefinementSession } from "./refinem
 import {
   activeBuildCellIdByElementId,
   activeBuildElementIdByCellId,
-  validateActiveBuildForSession
+  validateActiveBuildCellsForSession
 } from "./refinement-session.js";
 import type {
   Element,
@@ -75,13 +75,13 @@ export function prepareSessionRefineSelection(
   selectedElementIds: readonly number[],
   options: RefineOptions = {}
 ): PreparedSessionRefineSelection {
-  validateActiveBuildForSession(session, active);
   const rawElementIds = uniqueSorted(selectedElementIds);
   const baseResult = {
     elementIds: rawElementIds,
     cellIds: mapCellIdsFromElementIds(active, rawElementIds),
     warnings: [] as string[]
   };
+  validateActiveBuildCellsForSession(session, active, baseResult.cellIds);
   const shouldRegularize = session.kind === "H1" && (options.regularizeHexSelection ?? true) && rawElementIds.length > 0;
   if (!shouldRegularize) {
     return baseResult;

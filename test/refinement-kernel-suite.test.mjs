@@ -5833,6 +5833,86 @@ test("selection preparation validates worker builds before nonregularized early 
   assert.deepEqual(session, before);
 });
 
+test("selection preparation validates mapped cells before every regularization path", () => {
+  const mutations = [
+    ["level", (session, cell) => {
+      cell.level += 1;
+    }],
+    ["role", (session, cell) => {
+      cell.role = "face-transition";
+    }],
+    ["connectivity", (session, cell) => {
+      cell.element[0] = cell.element[1];
+    }],
+    ["coordinate", (session, cell) => {
+      session.nodes[cell.element[0] - 1][0] += 0.125;
+    }],
+    ["active state", (session, cell) => {
+      cell.active = false;
+      cell.hidden = true;
+    }]
+  ];
+  for (const regularizeHexSelection of [false, true]) {
+    for (const [mutationName, mutate] of mutations) {
+      const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+      const active = buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      });
+      mutate(session, session.cells.get("e1"));
+      const before = structuredClone(session);
+
+      const error = captureError(() => prepareSessionRefineSelection(
+        session,
+        active,
+        [1],
+        { regularizeHexSelection }
+      ));
+
+      assert.equal(
+        error instanceof TwoToOnePlanningError,
+        true,
+        `${regularizeHexSelection}:${mutationName}`
+      );
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /activeBuild.*stale|selected cell.*changed/i);
+      assert.deepEqual(session, before);
+    }
+  }
+});
+
+test("local command conformance rejects stale active-created coordinates", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const command = refineSessionPatch(session, ["e1"], {
+    includeTransitions: false,
+    activeBuild: initial
+  });
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9,
+    includeElementIdsByNodeId: true
+  });
+  const activeCreatedCellId = command.activeCreatedCellIds?.[0]
+    ?? command.createdCellIds.find((cellId) => session.activeLeafIds.has(cellId));
+  assert.ok(activeCreatedCellId);
+  const activeCreatedCell = session.cells.get(activeCreatedCellId);
+  session.nodes[activeCreatedCell.element[0] - 1][0] += 0.125;
+  const before = structuredClone(session);
+
+  const error = captureError(() =>
+    checkRefinementSessionCommandConformance(session, command, 1e-9, active)
+  );
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /activeBuild.*stale|selected cell.*changed/i);
+  assert.deepEqual(session, before);
+});
+
 test("trusted active builds isolate planning and remap from public mapping tamper", () => {
   for (const transfer of ["same-realm", "structured-clone"]) {
     const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));

@@ -7,7 +7,8 @@ import type {
 } from "../../src/index.js";
 import {
   checkNoHangingNodes,
-  createRefinementSession
+  createRefinementSession,
+  validateActiveBuildCellsForSession
 } from "../../src/index.js";
 
 declare const mutableMesh: Mesh;
@@ -30,6 +31,7 @@ activeBuild.elementIdByCellId.clear();
 
 declare const session: RefinementSession;
 declare const sessionCell: RefinementSessionCell;
+validateActiveBuildCellsForSession(session, activeBuild, ["e1"]);
 
 // Refinement sessions are mutated only by the official session command APIs.
 // @ts-expect-error Session node storage is a public read-only view.

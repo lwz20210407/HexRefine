@@ -1254,18 +1254,14 @@ export function activeBuildElementIdByCellId(
   build: ActiveMeshBuildResult,
   cellId: CellId
 ): number | undefined {
-  const { mappings } = validateActiveBuildSession(session, build, [cellId]);
-  const cell = session.cells.get(cellId);
-  if (cell === undefined) {
-    return undefined;
-  }
-  if (!isValidCellOrdinal(cell.ordinal)) {
-    throw sessionFaceResolutionError(
-      [cellId],
-      `external activeBuild is stale because cell ${cellId} has invalid ordinal ${cell.ordinal}`
-    );
-  }
-  return trustedOptionalElementIdByCellId(session, mappings, cellId);
+  const validated = validateActiveBuildSession(session, build, [cellId]);
+  return validateActiveBuildCellForSession(
+    session,
+    validated,
+    cellId,
+    [cellId],
+    true
+  );
 }
 
 function trustedOptionalElementIdByCellId(
@@ -1424,7 +1420,16 @@ export function checkRefinementSessionCommandConformance(
     mergeTolerance: tolerance,
     includeElementIdsByNodeId: true
   });
-  const seedElementIds = (command.activeCreatedCellIds ?? command.createdCellIds)
+  const seedCellIds = (command.activeCreatedCellIds ?? command.createdCellIds)
+    .filter((cellId) => {
+      const cell = session.cells.get(cellId);
+      return cell !== undefined
+        && cell.active
+        && !cell.hidden
+        && session.activeLeafIds.has(cellId);
+    });
+  validateActiveBuildCellsForSession(session, active, seedCellIds);
+  const seedElementIds = seedCellIds
     .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
     .filter((elementId): elementId is number => elementId !== undefined)
     .sort((a, b) => a - b);
@@ -2432,6 +2437,28 @@ export function validateActiveBuildForSession(
   return build;
 }
 
+/**
+ * Validates reusable-build provenance once, then rechecks the named cells in
+ * O(cellIds), including active mapping, metadata, connectivity, and geometry.
+ */
+export function validateActiveBuildCellsForSession(
+  session: RefinementSession,
+  build: ActiveMeshBuildResult,
+  cellIds: readonly CellId[]
+): ActiveMeshBuildResult {
+  const validated = validateActiveBuildSession(session, build, cellIds);
+  for (const cellId of cellIds) {
+    validateActiveBuildCellForSession(
+      session,
+      validated,
+      cellId,
+      cellIds,
+      false
+    );
+  }
+  return build;
+}
+
 function validateActiveBuildSession(
   session: RefinementSession,
   build: ActiveMeshBuildResult,
@@ -2524,50 +2551,82 @@ function validateActiveBuildSession(
   return { mappings, sessionGuard };
 }
 
+function validateActiveBuildCellForSession(
+  session: RefinementSession,
+  validated: ValidatedActiveBuildSession,
+  cellId: CellId,
+  diagnosticCellIds: readonly CellId[],
+  allowMissingInactive: boolean
+): number | undefined {
+  const { mappings, sessionGuard } = validated;
+  const cell = session.cells.get(cellId);
+  if (cell === undefined) {
+    if (!allowMissingInactive || mappings.elementIdByCellId.has(cellId)) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `external activeBuild is stale because cell ${cellId} no longer exists`
+      );
+    }
+    return undefined;
+  }
+  if (!isValidCellOrdinal(cell.ordinal)) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `external activeBuild is stale because cell ${cellId} has invalid ordinal ${cell.ordinal}`
+    );
+  }
+  const elementId = trustedOptionalElementIdByCellId(session, mappings, cellId);
+  const isActiveLeaf =
+    cell.active && !cell.hidden && session.activeLeafIds.has(cellId);
+  if ((elementId !== undefined) !== isActiveLeaf) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `external activeBuild is stale because cell ${cellId} active-leaf state changed`
+    );
+  }
+  if (elementId === undefined) {
+    return undefined;
+  }
+  const expectedFingerprint = sessionGuard.cellFingerprintByElementId[elementId];
+  let currentFingerprint: string;
+  try {
+    currentFingerprint = refinementSessionCellFingerprint(session, cellId, cell);
+  } catch (error) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      error instanceof Error
+        ? `external activeBuild cell validation failed: ${error.message}`
+        : `external activeBuild cell ${cellId} validation failed`
+    );
+  }
+  if (expectedFingerprint === undefined || expectedFingerprint !== currentFingerprint) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `external activeBuild is stale because selected cell ${cellId} changed`
+    );
+  }
+  return elementId;
+}
+
 function assertActiveBuildCoversSessionCells(
   session: RefinementSession,
   build: ActiveMeshBuildResult,
   diagnosticCellIds: readonly CellId[]
 ): void {
-  const { mappings, sessionGuard } =
+  const validated =
     validateActiveBuildSession(session, build, diagnosticCellIds);
   for (const cellId of diagnosticCellIds) {
-    const cell = session.cells.get(cellId);
-    if (cell === undefined) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        `external activeBuild is stale because selected cell ${cellId} no longer exists`
-      );
-    }
-    const elementId = trustedOptionalElementIdByCellId(session, mappings, cellId);
+    const elementId = validateActiveBuildCellForSession(
+      session,
+      validated,
+      cellId,
+      diagnosticCellIds,
+      false
+    );
     if (elementId === undefined) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
         `external activeBuild is stale because cell ${cellId} has an invalid ordinal or no longer maps to its expected element`
-      );
-    }
-    const expectedFingerprint = sessionGuard.cellFingerprintByElementId[elementId];
-    let currentFingerprint: string;
-    try {
-      currentFingerprint = refinementSessionCellFingerprint(session, cellId, cell);
-    } catch (error) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        error instanceof Error
-          ? `external activeBuild selected cell validation failed: ${error.message}`
-          : `external activeBuild selected cell ${cellId} validation failed`
-      );
-    }
-    if (expectedFingerprint === undefined || expectedFingerprint !== currentFingerprint) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        `external activeBuild is stale because selected cell ${cellId} changed`
-      );
-    }
-    if (!cell.active || cell.hidden || !session.activeLeafIds.has(cellId)) {
-      throw sessionFaceResolutionError(
-        diagnosticCellIds,
-        `external activeBuild is stale because selected cell ${cellId} is not an active leaf`
       );
     }
   }
