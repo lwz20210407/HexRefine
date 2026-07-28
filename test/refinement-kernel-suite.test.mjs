@@ -18,6 +18,9 @@ import {
   buildTwoToOneHexReplacements
 } from "../dist/two-to-one.js";
 import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
+import {
+  asTwoToOneFlatPlanningError
+} from "../dist/refinement-errors.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
@@ -273,12 +276,12 @@ test("geometric face identity rejects near and ambiguous faces", () => {
       {
         firstCellId: "query",
         secondCellId: "a",
-        faceNodeIds: [21, 22, 23, 24]
+        faceNodeIds: [1, 2, 3, 4]
       },
       {
         firstCellId: "query",
         secondCellId: "duplicate",
-        faceNodeIds: [21, 22, 23, 24]
+        faceNodeIds: [11, 12, 13, 14]
       }
     ],
     attemptedActions: []
@@ -1218,6 +1221,7 @@ test("geometric face identity counts same-owner geometric records at face level"
     }
   };
 
+  const diagnosticsByQuery = new Map();
   for (const insertionOrder of [
     ["first", "second"],
     ["second", "first"]
@@ -1238,14 +1242,33 @@ test("geometric face identity counts same-owner geometric records at face level"
         points: square
       }
     ]) {
-      assert.equal(index.matches(query).length, 2);
+      assert.deepEqual(
+        index.matches(query).map((face) => [...face.nodeIds]),
+        [
+          [1, 2, 3, 4],
+          [11, 12, 13, 14]
+        ]
+      );
       const error = captureError(() => index.uniqueMatch(query));
       assert.equal(error.code, "TWO_TO_ONE_AMBIGUOUS_FACE");
       assert.deepEqual(
         error.diagnostic.conflictingCellIds,
         [query.owner, "shared-owner"].sort()
       );
+      const diagnostics = diagnosticsByQuery.get(query.owner) ?? [];
+      diagnostics.push(structuredClone(error.diagnostic));
+      diagnosticsByQuery.set(query.owner, diagnostics);
     }
+  }
+  for (const diagnostics of diagnosticsByQuery.values()) {
+    assert.deepEqual(diagnostics[1], diagnostics[0]);
+    assert.deepEqual(
+      diagnostics[0].conflictingInterfaces.map((entry) => entry.faceNodeIds),
+      [
+        [1, 2, 3, 4],
+        [11, 12, 13, 14]
+      ]
+    );
   }
 });
 
@@ -1279,13 +1302,26 @@ test("geometric face ambiguity diagnostics are sorted independently of insertion
       nodeIds: [21, 22, 23, 24],
       points: square
     }));
-    diagnostics.push(error.diagnostic.conflictingCellIds);
+    diagnostics.push(structuredClone(error.diagnostic));
   }
 
-  assert.deepEqual(diagnostics, [
-    ["a-owner", "m-query", "z-owner"],
-    ["a-owner", "m-query", "z-owner"]
-  ]);
+  assert.deepEqual(diagnostics[1], diagnostics[0]);
+  assert.deepEqual(diagnostics[0], {
+    conflictingCellIds: ["a-owner", "m-query", "z-owner"],
+    conflictingInterfaces: [
+      {
+        firstCellId: "m-query",
+        secondCellId: "a-owner",
+        faceNodeIds: [11, 12, 13, 14]
+      },
+      {
+        firstCellId: "m-query",
+        secondCellId: "z-owner",
+        faceNodeIds: [1, 2, 3, 4]
+      }
+    ],
+    attemptedActions: []
+  });
 });
 
 test("geometric face identity keeps unique exact ids authoritative over unrelated geometry", () => {
@@ -1715,6 +1751,67 @@ test("Hex 2:1 structured planning errors isolate nested diagnostic snapshots", (
   assert.notEqual(serialized.diagnostic, error.diagnostic);
   assert.notEqual(serialized.diagnostic, dto.diagnostic);
   assert.deepEqual(serialized.diagnostic, expectedDiagnostic);
+});
+
+test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () => {
+  const createInternalError = () => new TwoToOnePlanningError(
+    "TWO_TO_ONE_COMPENSATION_LIMIT",
+    "compensation budget exhausted",
+    {
+      conflictingCellIds: [11, 12],
+      conflictingInterfaces: [{
+        firstCellId: 11,
+        secondCellId: 12,
+        faceNodeIds: [4, 3, 2, 1]
+      }],
+      attemptedActions: [{
+        kind: "selection-expand",
+        reason: "close transition",
+        addedParentCellIds: [13],
+        replacedTransitionCellIds: [14],
+        templateId: "selection-shell"
+      }],
+      suggestion: {
+        kind: "expand-selection",
+        axis: 1,
+        side: 1,
+        parentCellIds: [15]
+      }
+    }
+  );
+  const internalError = createInternalError();
+  const mapped = asTwoToOneFlatPlanningError(internalError, [11, 12]);
+  const expected = serializeTwoToOnePlanningError(mapped);
+
+  assert.equal(Object.isFrozen(mapped.diagnostic), true);
+  assert.equal(Object.isFrozen(mapped.diagnostic.conflictingCellIds), true);
+  assert.equal(Object.isFrozen(mapped.diagnostic.conflictingInterfaces), true);
+  assert.equal(Object.isFrozen(mapped.diagnostic.conflictingInterfaces[0]), true);
+  assert.equal(
+    Object.isFrozen(mapped.diagnostic.conflictingInterfaces[0].faceNodeIds),
+    true
+  );
+  assert.equal(Object.isFrozen(mapped.diagnostic.attemptedActions), true);
+  assert.equal(Object.isFrozen(mapped.diagnostic.attemptedActions[0]), true);
+  assert.equal(
+    Object.isFrozen(mapped.diagnostic.attemptedActions[0].addedParentCellIds),
+    true
+  );
+  assert.equal(Object.isFrozen(mapped.diagnostic.suggestion), true);
+  assert.equal(
+    Object.isFrozen(mapped.diagnostic.suggestion.parentCellIds),
+    true
+  );
+  assert.throws(() => mutatePlanningDiagnostic(mapped.diagnostic), TypeError);
+
+  mutatePlanningDiagnostic(internalError.diagnostic);
+  assert.deepEqual(serializeTwoToOnePlanningError(mapped), expected);
+  assert.deepEqual(
+    serializeTwoToOnePlanningError(
+      asTwoToOneFlatPlanningError(createInternalError(), [11, 12])
+    ),
+    expected
+  );
 });
 
 test("HexRefine offline memory planner selects a bounded heap from system RAM", async () => {
@@ -4442,6 +4539,66 @@ test("Hex 2:1 flat entry points map quality failures without mutating input", ()
   }
 });
 
+test("Hex 2:1 flat boundaries preserve configuration TypeError and RangeError", () => {
+  const mesh = createHexUnitCubeMesh(2, 2, 5);
+  const selectedElementIds = [5, 6, 7, 8];
+  const entries = [
+    buildHexClassifiedPlan,
+    buildDefaultRefinementPlan,
+    buildHexClassifiedReplacements,
+    buildDefaultRefinementReplacements,
+    buildRefinementReplacements,
+    previewRefinementByElementIds,
+    previewHexRefinementByElementIds,
+    refineByElementIdsWithReport,
+    refineHexByElementIdsWithReport
+  ];
+  const configurationCases = [
+    {
+      compensation: {
+        mode: "automatic"
+      },
+      errorType: TypeError,
+      message: /mode must be none, selection, or local-topology/
+    },
+    {
+      compensation: {
+        mode: "selection",
+        maxAddedParentCount: -1
+      },
+      errorType: RangeError,
+      message: /maxAddedParentCount must be a non-negative safe integer/
+    }
+  ];
+
+  for (const entry of entries) {
+    for (const configurationCase of configurationCases) {
+      const before = structuredClone(mesh);
+      const error = captureError(() => entry(mesh, selectedElementIds, {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        includeTransitions: true,
+        regularizeHexSelection: false,
+        hexTwoToOneCompensation: configurationCase.compensation
+      }));
+
+      assert.equal(error instanceof configurationCase.errorType, true);
+      assert.equal(error instanceof TwoToOnePlanningError, false);
+      assert.match(error.message, configurationCase.message);
+      assert.deepEqual(mesh, before);
+    }
+  }
+
+  const includeTransitionsError = captureError(() =>
+    planTwoToOneHexRefinement(mesh, selectedElementIds, {
+      includeTransitions: false
+    })
+  );
+  assert.equal(includeTransitionsError instanceof RangeError, true);
+  assert.equal(includeTransitionsError instanceof TwoToOnePlanningError, false);
+  assert.match(includeTransitionsError.message, /requires transitions/);
+});
+
 test("Hex 2:1 public transition planner rejects includeTransitions false", () => {
   const mesh = createHexUnitCubeMesh(5, 5, 5);
   const snapshot = structuredClone(mesh);
@@ -5087,6 +5244,41 @@ test("Hex 2:1 session compensation limit maps complete attempted actions atomica
     side: -1,
     parentCellIds: ["e1", "e2", "e3", "e4"]
   });
+  const serialized = serializeTwoToOnePlanningError(error);
+  assert.equal(Object.isFrozen(error.diagnostic), true);
+  assert.equal(Object.isFrozen(error.diagnostic.attemptedActions), true);
+  assert.equal(Object.isFrozen(error.diagnostic.attemptedActions[0]), true);
+  assert.equal(
+    Object.isFrozen(error.diagnostic.attemptedActions[0].addedParentCellIds),
+    true
+  );
+  assert.equal(Object.isFrozen(error.diagnostic.suggestion), true);
+  assert.equal(
+    Object.isFrozen(error.diagnostic.suggestion.parentCellIds),
+    true
+  );
+  assert.throws(
+    () => error.diagnostic.attemptedActions[0].addedParentCellIds.push("e20"),
+    TypeError
+  );
+  assert.deepEqual(session, before);
+
+  const retryError = captureError(() => refineSessionPatch(
+    session,
+    selectedCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: {
+        mode: "selection",
+        maxAddedParentLayers: 1,
+        maxAddedParentCount: 0
+      },
+      activeBuild: active
+    }
+  ));
+  assert.deepEqual(serializeTwoToOnePlanningError(retryError), serialized);
   assert.deepEqual(session, before);
 });
 
@@ -5245,6 +5437,28 @@ test("Hex 2:1 normalized trusted paths match public and classified entries", () 
     Object.hasOwn(api, "tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection"),
     false
   );
+});
+
+test("unchecked Hex planning internals are absent from the root runtime API", () => {
+  for (const [namespace, uncheckedName] of [
+    [api, "buildDefaultRefinementPlanUnchecked"],
+    [api, "buildHexClassifiedPlanUnchecked"],
+    [api.refinementPlanner, "buildDefaultRefinementPlanUnchecked"],
+    [api.transitions, "buildHexClassifiedPlanUnchecked"]
+  ]) {
+    assert.equal(Object.hasOwn(namespace, uncheckedName), false);
+  }
+  for (const declarationFile of [
+    "../dist/index.d.ts",
+    "../dist/refinement-planner.d.ts",
+    "../dist/transitions.d.ts"
+  ]) {
+    const declarations = readFileSync(
+      new URL(declarationFile, import.meta.url),
+      "utf8"
+    );
+    assert.doesNotMatch(declarations, /PlanUnchecked/);
+  }
 });
 
 test("Hex 2:1 entry points reject invalid ids as topology without mutation", () => {

@@ -186,7 +186,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
           ...(match.owner === query.owner
             ? {}
             : { secondCellId: match.owner }),
-          faceNodeIds: [...query.nodeIds].sort((a, b) => a - b)
+          faceNodeIds: [...match.nodeIds].sort((a, b) => a - b)
         })),
         attemptedActions: []
       }
@@ -221,7 +221,7 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
         )
       );
       if (!exactGeometryMatch) {
-        return [...exactFaces];
+        return sortedFaces(exactFaces);
       }
       const geometricMatches = this.geometricMatchesResolved(face);
       const exactFaceSet = new Set(exactFaces);
@@ -229,10 +229,10 @@ export class GeometricFaceIndex<T extends TwoToOneEntityId> {
         !exactFaceSet.has(candidate)
       );
       return competingFaces.length === 0
-        ? [...exactFaces]
-        : [...exactFaces, ...competingFaces];
+        ? sortedFaces(exactFaces)
+        : sortedFaces([...exactFaces, ...competingFaces]);
     }
-    return this.geometricMatchesResolved(face);
+    return sortedFaces(this.geometricMatchesResolved(face));
   }
 
   private geometricMatchesResolved(face: GeometricFace<T>): GeometricFace<T>[] {
@@ -932,17 +932,76 @@ function point3(point: Point): Vector3 {
 }
 
 function uniqueOwners<T extends TwoToOneEntityId>(owners: readonly T[]): T[] {
-  return [...new Set(owners)].sort((first, second) => {
-    const firstKey = String(first);
-    const secondKey = String(second);
-    const stringComparison = firstKey < secondKey
-      ? -1
-      : firstKey > secondKey
-        ? 1
-        : 0;
-    if (stringComparison !== 0 || typeof first === typeof second) {
-      return stringComparison;
+  return [...new Set(owners)].sort(compareOwners);
+}
+
+function sortedFaces<T extends TwoToOneEntityId>(
+  faces: readonly GeometricFace<T>[]
+): GeometricFace<T>[] {
+  return [...faces].sort(compareFaces);
+}
+
+function compareFaces<T extends TwoToOneEntityId>(
+  first: GeometricFace<T>,
+  second: GeometricFace<T>
+): number {
+  const ownerComparison = compareOwners(first.owner, second.owner);
+  if (ownerComparison !== 0) {
+    return ownerComparison;
+  }
+  const nodeComparison = compareNumberArrays(
+    [...first.nodeIds].sort((a, b) => a - b),
+    [...second.nodeIds].sort((a, b) => a - b)
+  );
+  if (nodeComparison !== 0) {
+    return nodeComparison;
+  }
+  return compareNumberArrays(
+    stablePointSignature(first.points),
+    stablePointSignature(second.points)
+  );
+}
+
+function compareOwners(
+  first: TwoToOneEntityId,
+  second: TwoToOneEntityId
+): number {
+  const firstKey = String(first);
+  const secondKey = String(second);
+  const stringComparison = firstKey < secondKey
+    ? -1
+    : firstKey > secondKey
+      ? 1
+      : 0;
+  if (stringComparison !== 0 || typeof first === typeof second) {
+    return stringComparison;
+  }
+  return typeof first === "number" ? -1 : 1;
+}
+
+function stablePointSignature(points: readonly Point[]): number[] {
+  return points
+    .map((point) => [point[0]!, point[1]!, point[2]!] as Vector3)
+    .sort(compareNumberArrays)
+    .flatMap((point) => point);
+}
+
+function compareNumberArrays(
+  first: readonly number[],
+  second: readonly number[]
+): number {
+  for (let index = 0; index < Math.max(first.length, second.length); index += 1) {
+    const firstValue = first[index];
+    const secondValue = second[index];
+    if (firstValue === undefined) {
+      return -1;
     }
-    return typeof first === "number" ? -1 : 1;
-  });
+    if (secondValue === undefined) {
+      return 1;
+    }
+    if (!Object.is(firstValue, secondValue)) {
+      return firstValue < secondValue ? -1 : 1;
+    }
+  }
+  return 0;
 }

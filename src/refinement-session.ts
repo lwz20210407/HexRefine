@@ -18,9 +18,9 @@ import {
   replaceElements
 } from "./mesh.js";
 import {
-  buildDefaultRefinementPlanUnchecked as buildDefaultRefinementPlan,
+  buildDefaultRefinementPlanInternal as buildDefaultRefinementPlan,
   type ClassifiedReplacement
-} from "./refinement-planner.js";
+} from "./refinement-planner-internal.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 import {
   auditHexRefinementPatchQuality,
@@ -46,6 +46,7 @@ import {
 } from "./geometric-face-index.js";
 import {
   assertHexPatchQuality,
+  freezeTwoToOnePlanningErrorDiagnostic,
   HexPatchQualityError,
   qualityPlanningErrorCode
 } from "./refinement-errors.js";
@@ -3256,51 +3257,61 @@ function asTwoToOneSessionPlanningError(
   }
   if (error instanceof TwoToOnePlanningError) {
     if (planningDiagnosticUsesCellIds(error)) {
-      return cloneCellIdPlanningError(error, selectedCellIds);
+      return freezeTwoToOnePlanningErrorDiagnostic(
+        cloneCellIdPlanningError(error, selectedCellIds)
+      );
     }
     const numericError = error as TwoToOnePlanningError<number>;
-    return mapNumericDiagnosticToCellIds(
-      numericError,
-      selectedCellIds,
-      planningActiveByNumericError.get(numericError) ?? active
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      mapNumericDiagnosticToCellIds(
+        numericError,
+        selectedCellIds,
+        planningActiveByNumericError.get(numericError) ?? active
+      )
     );
   }
   if (error instanceof ExistingTransitionCollisionError) {
-    return new TwoToOnePlanningError(
-      "TWO_TO_ONE_CONFORMANCE",
-      error.message,
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError(
+        "TWO_TO_ONE_CONFORMANCE",
+        error.message,
+        {
+          conflictingCellIds: stableCellIds(selectedCellIds),
+          conflictingInterfaces: [],
+          attemptedActions: [],
+          suggestion: {
+            kind: "expand-selection"
+          }
+        }
+      )
+    );
+  }
+  if (error instanceof HexPatchQualityError) {
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError(
+        qualityPlanningErrorCode(error.code),
+        error.message,
+        {
+          conflictingCellIds: stableCellIds(selectedCellIds),
+          conflictingInterfaces: [],
+          attemptedActions: []
+        }
+      )
+    );
+  }
+  return freezeTwoToOnePlanningErrorDiagnostic(
+    new TwoToOnePlanningError(
+      "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+      error instanceof Error ? error.message : String(error),
       {
         conflictingCellIds: stableCellIds(selectedCellIds),
         conflictingInterfaces: [],
         attemptedActions: [],
         suggestion: {
-          kind: "expand-selection"
+          kind: "remesh-source"
         }
       }
-    );
-  }
-  if (error instanceof HexPatchQualityError) {
-    return new TwoToOnePlanningError(
-      qualityPlanningErrorCode(error.code),
-      error.message,
-      {
-        conflictingCellIds: stableCellIds(selectedCellIds),
-        conflictingInterfaces: [],
-        attemptedActions: []
-      }
-    );
-  }
-  return new TwoToOnePlanningError(
-    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
-    error instanceof Error ? error.message : String(error),
-    {
-      conflictingCellIds: stableCellIds(selectedCellIds),
-      conflictingInterfaces: [],
-      attemptedActions: [],
-      suggestion: {
-        kind: "remesh-source"
-      }
-    }
+    )
   );
 }
 

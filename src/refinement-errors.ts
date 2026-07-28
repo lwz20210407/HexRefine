@@ -62,36 +62,42 @@ export function asTwoToOneFlatPlanningError(
     throw error;
   }
   if (error instanceof TwoToOnePlanningError) {
-    return cloneNumericPlanningError(error, selectedElementIds);
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      cloneNumericPlanningError(error, selectedElementIds)
+    );
   }
   if (error instanceof HexPatchQualityError) {
-    return new TwoToOnePlanningError(
-      qualityPlanningErrorCode(error.code),
-      error.message,
-      {
-        conflictingCellIds: stableNumericIds(selectedElementIds),
-        conflictingInterfaces: [],
-        attemptedActions: []
-      }
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError(
+        qualityPlanningErrorCode(error.code),
+        error.message,
+        {
+          conflictingCellIds: stableNumericIds(selectedElementIds),
+          conflictingInterfaces: [],
+          attemptedActions: []
+        }
+      )
     );
   }
   const conflictingCellIds = error instanceof DirectTwoToOnePlanningError
     ? stableNumericIds(error.conflictingElementIds)
     : stableNumericIds(selectedElementIds);
-  return new TwoToOnePlanningError(
-    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
-    errorMessage(error),
-    {
-      conflictingCellIds:
-        conflictingCellIds.length > 0
-          ? conflictingCellIds
-          : stableNumericIds(selectedElementIds),
-      conflictingInterfaces: [],
-      attemptedActions: [],
-      suggestion: {
-        kind: "remesh-source"
+  return freezeTwoToOnePlanningErrorDiagnostic(
+    new TwoToOnePlanningError(
+      "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+      errorMessage(error),
+      {
+        conflictingCellIds:
+          conflictingCellIds.length > 0
+            ? conflictingCellIds
+            : stableNumericIds(selectedElementIds),
+        conflictingInterfaces: [],
+        attemptedActions: [],
+        suggestion: {
+          kind: "remesh-source"
+        }
       }
-    }
+    )
   );
 }
 
@@ -105,6 +111,33 @@ export function qualityPlanningErrorCode(
     return "TWO_TO_ONE_CHILD_JACOBIAN";
   }
   return "TWO_TO_ONE_VOLUME";
+}
+
+export function freezeTwoToOnePlanningErrorDiagnostic<
+  TId extends number | string
+>(error: TwoToOnePlanningError<TId>): TwoToOnePlanningError<TId> {
+  const diagnostic = error.diagnostic;
+  for (const entry of diagnostic.conflictingInterfaces) {
+    Object.freeze(entry.faceNodeIds);
+    Object.freeze(entry);
+  }
+  for (const action of diagnostic.attemptedActions) {
+    Object.freeze(action.addedParentCellIds);
+    Object.freeze(action.replacedTransitionCellIds);
+    Object.freeze(action);
+  }
+  const suggestion = diagnostic.suggestion;
+  if (suggestion !== undefined) {
+    if (suggestion.parentCellIds !== undefined) {
+      Object.freeze(suggestion.parentCellIds);
+    }
+    Object.freeze(suggestion);
+  }
+  Object.freeze(diagnostic.conflictingCellIds);
+  Object.freeze(diagnostic.conflictingInterfaces);
+  Object.freeze(diagnostic.attemptedActions);
+  Object.freeze(diagnostic);
+  return error;
 }
 
 function cloneNumericPlanningError(
