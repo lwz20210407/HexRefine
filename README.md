@@ -67,6 +67,26 @@ customize for research, engineering experiments, and selected project work:
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.
 
+### 2:1 capability outcomes
+
+A 2:1 request is either direct, compensated, or rejected. HexRefine may add a
+bounded face-connected parent layer or rebuild the colliding transition
+component when the operation remains conforming. Every compensation is reported
+in `twoToOne.actions`.
+
+HexRefine does not promise a conforming 2:1 result for every arbitrary Hex
+topology. Unsupported parity, valence, ambiguous geometry, history, or quality
+conditions throw `TwoToOnePlanningError` before the mesh or session is changed.
+
+Preview consumers must narrow on `planMode`. `"per-parent"` previews expose an
+honest replacement entry for each changed parent; `"aggregate"` previews report
+only exact transaction-level counts and quality because a shell rebuild has no
+truthful one-template-per-input decomposition.
+
+LS-DYNA export remains mesh-only: generated K files contain only `*NODE` and
+`*ELEMENT_SOLID` data between `*KEYWORD` and `*END`. Materials, sections, loads,
+contacts, and other analysis keywords remain the caller's responsibility.
+
 Large-mesh workflows are still an active engineering area. The GUI can guide
 large cases, but for production-size exports the recommended path is GUI first,
 then offline replay.

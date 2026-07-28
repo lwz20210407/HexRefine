@@ -131,6 +131,66 @@ eligible for rebuilding only when its selected cell also has an exact shared
 face with an active transition cell; the rebuilt transaction must then pass the
 same net quality gate.
 
+### Stage A 2:1 capability contract
+
+The direct 2:1 solver runs before compensation. The
+`hexTwoToOneCompensation.mode` values are:
+
+- `"none"`: reject when the original selection has no conforming direct plan.
+- `"selection"`: permit bounded parent-selection expansion.
+- `"local-topology"`: permit selection expansion and one authorized local
+  transition-shell rebuild.
+
+The default mode is `"local-topology"`. Selection compensation may add at most
+one face-connected parent layer by default. Its default parent-count limit is
+`max(32, ceil(originalSelectedParentCount / 4))`; callers can configure the
+limits with `maxAddedParentLayers` and `maxAddedParentCount`. A zero limit
+disables that form of expansion. Exceeding a limit rejects the complete request
+without mutating the mesh or session.
+
+Imported meshes may represent one interface with coincident but differently
+numbered nodes. Interface discovery therefore uses exact node-id identity first,
+then tolerance-aware geometric matching. A geometric query must have one
+unambiguous owner; collapsed, over-warped, non-finite, or multiply owned faces
+are rejected rather than guessed.
+
+Normal previews use `planMode: "per-parent"` and carry classified replacement
+records. Compound shell-rebuild previews use `planMode: "aggregate"` and expose
+exact final element count, changed-input count, and net quality only. Consumers
+must narrow on `planMode`; aggregate previews intentionally have an empty
+per-parent plan.
+
+Publicly stable `TwoToOnePlanningError` codes distinguish unrecoverable
+topology, unsupported parity, unsupported valence, ambiguous faces,
+compensation limits, history conflicts, final conformance, parent or child
+Jacobian failures, and volume loss. Diagnostics include conflicting cells and
+interfaces, attempted compensation actions, and an optional recovery
+suggestion. Errors are produced before committing a flat result or session
+command.
+
+Stage A remains deliberately bounded:
+
+- Selection expansion is one-layer and only for rectangular
+  structured/recoverable-mapped parent ranges.
+- Shell rebuilding is limited to one untouched supporting refinement command.
+- Arbitrary cavity remeshing is not implemented.
+- Component-scoped overlays across independent or partially modified histories
+  are not implemented.
+
+Direct mutation of session geometry, cells, active leaves, or active-build
+metadata is unsupported. Use refinement commands and rebuild the active mesh;
+revision, provenance, and geometry fingerprints reject stale or altered builds.
+
+The public LS-DYNA regression fixtures can be regenerated with:
+
+```powershell
+npm run build
+node scripts/generate-lsdyna-regression-fixtures.mjs
+```
+
+The generator writes only mesh keywords and audits the tensile O-grid,
+compression O-grid, and double-shear inputs before updating their manifests.
+
 Automatic rebuilding currently requires the selected cells to come from one
 supporting refinement command and every cell in that supporting level to remain
 an active leaf. A shell spanning multiple history commands, or a shell already

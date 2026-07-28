@@ -4,6 +4,12 @@
 
 Private/custom performance edition.
 
+- Added explicit direct/compensated/rejected H1 2:1 planning outcomes.
+- Added bounded one-layer selection compensation and structured planning errors.
+- Made aggregate shell-rebuild previews unambiguous.
+- Added tolerance-aware geometric interface discovery for imported duplicate
+  nodes.
+- Added tensile, compression O-grid, and double-shear mesh-only K regressions.
 - Added repeated local H1 `2:1` refinement inside same-level uniform cores,
   including warped mapped cores with differing child corner orientations.
 - Added a shared session patch planner for preview and execution, plus an

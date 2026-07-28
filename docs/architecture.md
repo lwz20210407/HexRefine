@@ -102,6 +102,21 @@ regular Owen templates are applied with topological node sharing, and temporary
 children retain original-parent lineage before they are regrouped into normal
 replacement records.
 
+The public 2:1 capability path is:
+
+```text
+selection
+  -> direct two-to-one solver
+  -> bounded compensation planner
+  -> classified replacement plan
+  -> conformance and quality gates
+  -> flat result or atomic session command
+```
+
+The direct solver is always attempted first. Compensation may change the
+effective selected parent set or rebuild one authorized transition component,
+but it never bypasses the final conformance and quality gates.
+
 For repeated local `2:1`, `refinement-session.ts` builds a planning mesh from
 same-level active cells that are not transition cells. `previewSessionPatch`
 and `refineSessionPatch` share this plan. The plan is remapped to the complete
