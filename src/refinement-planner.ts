@@ -1,5 +1,5 @@
 import type { Mesh, RefineOptions } from "./types.js";
-import { inferMeshKind } from "./mesh.js";
+import { inferMeshKind, validateMergeTolerance } from "./mesh.js";
 import {
   buildDefaultRefinementPlanInternal,
   type ClassifiedRefinementPlan,
@@ -44,6 +44,7 @@ export function buildDefaultRefinementPlan(
   selectedElementIds: readonly number[],
   options: RefineOptions = {}
 ): ClassifiedRefinementPlan {
+  validateMergeTolerance(options.mergeTolerance);
   const kind = inferMeshKind(mesh);
   if (kind !== "H1" || options.hexRefinementRatio !== 2) {
     return buildDefaultRefinementPlanInternal(

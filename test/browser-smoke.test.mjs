@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
@@ -31,6 +31,26 @@ function standaloneRuntimeImportNames(source) {
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
+}
+
+function standaloneSpecifier(fileName) {
+  return `hexrefine/${fileName}`;
+}
+
+function rewriteStandaloneModuleSpecifiers(source) {
+  return source
+    .replaceAll(/from "\.\/([^"]+\.js)"/g, (_match, fileName) =>
+      `from "${standaloneSpecifier(fileName)}"`
+    )
+    .replaceAll(/from '\.\/([^']+\.js)'/g, (_match, fileName) =>
+      `from "${standaloneSpecifier(fileName)}"`
+    )
+    .replaceAll(/import\("\.\/([^"]+\.js)"\)/g, (_match, fileName) =>
+      `import("${standaloneSpecifier(fileName)}")`
+    )
+    .replaceAll(/import\('\.\/([^']+\.js)'\)/g, (_match, fileName) =>
+      `import("${standaloneSpecifier(fileName)}")`
+    );
 }
 
 test("HexRefine browser GUI imports the project-local runtime build", async () => {
@@ -123,6 +143,48 @@ test("HexRefine standalone binds and executes the session preview runtime entry"
   });
   assert.equal(preview.planMode, "per-parent");
   assert.ok(preview.plan.length > 0);
+});
+
+test("HexRefine standalone embedded runtime modules match the current dist build", async () => {
+  const standalone = await readFile(
+    new URL("examples/browser/hexrefine-standalone.html", projectRoot),
+    "utf8"
+  );
+  const importMapMatch = standalone.match(
+    /<script type="importmap">([\s\S]*?)<\/script>/
+  );
+  assert.ok(importMapMatch, "missing standalone import map");
+  const importMap = JSON.parse(importMapMatch[1]);
+  const distUrl = new URL("dist/", projectRoot);
+  const moduleNames = (await readdir(distUrl))
+    .filter((name) => name.endsWith(".js"))
+    .sort();
+
+  for (const moduleName of moduleNames) {
+    const source = await readFile(new URL(moduleName, distUrl), "utf8");
+    const rewritten = rewriteStandaloneModuleSpecifiers(source);
+    const expected = `data:text/javascript;base64,${Buffer.from(
+      rewritten,
+      "utf8"
+    ).toString("base64")}`;
+    assert.equal(
+      importMap.imports[standaloneSpecifier(moduleName)],
+      expected,
+      `${moduleName} is stale or absent from the standalone runtime`
+    );
+  }
+  for (const requiredModule of [
+    "refinement-planner-internal.js",
+    "transitions-internal.js",
+    "refinement-errors.js",
+    "hex-quality.js"
+  ]) {
+    assert.equal(
+      typeof importMap.imports[standaloneSpecifier(requiredModule)],
+      "string",
+      `${requiredModule} is absent from the standalone runtime`
+    );
+  }
 });
 
 test("HexRefine worker build validation trusts legal clones and isolates cached mappings", async () => {

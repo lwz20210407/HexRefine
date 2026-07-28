@@ -1,4 +1,13 @@
-import { auditHexRefinementPatchQuality } from "./hex-quality.js";
+import { checkNoHangingNodes } from "./conformance.js";
+import {
+  auditHexRefinementPatchQuality,
+  hexElementSignedVolume,
+  minimumOrientedHexCornerScaledJacobian
+} from "./hex-quality.js";
+import {
+  minNonzeroElementEdgeLength,
+  replaceElements
+} from "./mesh.js";
 import {
   DirectTwoToOnePlanningError,
   TwoToOnePlanningError,
@@ -27,9 +36,13 @@ export class HexPatchQualityError extends Error {
 
 export function assertHexPatchQuality(
   sourceMesh: Mesh,
-  replacements: readonly ReplaceElement[]
+  replacements: readonly ReplaceElement[],
+  finalMesh?: Mesh,
+  requireConforming = false
 ): HexRefinementQualitySummary {
-  const quality = auditHexRefinementPatchQuality(sourceMesh, replacements);
+  const quality = finalMesh === undefined
+    ? auditHexRefinementPatchQuality(sourceMesh, replacements)
+    : auditFinalHexPatchQuality(sourceMesh, replacements, finalMesh);
   if (quality.parentMinimumOrientedScaledJacobian <= 0) {
     throw new HexPatchQualityError(
       "HEX_PATCH_PARENT_JACOBIAN",
@@ -51,7 +64,39 @@ export function assertHexPatchQuality(
       `${quality.relativeVolumeError}`
     );
   }
+  if (finalMesh !== undefined && requireConforming) {
+    const minimumEdge = minNonzeroElementEdgeLength(finalMesh);
+    const tolerance = Number.isFinite(minimumEdge)
+      ? minimumEdge * 1e-8
+      : 1e-9;
+    const conformance = checkNoHangingNodes(finalMesh, tolerance);
+    if (!conformance.ok) {
+      throw new HexPatchQualityError(
+        "HEX_PATCH_CHILD_JACOBIAN",
+        "merged final Hex mesh contains a nonconforming interface: " +
+        conformance.hanging[0]!.message
+      );
+    }
+  }
   return quality;
+}
+
+export function buildAuditedHexRefinementOutput(
+  sourceMesh: Mesh,
+  replacements: readonly ReplaceElement[],
+  mergeTolerance: number,
+  requireConforming: boolean
+): { mesh: Mesh; quality: HexRefinementQualitySummary } {
+  const mesh = replaceElements(sourceMesh, replacements, mergeTolerance);
+  return {
+    mesh,
+    quality: assertHexPatchQuality(
+      sourceMesh,
+      replacements,
+      mesh,
+      requireConforming
+    )
+  };
 }
 
 export function asTwoToOneFlatPlanningError(
@@ -79,26 +124,29 @@ export function asTwoToOneFlatPlanningError(
       )
     );
   }
-  const conflictingCellIds = error instanceof DirectTwoToOnePlanningError
-    ? stableNumericIds(error.conflictingElementIds)
-    : stableNumericIds(selectedElementIds);
-  return freezeTwoToOnePlanningErrorDiagnostic(
-    new TwoToOnePlanningError(
-      "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
-      errorMessage(error),
-      {
-        conflictingCellIds:
-          conflictingCellIds.length > 0
-            ? conflictingCellIds
-            : stableNumericIds(selectedElementIds),
-        conflictingInterfaces: [],
-        attemptedActions: [],
-        suggestion: {
-          kind: "remesh-source"
+  if (error instanceof DirectTwoToOnePlanningError) {
+    const conflictingCellIds = stableNumericIds(
+      error.conflictingElementIds
+    );
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError(
+        "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+        error.message,
+        {
+          conflictingCellIds:
+            conflictingCellIds.length > 0
+              ? conflictingCellIds
+              : stableNumericIds(selectedElementIds),
+          conflictingInterfaces: [],
+          attemptedActions: [],
+          suggestion: {
+            kind: "remesh-source"
+          }
         }
-      }
-    )
-  );
+      )
+    );
+  }
+  throw error;
 }
 
 export function qualityPlanningErrorCode(
@@ -214,6 +262,68 @@ function compareNumbers(first: number, second: number): number {
   return first - second;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function auditFinalHexPatchQuality(
+  sourceMesh: Mesh,
+  replacements: readonly ReplaceElement[],
+  finalMesh: Mesh
+): HexRefinementQualitySummary {
+  const replacedIds = new Set(
+    replacements.map((replacement) => replacement.elementId)
+  );
+  let childOffset = sourceMesh.elements.length - replacedIds.size;
+  const finalReplacements = replacements.map((replacement) => {
+    const childCount = replacement.refinement.elements.length;
+    const elements = finalMesh.elements
+      .slice(childOffset, childOffset + childCount)
+      .map((element) => [...element]);
+    childOffset += childCount;
+    return {
+      elementId: replacement.elementId,
+      refinement: {
+        kind: "H1" as const,
+        source: replacement.refinement.source,
+        nodes: finalMesh.nodes,
+        elements
+      }
+    };
+  });
+  const quality = auditHexRefinementPatchQuality(
+    sourceMesh,
+    finalReplacements
+  );
+  let finalMinimumOrientedScaledJacobian = Number.POSITIVE_INFINITY;
+  for (const [index, element] of finalMesh.elements.entries()) {
+    if (element.length !== 8 || new Set(element).size !== 8) {
+      throw new HexPatchQualityError(
+        "HEX_PATCH_CHILD_JACOBIAN",
+        `merged final Hex element ${index + 1} must contain eight distinct node ids`
+      );
+    }
+    const vertices = element.map((nodeId) => {
+      const point = finalMesh.nodes[nodeId - 1];
+      if (!point) {
+        throw new HexPatchQualityError(
+          "HEX_PATCH_CHILD_JACOBIAN",
+          `merged final Hex element ${index + 1} references missing node ${nodeId}`
+        );
+      }
+      return point;
+    });
+    const orientation = hexElementSignedVolume(vertices) < 0 ? -1 : 1;
+    finalMinimumOrientedScaledJacobian = Math.min(
+      finalMinimumOrientedScaledJacobian,
+      minimumOrientedHexCornerScaledJacobian(vertices, orientation)
+    );
+  }
+  const childMinimumOrientedScaledJacobian = Math.min(
+    quality.childMinimumOrientedScaledJacobian,
+    finalMinimumOrientedScaledJacobian
+  );
+  return {
+    ...quality,
+    ok: quality.parentMinimumOrientedScaledJacobian > 0
+      && childMinimumOrientedScaledJacobian > 0
+      && quality.relativeVolumeError <= 1e-8,
+    childMinimumOrientedScaledJacobian
+  };
 }

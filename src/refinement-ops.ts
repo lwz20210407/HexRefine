@@ -17,7 +17,8 @@ import {
   inferMeshKind,
   minElementEdgeLength,
   replaceElements,
-  selectElementsByPredicate
+  selectElementsByPredicate,
+  validateMergeTolerance
 } from "./mesh.js";
 import {
   buildDefaultRefinementPlan,
@@ -31,9 +32,11 @@ import {
   pointInBox as pointInBoxCore,
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
-import { auditHexRefinementPatchQuality } from "./hex-quality.js";
 import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
-import { asTwoToOneFlatPlanningError } from "./refinement-errors.js";
+import {
+  asTwoToOneFlatPlanningError,
+  buildAuditedHexRefinementOutput
+} from "./refinement-errors.js";
 
 export interface ClassifiedReplacement extends ReplaceElement {
   role: RefinementRole;
@@ -54,6 +57,7 @@ export function buildRefinementReplacements(
 
 export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: readonly number[], options: RefineOptions = {}): RefinementResult {
   return atFlatTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    validateMergeTolerance(options.mergeTolerance);
     const selected = uniqueSorted(selectedElementIds);
     if (selected.length === 0) {
       return buildRefinementResult(mesh, mesh, [], selected.length);
@@ -66,14 +70,25 @@ export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: rea
       mergeTolerance
     });
     const replacements = plan.replacements;
-
-    const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
+    const output = inferMeshKind(mesh) === "H1"
+      ? buildAuditedHexRefinementOutput(
+          mesh,
+          replacements,
+          mergeTolerance,
+          (options.includeTransitions ?? true)
+            && options.hexRefinementRatio === 2
+        )
+      : {
+          mesh: replaceElements(mesh, replacements, mergeTolerance),
+          quality: undefined
+        };
     return buildRefinementResult(
       mesh,
-      refinedMesh,
+      output.mesh,
       replacements,
       selected.length,
-      plan.twoToOne
+      plan.twoToOne,
+      output.quality
     );
   });
 }
@@ -135,6 +150,7 @@ export function refineByDistanceFunctionWithReport(
 
 export function previewRefinementByElementIds(mesh: Mesh, selectedElementIds: readonly number[], options: RefineOptions = {}): RefinementPreview {
   return atFlatTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    validateMergeTolerance(options.mergeTolerance);
     const kind = inferMeshKind(mesh);
     const selected = uniqueSorted(selectedElementIds);
     const plan = buildDefaultRefinementPlan(mesh, selected, options);
@@ -142,7 +158,8 @@ export function previewRefinementByElementIds(mesh: Mesh, selectedElementIds: re
       mesh,
       kind,
       plan.replacements,
-      plan.twoToOne
+      plan.twoToOne,
+      options
     );
   });
 }
@@ -254,13 +271,11 @@ function buildRefinementResult(
   mesh: Mesh,
   replacements: readonly ClassifiedReplacement[],
   selectedElementCount: number,
-  twoToOne?: TwoToOneCapabilityReport<number>
+  twoToOne?: TwoToOneCapabilityReport<number>,
+  quality?: RefinementResult["quality"]
 ): RefinementResult {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const cellData: RefinementCellData[] = [];
-  const quality = inferMeshKind(inputMesh) === "H1" && replacements.length > 0
-    ? auditHexRefinementPatchQuality(inputMesh, replacements)
-    : undefined;
 
   for (let index = 0; index < inputMesh.elements.length; index += 1) {
     const elementId = index + 1;
@@ -306,11 +321,18 @@ function buildRefinementPreview(
   mesh: Mesh,
   kind: "Q1" | "H1",
   replacements: readonly ClassifiedReplacement[],
-  twoToOne?: TwoToOneCapabilityReport<number>
+  twoToOne: TwoToOneCapabilityReport<number> | undefined,
+  options: RefineOptions
 ): RefinementPreview {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const quality = kind === "H1" && replacements.length > 0
-    ? auditHexRefinementPatchQuality(mesh, replacements)
+    ? buildAuditedHexRefinementOutput(
+        mesh,
+        replacements,
+        options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005,
+        (options.includeTransitions ?? true)
+          && options.hexRefinementRatio === 2
+      ).quality
     : undefined;
   const plan: RefinementPlanItem[] = replacements
     .map((replacement) => ({

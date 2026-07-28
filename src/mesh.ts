@@ -110,6 +110,16 @@ export function findBoundaryPairs(mesh: Mesh, selectedElementIds: readonly numbe
 }
 
 export function replaceElements(mesh: Mesh, replacements: readonly ReplaceElement[], mergeTolerance: number): Mesh {
+  return mergeCoincidentNodes(
+    assembleReplacementMesh(mesh, replacements),
+    mergeTolerance
+  );
+}
+
+export function assembleReplacementMesh(
+  mesh: Mesh,
+  replacements: readonly ReplaceElement[]
+): Mesh {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const nodes: Point[] = [...mesh.nodes];
   const elements: Element[] = mesh.elements.filter((_, index) => !replacedIds.has(index + 1)).map((element) => [...element]);
@@ -120,7 +130,7 @@ export function replaceElements(mesh: Mesh, replacements: readonly ReplaceElemen
     elements.push(...refinement.elements.map((element) => element.map((nodeId) => nodeId + offset)));
   }
 
-  return mergeCoincidentNodes(mesh.kind ? { nodes, elements, kind: mesh.kind } : { nodes, elements }, mergeTolerance);
+  return mesh.kind ? { nodes, elements, kind: mesh.kind } : { nodes, elements };
 }
 
 export function mergeCoincidentNodes(mesh: Mesh, tolerance: number): Mesh {
@@ -128,9 +138,8 @@ export function mergeCoincidentNodes(mesh: Mesh, tolerance: number): Mesh {
 }
 
 export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): NodeMergeResult {
-  if (tolerance < 0) {
-    throw new Error("merge tolerance must be non-negative");
-  }
+  validateMergeTolerance(tolerance);
+  assertMergeToleranceBelowFinalEdgeLimit(mesh, tolerance);
   const nodes: Point[] = [];
   const oldToNewArray: number[] = new Array(mesh.nodes.length + 1);
   const inputNodeIdsByNodeIdArray: number[][] = [];
@@ -185,6 +194,37 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
     nodeIdByInputNodeIdArray: oldToNewArray,
     inputNodeIdsByNodeIdArray
   };
+}
+
+export function validateMergeTolerance(tolerance: unknown): asserts tolerance is number | undefined {
+  if (tolerance === undefined) {
+    return;
+  }
+  if (typeof tolerance !== "number") {
+    throw new TypeError("mergeTolerance must be a number");
+  }
+  if (!Number.isFinite(tolerance) || tolerance < 0) {
+    throw new RangeError("mergeTolerance must be finite and nonnegative");
+  }
+}
+
+export function assertMergeToleranceBelowFinalEdgeLimit(
+  mesh: ReadonlyMesh,
+  tolerance: number
+): void {
+  validateMergeTolerance(tolerance);
+  if (tolerance === 0 || mesh.elements.length === 0) {
+    return;
+  }
+  const minimumFinalEdge = minNonzeroElementEdgeLength(mesh);
+  if (
+    Number.isFinite(minimumFinalEdge)
+    && tolerance >= minimumFinalEdge / 2
+  ) {
+    throw new RangeError(
+      `mergeTolerance ${tolerance} must be less than half the unmerged final mesh minimum nonzero edge ${minimumFinalEdge}`
+    );
+  }
 }
 
 function findCoincidentNodeIndex(
@@ -263,6 +303,17 @@ function exactMergeKey(node: Point): string {
 }
 
 export function minElementEdgeLength(mesh: ReadonlyMesh): number {
+  return minimumElementEdgeLength(mesh, false);
+}
+
+export function minNonzeroElementEdgeLength(mesh: ReadonlyMesh): number {
+  return minimumElementEdgeLength(mesh, true);
+}
+
+function minimumElementEdgeLength(
+  mesh: ReadonlyMesh,
+  nonzeroOnly: boolean
+): number {
   const kind = inferMeshKind(mesh);
   const localEdges = kind === "Q1"
     ? [
@@ -294,12 +345,17 @@ export function minElementEdgeLength(mesh: ReadonlyMesh): number {
       }
       const pa = vertices[a]!;
       const pb = vertices[b]!;
-      let total = 0;
-      for (let d = 0; d < pa.length; d += 1) {
-        const delta = pa[d]! - pb[d]!;
-        total += delta * delta;
+      const deltas = pa.map((coordinate, dimension) =>
+        coordinate - (pb[dimension] ?? 0)
+      );
+      const length = nonzeroOnly
+        ? Math.hypot(...deltas)
+        : Math.sqrt(
+            deltas.reduce((total, delta) => total + delta * delta, 0)
+          );
+      if (!nonzeroOnly || length > 0) {
+        minimum = Math.min(minimum, length);
       }
-      minimum = Math.min(minimum, Math.sqrt(total));
     }
   }
   return minimum;

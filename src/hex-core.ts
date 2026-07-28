@@ -14,8 +14,8 @@ import type {
 import {
   inferMeshKind,
   minElementEdgeLength,
-  replaceElements,
-  selectElementsByPredicate
+  selectElementsByPredicate,
+  validateMergeTolerance
 } from "./mesh.js";
 import { type DistanceFunction, type DistanceSelection } from "./distance.js";
 import {
@@ -32,7 +32,10 @@ import {
   selectElementsByDistanceFunction as selectElementsByDistanceFunctionCore
 } from "./mesh-selection.js";
 import type { TwoToOneCapabilityReport } from "./two-to-one-capability.js";
-import { asTwoToOneFlatPlanningError } from "./refinement-errors.js";
+import {
+  asTwoToOneFlatPlanningError,
+  buildAuditedHexRefinementOutput
+} from "./refinement-errors.js";
 
 export {
   regularizeHexSessionSelection,
@@ -53,6 +56,7 @@ export function refineHexByElementIdsWithReport(
 ): RefinementResult {
   assertHexMesh(mesh);
   return atHexTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    validateMergeTolerance(options.mergeTolerance);
     const selected = uniqueSorted(selectedElementIds);
     if (selected.length === 0) {
       return buildHexRefinementResult(mesh, mesh, [], 0);
@@ -65,13 +69,20 @@ export function refineHexByElementIdsWithReport(
       mergeTolerance
     });
     const replacements = plan.replacements;
-    const refinedMesh = replaceElements(mesh, replacements, mergeTolerance);
+    const output = buildAuditedHexRefinementOutput(
+      mesh,
+      replacements,
+      mergeTolerance,
+      (options.includeTransitions ?? true)
+        && options.hexRefinementRatio === 2
+    );
     return buildHexRefinementResult(
       mesh,
-      refinedMesh,
+      output.mesh,
       replacements,
       selected.length,
-      plan.twoToOne
+      plan.twoToOne,
+      output.quality
     );
   });
 }
@@ -113,9 +124,15 @@ export function previewHexRefinementByElementIds(
 ): RefinementPreview {
   assertHexMesh(mesh);
   return atHexTwoToOneBoundary(mesh, selectedElementIds, options, () => {
+    validateMergeTolerance(options.mergeTolerance);
     const selected = uniqueSorted(selectedElementIds);
     const plan = buildSharedHexClassifiedPlan(mesh, selected, options);
-    return buildHexRefinementPreview(mesh, plan.replacements, plan.twoToOne);
+    return buildHexRefinementPreview(
+      mesh,
+      plan.replacements,
+      plan.twoToOne,
+      options
+    );
   });
 }
 
@@ -258,7 +275,8 @@ function buildHexRefinementResult(
   mesh: Mesh,
   replacements: readonly ClassifiedHexReplacement[],
   selectedElementCount: number,
-  twoToOne?: TwoToOneCapabilityReport<number>
+  twoToOne?: TwoToOneCapabilityReport<number>,
+  quality?: RefinementResult["quality"]
 ): RefinementResult {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
   const cellData: RefinementCellData[] = [];
@@ -297,6 +315,7 @@ function buildHexRefinementResult(
       outputNodeCount: mesh.nodes.length,
       outputElementCount: mesh.elements.length
     },
+    ...(quality ? { quality } : {}),
     ...(twoToOne ? { twoToOne } : {})
   };
 }
@@ -304,9 +323,19 @@ function buildHexRefinementResult(
 function buildHexRefinementPreview(
   mesh: Mesh,
   replacements: readonly ClassifiedHexReplacement[],
-  twoToOne?: TwoToOneCapabilityReport<number>
+  twoToOne: TwoToOneCapabilityReport<number> | undefined,
+  options: RefineOptions
 ): RefinementPreview {
   const replacedIds = new Set(replacements.map((replacement) => replacement.elementId));
+  const quality = replacements.length > 0
+    ? buildAuditedHexRefinementOutput(
+        mesh,
+        replacements,
+        options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005,
+        (options.includeTransitions ?? true)
+          && options.hexRefinementRatio === 2
+      ).quality
+    : undefined;
   const plan: RefinementPlanItem[] = replacements
     .map((replacement) => ({
       parentElementId: replacement.elementId,
@@ -329,6 +358,7 @@ function buildHexRefinementPreview(
       unchangedElementCount,
       estimatedOutputElementCount: unchangedElementCount + plan.reduce((total, item) => total + item.outputElementCount, 0)
     },
+    ...(quality ? { quality } : {}),
     ...(twoToOne ? { twoToOne } : {})
   };
 }

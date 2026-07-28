@@ -1,5 +1,5 @@
 import { auditHexRefinementPatchQuality } from "./hex-quality.js";
-import { minElementEdgeLength } from "./mesh.js";
+import { minElementEdgeLength, validateMergeTolerance } from "./mesh.js";
 import { inferHexElementLattice, type HexElementLattice } from "./regularization.js";
 import {
   DirectTwoToOnePlanningError,
@@ -54,6 +54,7 @@ export function planTwoToOneHexRefinement(
   selectedElementIds: readonly number[],
   options: TwoToOnePlanningOptions = {}
 ): PlannedTwoToOneHexRefinement {
+  validateMergeTolerance(options.mergeTolerance);
   if ((options as RefineOptions).includeTransitions === false) {
     throw new RangeError(
       "planTwoToOneHexRefinement requires transitions to be enabled"

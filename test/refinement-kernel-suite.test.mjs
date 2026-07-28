@@ -126,6 +126,69 @@ function captureError(operation) {
   assert.fail("expected operation to throw");
 }
 
+function assertFrozenPlanningDiagnostic(error) {
+  const serialized = serializeTwoToOnePlanningError(error);
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(Object.isFrozen(error.diagnostic), true);
+  assert.equal(Object.isFrozen(error.diagnostic.conflictingCellIds), true);
+  assert.equal(Object.isFrozen(error.diagnostic.conflictingInterfaces), true);
+  assert.equal(Object.isFrozen(error.diagnostic.attemptedActions), true);
+  assert.equal(Object.isFrozen(error.diagnostic.suggestion), true);
+  assert.throws(
+    () => error.diagnostic.conflictingCellIds.push("mutated"),
+    TypeError
+  );
+  assert.throws(
+    () => error.diagnostic.conflictingInterfaces.push({
+      firstCellId: "mutated",
+      faceNodeIds: []
+    }),
+    TypeError
+  );
+  assert.throws(
+    () => error.diagnostic.attemptedActions.push({
+      kind: "selection-expand",
+      reason: "mutated",
+      addedParentCellIds: [],
+      replacedTransitionCellIds: []
+    }),
+    TypeError
+  );
+  assert.throws(() => {
+    error.diagnostic.suggestion.kind = "reduce-level";
+  }, TypeError);
+  assert.deepEqual(serializeTwoToOnePlanningError(error), serialized);
+}
+
+function createMergeCollapsedHexMesh() {
+  return {
+    kind: "H1",
+    nodes: [
+      [-0.19862831979990006, 0.07926663877442479, 0.3851875668391585],
+      [0.4179745177738369, 0.31747906319797037, -0.279048830922693],
+      [1.5279899718239904, 1.391131894942373, -0.09928947910666465],
+      [0.46307154642418025, 0.6490932760760189, 0.06864200262352824],
+      [-0.18730150423943995, -0.5530625863932073, 0.7816654140129685],
+      [1.5065415038727223, 0.08001531064510345, 0.768233108241111],
+      [1.497776602767408, 1.2830029870383441, 0.8302815672010183],
+      [0.10892684245482087, 1.135718678124249, 1.2159863329492508]
+    ],
+    elements: [[1, 2, 3, 4, 5, 6, 7, 8]],
+    data: {
+      source: "merge-collapse-regression"
+    }
+  };
+}
+
+function createFourDimensionalLocalSweepMesh() {
+  const mesh = createHexUnitCubeMesh(5, 5, 5);
+  mesh.nodes = mesh.nodes.map((point) => [...point, 0]);
+  mesh.data = {
+    source: "four-dimensional-programming-invariant"
+  };
+  return mesh;
+}
+
 const EXISTING_TRANSITION_COLLISION_TEST_MESSAGE =
   "second-level local 2:1 refinement would create a nonconforming interface with an existing transition layer";
 
@@ -5458,6 +5521,285 @@ test("unchecked Hex planning internals are absent from the root runtime API", ()
       "utf8"
     );
     assert.doesNotMatch(declarations, /PlanUnchecked/);
+  }
+});
+
+test("flat build preview refine and Hex entries reject invalid explicit merge tolerances", () => {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  mesh.data = {
+    source: "invalid-merge-tolerance",
+    nested: { stable: true }
+  };
+  const snapshot = structuredClone(mesh);
+  const box = {
+    min: [-1, -1, -1],
+    max: [2, 2, 2]
+  };
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  };
+  const entries = [
+    ["build default plan", (value) => buildDefaultRefinementPlan(mesh, [1], value)],
+    ["build default replacements", (value) => buildDefaultRefinementReplacements(mesh, [1], value)],
+    ["build Hex plan", (value) => buildHexClassifiedPlan(mesh, [1], value)],
+    ["build Hex replacements", (value) => buildHexClassifiedReplacements(mesh, [1], value)],
+    ["build replacements", (value) => buildRefinementReplacements(mesh, [1], value)],
+    ["plan 2:1", (value) => planTwoToOneHexRefinement(mesh, [1], {
+      ...value,
+      includeTransitions: true
+    })],
+    ["preview ids", (value) => previewRefinementByElementIds(mesh, [1], value)],
+    ["preview box", (value) => previewRefinementByBox(mesh, box, value)],
+    ["preview distance", (value) => previewRefinementByDistanceFunction(mesh, () => -1, 0, value)],
+    ["preview Hex ids", (value) => previewHexRefinementByElementIds(mesh, [1], value)],
+    ["preview Hex box", (value) => api.previewHexRefinementByBox(mesh, box, value)],
+    ["preview Hex distance", (value) => api.previewHexRefinementByDistanceFunction(mesh, () => -1, 0, value)],
+    ["preview Hex candidates", (value) => api.previewHexCandidateIds(mesh, [1], value)],
+    ["refine ids", (value) => refineByElementIds(mesh, [1], value)],
+    ["refine ids report", (value) => refineByElementIdsWithReport(mesh, [1], value)],
+    ["refine box", (value) => refineByBox(mesh, box, value)],
+    ["refine box report", (value) => refineByBoxWithReport(mesh, box, value)],
+    ["refine distance", (value) => api.refineByDistanceFunction(mesh, () => -1, 0, value)],
+    ["refine distance report", (value) => refineByDistanceFunctionWithReport(mesh, () => -1, 0, value)],
+    ["refine Hex ids", (value) => api.refineHexByElementIds(mesh, [1], value)],
+    ["refine Hex ids report", (value) => refineHexByElementIdsWithReport(mesh, [1], value)],
+    ["refine Hex box", (value) => api.refineHexByBox(mesh, box, value)],
+    ["refine Hex box report", (value) => api.refineHexByBoxWithReport(mesh, box, value)],
+    ["refine Hex distance", (value) => api.refineHexByDistanceFunction(mesh, () => -1, 0, value)],
+    ["refine Hex distance report", (value) => api.refineHexByDistanceFunctionWithReport(mesh, () => -1, 0, value)],
+    ["refine Hex candidates", (value) => api.refineHexCandidateIdsWithReport(mesh, [1], value)]
+  ];
+
+  for (const mergeTolerance of [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    -1
+  ]) {
+    for (const [name, invoke] of entries) {
+      const error = captureError(() => invoke({
+        ...options,
+        mergeTolerance
+      }));
+      assert.equal(error instanceof RangeError, true, `${name}:${mergeTolerance}`);
+      assert.equal(error instanceof TwoToOnePlanningError, false, name);
+      assert.match(error.message, /mergeTolerance must be finite and nonnegative/);
+      assert.deepEqual(mesh, snapshot);
+    }
+  }
+
+  for (const [name, invoke] of entries) {
+    const error = captureError(() => invoke({
+      ...options,
+      mergeTolerance: "0"
+    }));
+    assert.equal(error instanceof TypeError, true, name);
+    assert.equal(error instanceof TwoToOnePlanningError, false, name);
+    assert.deepEqual(mesh, snapshot);
+  }
+});
+
+test("flat merge tolerance enforces the unmerged final edge resolution limit", () => {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  mesh.data = { source: "merge-edge-limit" };
+  const snapshot = structuredClone(mesh);
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false
+  };
+  const mergedEntries = [
+    ["preview", (mergeTolerance) => previewRefinementByElementIds(mesh, [1], {
+      ...options,
+      mergeTolerance
+    })],
+    ["preview Hex", (mergeTolerance) => previewHexRefinementByElementIds(mesh, [1], {
+      ...options,
+      mergeTolerance
+    })],
+    ["refine", (mergeTolerance) => refineByElementIdsWithReport(mesh, [1], {
+      ...options,
+      mergeTolerance
+    })],
+    ["refine Hex", (mergeTolerance) => refineHexByElementIdsWithReport(mesh, [1], {
+      ...options,
+      mergeTolerance
+    })]
+  ];
+
+  for (const mergeTolerance of [0.5, 0.25]) {
+    for (const [name, invoke] of mergedEntries) {
+      const error = captureError(() => invoke(mergeTolerance));
+      assert.equal(error instanceof RangeError, true, `${name}:${mergeTolerance}`);
+      assert.match(error.message, /less than half.*final.*edge/i);
+      assert.deepEqual(mesh, snapshot);
+    }
+  }
+
+  for (const mergeTolerance of [0, 0.25 - Number.EPSILON]) {
+    const preview = mergedEntries[0][1](mergeTolerance);
+    const result = mergedEntries[2][1](mergeTolerance);
+    const hexPreview = mergedEntries[1][1](mergeTolerance);
+    const hexResult = mergedEntries[3][1](mergeTolerance);
+    assert.equal(preview.quality.ok, true);
+    assert.deepEqual(preview.quality, result.quality);
+    assert.deepEqual(hexPreview.quality, hexResult.quality);
+    assert.deepEqual(hexResult.quality, result.quality);
+    assert.equal(
+      result.mesh.elements.every((element) => new Set(element).size === 8),
+      true
+    );
+    assert.deepEqual(mesh, snapshot);
+  }
+});
+
+test("flat 2:1 preview and refine audit the merged final Hex mesh", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    regularizeHexSelection: false,
+    mergeTolerance: 0.11
+  };
+  for (const entry of [
+    previewRefinementByElementIds,
+    previewHexRefinementByElementIds,
+    refineByElementIdsWithReport,
+    refineHexByElementIdsWithReport
+  ]) {
+    const mesh = createMergeCollapsedHexMesh();
+    const snapshot = structuredClone(mesh);
+    const error = captureError(() => entry(mesh, [1], options));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, entry.name);
+    assert.equal(error.code, "TWO_TO_ONE_CHILD_JACOBIAN");
+    assert.match(error.message, /merged final Hex|distinct node ids/i);
+    assert.deepEqual(error.diagnostic.conflictingCellIds, [1]);
+    assert.deepEqual(mesh, snapshot);
+  }
+});
+
+test("session preflight planning diagnostics are cloned and deeply frozen", () => {
+  for (const operation of ["preview", "refine"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-6
+    });
+    const before = structuredClone(session);
+    const invoke = operation === "preview"
+      ? () => previewSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          mergeTolerance: 1e-8,
+          activeBuild: active
+        })
+      : () => refineSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          mergeTolerance: 1e-8,
+          activeBuild: active
+        });
+    const error = captureError(invoke);
+
+    assertFrozenPlanningDiagnostic(error);
+    assert.deepEqual(error.diagnostic.conflictingCellIds, ["e1"]);
+    assert.deepEqual(error.diagnostic.suggestion, { kind: "remesh-source" });
+    assert.deepEqual(session, before);
+  }
+
+  const source = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const build = structuredClone(buildActiveMeshWithMap(source, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }));
+  const other = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const validatorError = captureError(() =>
+    api.validateActiveBuildForSession(other, build)
+  );
+  assertFrozenPlanningDiagnostic(validatorError);
+  assert.deepEqual(validatorError.diagnostic.conflictingCellIds, []);
+  assert.deepEqual(validatorError.diagnostic.suggestion, {
+    kind: "remesh-source"
+  });
+});
+
+test("ordinary local sweep invariant errors escape flat and session boundaries unchanged", () => {
+  const flatMesh = createFourDimensionalLocalSweepMesh();
+  const flatSnapshot = structuredClone(flatMesh);
+  const selectedElementId = elementIdAt(5, 5, 5, 2, 2, 2);
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    regularizeHexSelection: false
+  };
+  for (const entry of [
+    buildHexClassifiedPlan,
+    buildDefaultRefinementPlan,
+    buildHexClassifiedReplacements,
+    buildDefaultRefinementReplacements,
+    buildRefinementReplacements,
+    previewRefinementByElementIds,
+    previewHexRefinementByElementIds,
+    refineByElementIdsWithReport,
+    refineHexByElementIdsWithReport
+  ]) {
+    const error = captureError(() =>
+      entry(flatMesh, [selectedElementId], options)
+    );
+    assert.equal(error.constructor, Error, entry.name);
+    assert.equal(error instanceof TwoToOnePlanningError, false, entry.name);
+    assert.equal(
+      error.message,
+      "local 2:1 sweep entity vertex:80 maps inconsistently"
+    );
+    assert.deepEqual(flatMesh, flatSnapshot);
+  }
+
+  for (const operation of ["preview", "refine"]) {
+    const session = createRefinementSession(
+      createFourDimensionalLocalSweepMesh()
+    );
+    const active = buildActiveMeshWithMap(session);
+    const cellId = activeBuildCellIdByElementId(active, selectedElementId);
+    const before = structuredClone(session);
+    const invoke = operation === "preview"
+      ? () => previewSessionPatch(session, [cellId], {
+          ...options,
+          activeBuild: active
+        })
+      : () => refineSessionPatch(session, [cellId], {
+          ...options,
+          activeBuild: active
+        });
+    const error = captureError(invoke);
+
+    assert.equal(error.constructor, Error, operation);
+    assert.equal(error instanceof TwoToOnePlanningError, false, operation);
+    assert.equal(
+      error.message,
+      "local 2:1 sweep entity vertex:75 maps inconsistently"
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("strict and non-strict replay both propagate programming errors", () => {
+  for (const strict of [true, false]) {
+    const programmingError = new Error(
+      `programming option getter failed:${strict}`
+    );
+    const script = twoToOneCompensationReplayScript({
+      get mode() {
+        throw programmingError;
+      }
+    });
+    const error = captureError(() =>
+      replayHexRefineCommandScript(script, { strict })
+    );
+
+    assert.equal(error, programmingError);
+    assert.equal(error instanceof TwoToOnePlanningError, false);
   }
 });
 

@@ -2688,17 +2688,19 @@ function sessionFaceResolutionError(
   cellIds: readonly CellId[],
   message: string
 ): TwoToOnePlanningError<CellId> {
-  return new TwoToOnePlanningError<CellId>(
-    "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
-    message,
-    {
-      conflictingCellIds: stableCellIds(cellIds),
-      conflictingInterfaces: [],
-      attemptedActions: [],
-      suggestion: {
-        kind: "remesh-source"
+  return freezeTwoToOnePlanningErrorDiagnostic(
+    new TwoToOnePlanningError<CellId>(
+      "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+      message,
+      {
+        conflictingCellIds: stableCellIds(cellIds),
+        conflictingInterfaces: [],
+        attemptedActions: [],
+        suggestion: {
+          kind: "remesh-source"
+        }
       }
-    }
+    )
   );
 }
 
@@ -3299,20 +3301,32 @@ function asTwoToOneSessionPlanningError(
       )
     );
   }
-  return freezeTwoToOnePlanningErrorDiagnostic(
-    new TwoToOnePlanningError(
-      "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
-      error instanceof Error ? error.message : String(error),
-      {
-        conflictingCellIds: stableCellIds(selectedCellIds),
-        conflictingInterfaces: [],
-        attemptedActions: [],
-        suggestion: {
-          kind: "remesh-source"
+  if (error instanceof DirectTwoToOnePlanningError) {
+    const conflictingCellIds = stableCellIds(
+      error.conflictingElementIds.flatMap((elementId) => {
+        const cellId = activeBuildCellIdByElementId(active, elementId);
+        return cellId === undefined ? [] : [cellId];
+      })
+    );
+    return freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError(
+        "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY",
+        error.message,
+        {
+          conflictingCellIds:
+            conflictingCellIds.length > 0
+              ? conflictingCellIds
+              : stableCellIds(selectedCellIds),
+          conflictingInterfaces: [],
+          attemptedActions: [],
+          suggestion: {
+            kind: "remesh-source"
+          }
         }
-      }
-    )
-  );
+      )
+    );
+  }
+  throw error;
 }
 
 function mapNumericDiagnosticToCellIds(

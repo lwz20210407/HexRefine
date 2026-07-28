@@ -1,4 +1,5 @@
 import type { Mesh, RefineOptions } from "./types.js";
+import { validateMergeTolerance } from "./mesh.js";
 import {
   buildHexClassifiedPlanInternal,
   type ClassifiedHexPlan,
@@ -25,6 +26,7 @@ export function buildHexClassifiedPlan(
   selected: readonly number[],
   options: RefineOptions = {}
 ): ClassifiedHexPlan {
+  validateMergeTolerance(options.mergeTolerance);
   if ((options.hexRefinementRatio ?? 3) !== 2) {
     return buildHexClassifiedPlanInternal(mesh, selected, options);
   }
