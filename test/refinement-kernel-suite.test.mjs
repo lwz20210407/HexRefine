@@ -39,6 +39,8 @@ const {
   refineByElementIdsWithReport,
   activeBuildCellIdByElementId,
   activeBuildElementIdByCellId,
+  activeBuildHasSessionNodeIds,
+  activeBuildSessionNodeIdsByNodeId,
   buildActiveMesh,
   buildActiveMeshWithMap,
   buildRefinementSessionExport,
@@ -1865,6 +1867,32 @@ test("Hierarchical refinement session hides mother cells and supports undo redo"
   assert.equal(buildActiveMesh(session).elements.length, 27);
 });
 
+test("refinement commands are deeply immutable without weakening undo redo", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const command = refineSessionCell(session, "e1", refineHexTo27Hex);
+  const stable = structuredClone(command);
+
+  assert.equal(Object.isFrozen(command), true);
+  assert.equal(Object.isFrozen(command.createdCellIds), true);
+  assert.equal(Object.isFrozen(command.quality), true);
+  assert.throws(() => {
+    command.createdCellIds.length = 0;
+  }, TypeError);
+  assert.throws(() => command.createdCellIds.push("tampered"), TypeError);
+  assert.throws(() => command.hiddenCellIds.splice(0), TypeError);
+  assert.throws(() => {
+    command.quality.ok = false;
+  }, TypeError);
+  assert.deepEqual(command, stable);
+
+  const undone = undoRefinementSession(session);
+  assert.equal(undone, command);
+  assert.deepEqual([...session.activeLeafIds], ["e1"]);
+  const redone = redoRefinementSession(session);
+  assert.equal(redone, command);
+  assert.equal(buildActiveMesh(session).elements.length, 27);
+});
+
 test("Hierarchical refinement session rejects inverted Hex children atomically", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const before = {
@@ -2397,6 +2425,56 @@ test("HexRefine command script can replay Q1 mesh-operation undo, redo, and set 
   assert.deepEqual(replay.cellSets.get("SELECTED_BL"), replay.cellSets.get("BL1_ALL"));
   assert.equal(replay.cellSets.get("SELECTED_BL").length, 8);
   assert.equal(checkNoHangingNodes(replay.mesh, 1e-9).ok, true);
+});
+
+test("HexRefine command script skips inactive cells when selecting a saved cell set", () => {
+  const replay = replayHexRefineCommandScript({
+    commands: [
+      {
+        kind: "grid.generate",
+        payload: {
+          kind: "H1",
+          nx: 2,
+          ny: 1,
+          nz: 1,
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+          mergeTolerance: 1e-9
+        }
+      },
+      {
+        kind: "set.cells.save",
+        payload: {
+          name: "COARSE",
+          cellIds: ["e1", "e2"]
+        }
+      },
+      {
+        kind: "refine.patch",
+        payload: {
+          cellIds: ["e1"],
+          options: {
+            includeTransitions: false,
+            regularizeHexSelection: false
+          }
+        }
+      },
+      {
+        kind: "select.cell-set",
+        payload: {
+          name: "COARSE"
+        }
+      },
+      {
+        kind: "set.cells.save",
+        payload: {
+          name: "ACTIVE_COARSE"
+        }
+      }
+    ]
+  }, { selectionStrategy: "replay" });
+
+  assert.deepEqual(replay.cellSets.get("ACTIVE_COARSE"), ["e2"]);
+  assert.equal(replay.warnings.length, 0);
 });
 
 test("HexRefine command script preserves cell sets through Q1 template replacement", () => {
@@ -4656,6 +4734,15 @@ test("Hex 2:1 local refinement supports a second level inside a uniform refined 
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 
   const stableTwoToOne = structuredClone(command.twoToOne);
+  assert.equal(Object.isFrozen(command.twoToOne), true);
+  assert.equal(Object.isFrozen(command.twoToOne.actions), true);
+  assert.throws(() => command.twoToOne.actions.push({
+    kind: "local-template",
+    reason: "tampered",
+    addedParentCellIds: [],
+    replacedTransitionCellIds: []
+  }), TypeError);
+  assert.deepEqual(command.twoToOne, stableTwoToOne);
   const undoneCommand = undoRefinementSession(session);
   assert.equal(undoneCommand?.id, command.id);
   assert.deepEqual(undoneCommand?.twoToOne, stableTwoToOne);
@@ -4880,6 +4967,28 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 
   const stableTwoToOne = structuredClone(command.twoToOne);
+  assert.equal(Object.isFrozen(command.twoToOne), true);
+  assert.equal(Object.isFrozen(command.twoToOne.actions), true);
+  assert.equal(Object.isFrozen(command.twoToOne.actions[0]), true);
+  assert.equal(Object.isFrozen(command.twoToOne.actions[0].addedParentCellIds), true);
+  assert.throws(() => {
+    command.twoToOne.actions[0].reason = "tampered";
+  }, TypeError);
+  assert.throws(() => command.twoToOne.actions[0].addedParentCellIds.push("tampered"), TypeError);
+  assert.deepEqual(command.twoToOne, stableTwoToOne);
+  const conformanceBuild = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9,
+    includeElementIdsByNodeId: true
+  });
+  const localConformance = checkRefinementSessionCommandConformance(
+    session,
+    command,
+    1e-9,
+    conformanceBuild
+  );
+  assert.equal(localConformance.seedCellIds.length, command.activeCreatedCellIds.length);
+  assert.equal(localConformance.report.ok, true);
   const undoneCommand = undoRefinementSession(session);
   assert.equal(undoneCommand?.id, command.id);
   assert.deepEqual(undoneCommand?.twoToOne, stableTwoToOne);
@@ -5473,6 +5582,79 @@ test("same-realm builds reject selected planning metadata changes atomically", (
   }
 });
 
+test("same-realm builds reject selected shared-node coordinate changes atomically", () => {
+  for (const operation of ["refine", "preview"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const active = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const selected = session.cells.get("e1");
+    const sharedNodeId = selected.element.find((nodeId) =>
+      session.cells.get("e2").element.includes(nodeId)
+    );
+    assert.ok(sharedNodeId);
+    const point = session.nodes[sharedNodeId - 1];
+    session.nodes[sharedNodeId - 1] = [point[0], point[1] + 0.01, point[2]];
+    const before = structuredClone(session);
+    const invoke = operation === "refine"
+      ? () => refineSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          activeBuild: active
+        })
+      : () => previewSessionPatch(session, ["e1"], {
+          includeTransitions: false,
+          activeBuild: active
+        });
+
+    const error = captureError(invoke);
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, operation);
+    assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+    assert.match(error.message, /activeBuild.*stale|selected cell.*changed/i);
+    assert.deepEqual(session, before);
+  }
+});
+
+test("session patch revalidates nonselected replacement parents before preview and apply", () => {
+  for (const mutation of ["metadata", "connectivity"]) {
+    for (const operation of ["refine", "preview"]) {
+      const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+      const active = buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      });
+      const neighbor = session.cells.get("e2");
+      if (mutation === "metadata") {
+        neighbor.level += 1;
+      } else {
+        neighbor.element = [
+          neighbor.element[1],
+          neighbor.element[0],
+          ...neighbor.element.slice(2)
+        ];
+      }
+      const before = structuredClone(session);
+      const invoke = operation === "refine"
+        ? () => refineSessionPatch(session, ["e1"], {
+            includeTransitions: true,
+            activeBuild: active
+          })
+        : () => previewSessionPatch(session, ["e1"], {
+            includeTransitions: true,
+            activeBuild: active
+          });
+
+      const error = captureError(invoke);
+
+      assert.equal(error instanceof TwoToOnePlanningError, true, `${mutation}:${operation}`);
+      assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+      assert.match(error.message, /activeBuild.*stale|replacement parent.*changed/i);
+      assert.deepEqual(session, before);
+    }
+  }
+});
+
 test("same-realm builds reject collection cardinality changes atomically", () => {
   const mutations = [
     ["cell-delete", (session) => {
@@ -5607,6 +5789,48 @@ test("structured-cloned mapping tamper is rejected before selection and remap co
       assert.match(error.message, /activeBuild.*tamper|mapping.*fingerprint/i);
     }
   }
+});
+
+test("active cell lookup returns undefined for a valid inactive session cell", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  refineSessionPatch(session, ["e1"], {
+    includeTransitions: false,
+    activeBuild: initial
+  });
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+
+  assert.equal(session.cells.get("e1").active, false);
+  assert.equal(activeBuildElementIdByCellId(session, active, "e1"), undefined);
+  assert.equal(activeBuildElementIdByCellId(session, active, "e2"), 1);
+});
+
+test("selection preparation validates worker builds before nonregularized early return", () => {
+  const workerSession = createRefinementSession(createHexUnitCubeMesh(3, 1, 1));
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const active = structuredClone(buildActiveMeshWithMap(workerSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  }));
+  const before = structuredClone(session);
+
+  const error = captureError(() => prepareSessionRefineSelection(
+    session,
+    active,
+    [1],
+    { regularizeHexSelection: false }
+  ));
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY");
+  assert.match(error.message, /activeBuild.*stale|session.*changed/i);
+  assert.deepEqual(session, before);
 });
 
 test("trusted active builds isolate planning and remap from public mapping tamper", () => {
@@ -7179,8 +7403,12 @@ function addAmbiguousSupportFaceCell(
     hidden: true
   });
   session.nextCellOrdinal += 1;
-  supportCommand.createdCellIds.push(cellId);
-  supportCommand.createdNodeIds.push(...duplicateNodeIds);
+  replaceSyntheticSupportCommand(
+    session,
+    supportCommand,
+    [cellId],
+    duplicateNodeIds
+  );
   return cellId;
 }
 
@@ -7212,10 +7440,14 @@ function addCoincidentDegenerateSupportCells(
       hidden: true
     });
     session.nextCellOrdinal += 1;
-    supportCommand.createdCellIds.push(cellId);
-    supportCommand.createdNodeIds.push(...duplicateNodeIds);
     owners.push(cellId);
   }
+  replaceSyntheticSupportCommand(
+    session,
+    supportCommand,
+    owners,
+    owners.flatMap((cellId) => session.cells.get(cellId).element)
+  );
   return owners;
 }
 
@@ -7268,9 +7500,13 @@ function addExactFirstSupportAmbiguity(session, selectedCellId) {
       hidden: true
     });
     session.nextCellOrdinal += 1;
-    supportCommand.createdCellIds.push(cellId);
   }
-  supportCommand.createdNodeIds.push(...sharedNodeIds, ...nearNodeIds);
+  replaceSyntheticSupportCommand(
+    session,
+    supportCommand,
+    Object.values(owners),
+    [...sharedNodeIds, ...nearNodeIds]
+  );
   return owners;
 }
 
@@ -7306,9 +7542,29 @@ function addCollapsedSupportCell(session, selectedCellId) {
     hidden: true
   });
   session.nextCellOrdinal += 1;
-  supportCommand.createdCellIds.push(cellId);
-  supportCommand.createdNodeIds.push(...nodeIds);
+  replaceSyntheticSupportCommand(session, supportCommand, [cellId], nodeIds);
   return cellId;
+}
+
+function replaceSyntheticSupportCommand(
+  session,
+  command,
+  createdCellIds,
+  createdNodeIds
+) {
+  const index = session.undoStack.indexOf(command);
+  assert.notEqual(index, -1);
+  session.undoStack[index] = Object.freeze({
+    ...command,
+    createdCellIds: Object.freeze([
+      ...command.createdCellIds,
+      ...createdCellIds
+    ]),
+    createdNodeIds: Object.freeze([
+      ...command.createdNodeIds,
+      ...createdNodeIds
+    ])
+  });
 }
 
 function addActiveResolutionProbeCell(session, origin, edge) {

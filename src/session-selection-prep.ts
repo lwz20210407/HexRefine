@@ -1,5 +1,9 @@
 import type { ActiveMeshBuildResult, CellId, RefinementSession } from "./refinement-session.js";
-import { activeBuildCellIdByElementId, activeBuildElementIdByCellId } from "./refinement-session.js";
+import {
+  activeBuildCellIdByElementId,
+  activeBuildElementIdByCellId,
+  validateActiveBuildForSession
+} from "./refinement-session.js";
 import type {
   Element,
   HexIndexRange,
@@ -71,6 +75,7 @@ export function prepareSessionRefineSelection(
   selectedElementIds: readonly number[],
   options: RefineOptions = {}
 ): PreparedSessionRefineSelection {
+  validateActiveBuildForSession(session, active);
   const rawElementIds = uniqueSorted(selectedElementIds);
   const baseResult = {
     elementIds: rawElementIds,

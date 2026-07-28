@@ -2,7 +2,12 @@ import type {
   ActiveMeshBuildResult,
   Mesh,
   RefinementSession,
-  RefinementSessionCell
+  RefinementSessionCell,
+  RefinementSessionCommand
+} from "../../src/index.js";
+import {
+  checkNoHangingNodes,
+  createRefinementSession
 } from "../../src/index.js";
 
 declare const mutableMesh: Mesh;
@@ -11,6 +16,12 @@ mutableMesh.elements.push([1, 2, 3, 4]);
 
 declare const activeBuild: ActiveMeshBuildResult;
 activeBuild.elementIdByCellOrdinalArray?.subarray(0, 1);
+checkNoHangingNodes(activeBuild.mesh);
+createRefinementSession(activeBuild.mesh);
+
+// @ts-expect-error Frozen active build output cannot masquerade as mutable Mesh.
+const mutableActiveMesh: Mesh = activeBuild.mesh;
+void mutableActiveMesh;
 
 // @ts-expect-error Active build mappings are public read-only views.
 activeBuild.cellIdByElementId.set(1, "e1");
@@ -35,3 +46,20 @@ sessionCell.level = 1;
 sessionCell.element.push(1);
 // @ts-expect-error Cell descendants are a public read-only view.
 sessionCell.children.push("child");
+
+declare const command: RefinementSessionCommand;
+// @ts-expect-error Command arrays are immutable public history.
+command.createdCellIds.push("tampered");
+// @ts-expect-error Optional command arrays are immutable public history.
+command.activeCreatedCellIds?.splice(0);
+// @ts-expect-error Command quality reports are immutable.
+command.quality!.ok = false;
+// @ts-expect-error Command capability actions are immutable.
+command.twoToOne!.actions.push({
+  kind: "local-template",
+  reason: "tampered",
+  addedParentCellIds: [],
+  replacedTransitionCellIds: []
+});
+// @ts-expect-error Nested command action arrays are immutable.
+command.twoToOne!.actions[0]!.addedParentCellIds.push("tampered");

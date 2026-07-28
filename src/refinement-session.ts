@@ -33,6 +33,7 @@ import {
   cloneTwoToOneCapabilityReport,
   DirectTwoToOnePlanningError,
   TwoToOnePlanningError,
+  type ReadonlyTwoToOneCapabilityReport,
   type TwoToOneCapabilityReport
 } from "./two-to-one-capability.js";
 import {
@@ -43,6 +44,7 @@ import {
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
 
+/** Public cell state is read-only and changes only through session command APIs. */
 export interface RefinementSessionCell {
   readonly id: CellId;
   readonly ordinal: number;
@@ -58,23 +60,24 @@ export interface RefinementSessionCell {
   readonly template?: string;
 }
 
+/** A deeply immutable history record safe to retain across undo and redo. */
 export interface RefinementSessionCommand {
-  id: string;
-  kind: "refine";
-  hiddenCellIds: CellId[];
-  createdCellIds: CellId[];
-  activeCreatedCellIds?: CellId[];
-  reactivatedCellIds?: CellId[];
-  createdNodeIds: number[];
-  quality?: HexRefinementQualitySummary;
-  twoToOne?: TwoToOneCapabilityReport<CellId>;
+  readonly id: string;
+  readonly kind: "refine";
+  readonly hiddenCellIds: readonly CellId[];
+  readonly createdCellIds: readonly CellId[];
+  readonly activeCreatedCellIds?: readonly CellId[];
+  readonly reactivatedCellIds?: readonly CellId[];
+  readonly createdNodeIds: readonly number[];
+  readonly quality?: Readonly<HexRefinementQualitySummary>;
+  readonly twoToOne?: ReadonlyTwoToOneCapabilityReport<CellId>;
 }
 
+/**
+ * Public session state is read-only. Mutate it through refine/undo/redo/replay
+ * APIs so revision and reusable-build invalidation remain coherent.
+ */
 export interface RefinementSession {
-  /**
-   * Public session state is read-only. Mutate it through refine/undo/redo/replay
-   * APIs so revision and reusable-build invalidation remain coherent.
-   */
   readonly revision: number;
   readonly baseMesh: ReadonlyMesh;
   readonly kind: ElementKind;
@@ -280,7 +283,7 @@ interface RefinementSessionPatchPlan {
   twoToOne?: TwoToOneCapabilityReport<CellId>;
 }
 
-export function createRefinementSession(mesh: Mesh): RefinementSession {
+export function createRefinementSession(mesh: ReadonlyMesh): RefinementSession {
   const kind = inferMeshKind(mesh);
   const cells = new Map<CellId, MutableRefinementSessionCell>();
   const activeLeafIds = new Set<CellId>();
@@ -897,6 +900,13 @@ function refinementSessionCellFingerprint(
   addStableValue(fingerprint, cell.sourceElementId);
   addStableValue(fingerprint, cell.template);
   addStableValue(fingerprint, session.activeLeafIds.has(cellId));
+  for (const nodeId of cell.element) {
+    const point = session.nodes[nodeId - 1];
+    if (point === undefined) {
+      throw new RangeError(`cell ${cellId} references missing node ${nodeId}`);
+    }
+    addStableValue(fingerprint, point);
+  }
   return fingerprint.digest();
 }
 
@@ -1108,7 +1118,7 @@ function measureActiveMeshGeometryResolution(
     minimumElementEdgeLength: measuredMinimumEdge ?? (
       mesh.elements.length === 0
         ? Number.POSITIVE_INFINITY
-        : minElementEdgeLength(mutableMeshView(mesh))
+        : minElementEdgeLength(mesh)
     )
   };
 }
@@ -1233,16 +1243,32 @@ export function activeBuildSessionNodeIdsByNodeId(
   return ensureTrustedActiveMeshMappings(build).sessionNodeIdsByNodeId.get(nodeId) ?? [];
 }
 
+export function activeBuildHasSessionNodeIds(
+  build: ActiveMeshBuildResult
+): boolean {
+  return ensureTrustedActiveMeshMappings(build).sessionNodeIdsByNodeId.size > 0;
+}
+
 export function activeBuildElementIdByCellId(
   session: RefinementSession,
   build: ActiveMeshBuildResult,
   cellId: CellId
 ): number | undefined {
-  assertActiveBuildCoversSessionCells(session, build, [cellId]);
-  return trustedElementIdByCellId(session, ensureTrustedActiveMeshMappings(build), cellId);
+  const { mappings } = validateActiveBuildSession(session, build, [cellId]);
+  const cell = session.cells.get(cellId);
+  if (cell === undefined) {
+    return undefined;
+  }
+  if (!isValidCellOrdinal(cell.ordinal)) {
+    throw sessionFaceResolutionError(
+      [cellId],
+      `external activeBuild is stale because cell ${cellId} has invalid ordinal ${cell.ordinal}`
+    );
+  }
+  return trustedOptionalElementIdByCellId(session, mappings, cellId);
 }
 
-function trustedElementIdByCellId(
+function trustedOptionalElementIdByCellId(
   session: RefinementSession,
   mappings: TrustedActiveMeshMappings,
   cellId: CellId
@@ -1254,23 +1280,46 @@ function trustedElementIdByCellId(
   const ordinalArray = mappings.elementIdByCellOrdinalArray;
   const cellIdsByElementId = mappings.cellIdsByElementIdArray;
   if (ordinalArray === undefined || ordinal >= ordinalArray.length) {
-    return undefined;
+    throw sessionFaceResolutionError(
+      [cellId],
+      `external activeBuild is stale because mapping is missing ordinal slot ${ordinal} for cell ${cellId}`
+    );
   }
   const elementId = ordinalArray[ordinal];
+  if (elementId === undefined) {
+    throw sessionFaceResolutionError(
+      [cellId],
+      `external activeBuild is stale because mapping is missing ordinal slot ${ordinal} for cell ${cellId}`
+    );
+  }
+  if (elementId === 0) {
+    if (mappings.elementIdByCellId.has(cellId)) {
+      throw sessionFaceResolutionError(
+        [cellId],
+        `external activeBuild is stale because mapping disagrees about inactive cell ${cellId}`
+      );
+    }
+    return undefined;
+  }
   if (
-    elementId === undefined
-    ||
     !Number.isSafeInteger(elementId)
     || elementId <= 0
-    || cellIdsByElementId?.[elementId] !== cellId
+    || cellIdsByElementId[elementId] !== cellId
   ) {
-    return undefined;
+    throw sessionFaceResolutionError(
+      [cellId],
+      `external activeBuild is stale because mapping disagrees with ordinal ${ordinal} for cell ${cellId}`
+    );
   }
   const reverseElementId = mappings.elementIdByCellId.get(cellId);
   const reverseCellId = mappings.cellIdByElementId.get(elementId);
-  return reverseElementId === elementId && reverseCellId === cellId
-    ? elementId
-    : undefined;
+  if (reverseElementId !== elementId || reverseCellId !== cellId) {
+    throw sessionFaceResolutionError(
+      [cellId],
+      `external activeBuild is stale because reverse mapping disagrees for cell ${cellId}`
+    );
+  }
+  return elementId;
 }
 
 function isValidCellOrdinal(ordinal: number | undefined): ordinal is number {
@@ -1375,7 +1424,7 @@ export function checkRefinementSessionCommandConformance(
     mergeTolerance: tolerance,
     includeElementIdsByNodeId: true
   });
-  const seedElementIds = command.createdCellIds
+  const seedElementIds = (command.activeCreatedCellIds ?? command.createdCellIds)
     .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
     .filter((elementId): elementId is number => elementId !== undefined)
     .sort((a, b) => a - b);
@@ -1486,14 +1535,14 @@ export function refineSessionCells(
     hiddenCellIds.push(parentId);
   }
 
-  const command: RefinementSessionCommand = {
+  const command = freezeRefinementSessionCommand({
     id: `cmd-${mutable.nextCommandId}`,
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
     createdNodeIds,
     ...(quality ? { quality } : {})
-  };
+  });
   mutable.nextCommandId += 1;
   mutable.undoStack.push(command);
   mutable.redoStack = [];
@@ -1640,6 +1689,7 @@ function applyRefinementSessionPatchPlan(
   session: RefinementSession,
   plan: RefinementSessionPatchPlan
 ): RefinementSessionCommand {
+  assertRefinementSessionPatchPlanParents(session, plan);
   const mutable = mutableRefinementSession(session);
   const {
     planningActive: active,
@@ -1693,7 +1743,7 @@ function applyRefinementSessionPatchPlan(
     removeActiveLeafCellId(session, parentId);
   }
 
-  const command: RefinementSessionCommand = {
+  const command = freezeRefinementSessionCommand({
     id: `cmd-${mutable.nextCommandId}`,
     kind: "refine",
     hiddenCellIds,
@@ -1703,7 +1753,7 @@ function applyRefinementSessionPatchPlan(
     ...(plan.twoToOne
       ? { twoToOne: cloneTwoToOneCapabilityReport(plan.twoToOne) }
       : {})
-  };
+  });
   mutable.nextCommandId += 1;
   mutable.undoStack.push(command);
   mutable.redoStack = [];
@@ -1811,7 +1861,9 @@ function refineSessionPatchWithRebuiltTransitionShell(
   cellIds: readonly CellId[],
   options: RefinementSessionPatchOptions,
   faceResolution: SessionFaceResolution
-): RefinementSessionCommand & { twoToOne: TwoToOneCapabilityReport<CellId> } {
+): RefinementSessionCommand & {
+  readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
+} {
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
@@ -1994,9 +2046,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
     ])].sort(compareCellIds),
     preservedFarFieldCellCount: originalActiveLeafIds.size - hiddenCellIds.length
   };
-  const command: RefinementSessionCommand & {
-    twoToOne: TwoToOneCapabilityReport<CellId>;
-  } = {
+  const command = freezeRefinementSessionCommand({
     id: compoundCommandId,
     kind: "refine",
     hiddenCellIds,
@@ -2006,6 +2056,8 @@ function refineSessionPatchWithRebuiltTransitionShell(
     createdNodeIds,
     ...(quality ? { quality } : {}),
     twoToOne
+  }) as RefinementSessionCommand & {
+    readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
   };
   working.undoStack = [...originalUndoStack, command];
   working.redoStack = [];
@@ -2063,7 +2115,7 @@ function completeLogicalSupportParentBlock(
     return elementId;
   });
   const tolerance = options.mergeTolerance
-    ?? minElementEdgeLength(mutableMeshView(active.mesh)) * 0.000001;
+    ?? minElementEdgeLength(active.mesh) * 0.000001;
   const lattice = inferHexElementLattice(mutableMeshView(active.mesh), tolerance);
   const indices = elementIds.map((elementId) => lattice.indicesByElementId.get(elementId));
   if (indices.some((value) => value === undefined)) {
@@ -2367,11 +2419,24 @@ function effectiveSessionFaceTolerance(
   );
 }
 
-function assertActiveBuildCoversSessionCells(
+interface ValidatedActiveBuildSession {
+  readonly mappings: TrustedActiveMeshMappings;
+  readonly sessionGuard: TrustedSessionBuildGuard;
+}
+
+export function validateActiveBuildForSession(
+  session: RefinementSession,
+  build: ActiveMeshBuildResult
+): ActiveMeshBuildResult {
+  validateActiveBuildSession(session, build, []);
+  return build;
+}
+
+function validateActiveBuildSession(
   session: RefinementSession,
   build: ActiveMeshBuildResult,
   diagnosticCellIds: readonly CellId[]
-): void {
+): ValidatedActiveBuildSession {
   const token = refinementSessionToken(session);
   const mappings = ensureTrustedActiveMeshMappings(build, diagnosticCellIds);
   const internalTrust = internalActiveMeshBuildTrust.get(build);
@@ -2456,6 +2521,16 @@ function assertActiveBuildCoversSessionCells(
       "external activeBuild is stale because a session collection changed"
     );
   }
+  return { mappings, sessionGuard };
+}
+
+function assertActiveBuildCoversSessionCells(
+  session: RefinementSession,
+  build: ActiveMeshBuildResult,
+  diagnosticCellIds: readonly CellId[]
+): void {
+  const { mappings, sessionGuard } =
+    validateActiveBuildSession(session, build, diagnosticCellIds);
   for (const cellId of diagnosticCellIds) {
     const cell = session.cells.get(cellId);
     if (cell === undefined) {
@@ -2464,7 +2539,7 @@ function assertActiveBuildCoversSessionCells(
         `external activeBuild is stale because selected cell ${cellId} no longer exists`
       );
     }
-    const elementId = trustedElementIdByCellId(session, mappings, cellId);
+    const elementId = trustedOptionalElementIdByCellId(session, mappings, cellId);
     if (elementId === undefined) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
@@ -2472,10 +2547,18 @@ function assertActiveBuildCoversSessionCells(
       );
     }
     const expectedFingerprint = sessionGuard.cellFingerprintByElementId[elementId];
-    if (
-      expectedFingerprint === undefined
-      || expectedFingerprint !== refinementSessionCellFingerprint(session, cellId, cell)
-    ) {
+    let currentFingerprint: string;
+    try {
+      currentFingerprint = refinementSessionCellFingerprint(session, cellId, cell);
+    } catch (error) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        error instanceof Error
+          ? `external activeBuild selected cell validation failed: ${error.message}`
+          : `external activeBuild selected cell ${cellId} validation failed`
+      );
+    }
+    if (expectedFingerprint === undefined || expectedFingerprint !== currentFingerprint) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
         `external activeBuild is stale because selected cell ${cellId} changed`
@@ -2689,8 +2772,10 @@ function cloneRefinementSession(session: RefinementSession): MutableRefinementSe
   };
 }
 
-function cloneRefinementSessionCommand(command: RefinementSessionCommand): RefinementSessionCommand {
-  return {
+export function cloneRefinementSessionCommand(
+  command: RefinementSessionCommand
+): RefinementSessionCommand {
+  return freezeRefinementSessionCommand({
     ...command,
     hiddenCellIds: [...command.hiddenCellIds],
     createdCellIds: [...command.createdCellIds],
@@ -2704,7 +2789,49 @@ function cloneRefinementSessionCommand(command: RefinementSessionCommand): Refin
     ...(command.twoToOne
       ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
       : {})
-  };
+  });
+}
+
+function freezeRefinementSessionCommand(
+  command: RefinementSessionCommand
+): RefinementSessionCommand {
+  const quality = command.quality === undefined
+    ? undefined
+    : Object.freeze({ ...command.quality });
+  const twoToOne = command.twoToOne === undefined
+    ? undefined
+    : freezeRefinementSessionCapabilityReport(command.twoToOne);
+  return Object.freeze({
+    id: command.id,
+    kind: command.kind,
+    hiddenCellIds: Object.freeze([...command.hiddenCellIds]),
+    createdCellIds: Object.freeze([...command.createdCellIds]),
+    ...(command.activeCreatedCellIds === undefined
+      ? {}
+      : { activeCreatedCellIds: Object.freeze([...command.activeCreatedCellIds]) }),
+    ...(command.reactivatedCellIds === undefined
+      ? {}
+      : { reactivatedCellIds: Object.freeze([...command.reactivatedCellIds]) }),
+    createdNodeIds: Object.freeze([...command.createdNodeIds]),
+    ...(quality === undefined ? {} : { quality }),
+    ...(twoToOne === undefined ? {} : { twoToOne })
+  });
+}
+
+function freezeRefinementSessionCapabilityReport(
+  report: ReadonlyTwoToOneCapabilityReport<CellId>
+): ReadonlyTwoToOneCapabilityReport<CellId> {
+  const cloned = cloneTwoToOneCapabilityReport(report);
+  for (const action of cloned.actions) {
+    Object.freeze(action.addedParentCellIds);
+    Object.freeze(action.replacedTransitionCellIds);
+    Object.freeze(action);
+  }
+  Object.freeze(cloned.originalSelectedCellIds);
+  Object.freeze(cloned.effectiveSelectedCellIds);
+  Object.freeze(cloned.actions);
+  Object.freeze(cloned.affectedComponentCellIds);
+  return Object.freeze(cloned);
 }
 
 function replaceRefinementSessionState(
@@ -2829,7 +2956,7 @@ function previewSessionPatchWithRebuiltTransitionShell(
       preservedInputElementCount: inputElementCount - changedInputElementCount,
       outputElementCount: finalActive.mesh.elements.length
     },
-    twoToOne: command.twoToOne,
+    twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne),
     ...(command.quality ? { quality: command.quality } : {})
   };
 }
@@ -2878,12 +3005,15 @@ function buildRefinementSessionPatchPlan(
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
   });
   const replacements = classifiedPlan.replacements;
+  const replacementParentIds = replacementParentCellIds(active, replacements);
+  assertActiveBuildCoversSessionCells(session, active, replacementParentIds);
+  if (active !== sourceActive) {
+    assertActiveBuildCoversSessionCells(session, sourceActive, replacementParentIds);
+  }
   const parentIds = new Set<CellId>();
-  for (const replacement of replacements) {
-    const parentId = activeBuildCellIdByElementId(active, replacement.elementId);
-    if (parentId === undefined) {
-      throw new Error(`replacement parent element ${replacement.elementId} is outside the active mesh`);
-    }
+  for (let index = 0; index < replacements.length; index += 1) {
+    const replacement = replacements[index]!;
+    const parentId = replacementParentIds[index]!;
     const parent = requiredCell(session, parentId);
     if (!isRefinableSessionCell(parent)) {
       throw new Error(`transition layer cells cannot be refined: ${parentId}`);
@@ -2925,6 +3055,37 @@ function buildRefinementSessionPatchPlan(
       ? { twoToOne }
       : {})
   };
+}
+
+function replacementParentCellIds(
+  active: ActiveMeshBuildResult,
+  replacements: readonly ClassifiedReplacement[]
+): CellId[] {
+  return replacements.map((replacement) => {
+    const parentId = activeBuildCellIdByElementId(active, replacement.elementId);
+    if (parentId === undefined) {
+      throw new Error(`replacement parent element ${replacement.elementId} is outside the active mesh`);
+    }
+    return parentId;
+  });
+}
+
+function assertRefinementSessionPatchPlanParents(
+  session: RefinementSession,
+  plan: RefinementSessionPatchPlan
+): void {
+  const planningParentIds =
+    replacementParentCellIds(plan.planningActive, plan.replacements);
+  assertActiveBuildCoversSessionCells(
+    session,
+    plan.planningActive,
+    planningParentIds
+  );
+  if (plan.sourceActive !== plan.planningActive) {
+    const sourceParentIds =
+      replacementParentCellIds(plan.sourceActive, plan.sourceReplacements);
+    assertActiveBuildCoversSessionCells(session, plan.sourceActive, sourceParentIds);
+  }
 }
 
 function mapTwoToOneReportToCellIds(
@@ -2987,7 +3148,7 @@ function validateSameLevelPlanningConformance(
   mergeTolerance?: number
 ): void {
   const tolerance = mergeTolerance
-    ?? minElementEdgeLength(mutableMeshView(sourceActive.mesh)) * 0.000001;
+    ?? minElementEdgeLength(sourceActive.mesh) * 0.000001;
   const prospective = replaceElements(
     mutableMeshView(sourceActive.mesh),
     sourceReplacements,

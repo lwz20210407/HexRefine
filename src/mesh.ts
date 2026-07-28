@@ -1,4 +1,13 @@
-import type { BoundaryPair, Element, ElementKind, LocalRefinement, Mesh, Point, ReplaceElement } from "./types.js";
+import type {
+  BoundaryPair,
+  Element,
+  ElementKind,
+  LocalRefinement,
+  Mesh,
+  Point,
+  ReadonlyMesh,
+  ReplaceElement
+} from "./types.js";
 import { boundaryKey, boundariesOf, elementKindFromNodeCount } from "./topology.js";
 import { centroid, pointEquals } from "./vector.js";
 
@@ -10,7 +19,7 @@ export interface NodeMergeResult {
   inputNodeIdsByNodeIdArray?: number[][];
 }
 
-export function inferMeshKind(mesh: Mesh): ElementKind {
+export function inferMeshKind(mesh: ReadonlyMesh): ElementKind {
   if (mesh.kind) {
     return mesh.kind;
   }
@@ -21,7 +30,7 @@ export function inferMeshKind(mesh: Mesh): ElementKind {
   return elementKindFromNodeCount(first.length);
 }
 
-export function elementVertices(mesh: Mesh, element: Element): Point[] {
+export function elementVertices(mesh: ReadonlyMesh, element: Element): Point[] {
   return element.map((nodeId) => {
     const node = mesh.nodes[nodeId - 1];
     if (!node) {
@@ -253,7 +262,7 @@ function exactMergeKey(node: Point): string {
     : `${node[0] ?? 0}:${node[1] ?? 0}:${node[2] ?? 0}`;
 }
 
-export function minElementEdgeLength(mesh: Mesh): number {
+export function minElementEdgeLength(mesh: ReadonlyMesh): number {
   const kind = inferMeshKind(mesh);
   const localEdges = kind === "Q1"
     ? [

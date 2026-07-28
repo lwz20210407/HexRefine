@@ -80,6 +80,28 @@ export interface TwoToOneCapabilityReport<TId extends TwoToOneEntityId = number>
   preservedFarFieldCellCount: number;
 }
 
+export interface ReadonlyTwoToOneCompensationAction<
+  TId extends TwoToOneEntityId = number
+> {
+  readonly kind: TwoToOneCompensationAction<TId>["kind"];
+  readonly reason: string;
+  readonly addedParentCellIds: readonly TId[];
+  readonly replacedTransitionCellIds: readonly TId[];
+  readonly templateId?: string;
+}
+
+export interface ReadonlyTwoToOneCapabilityReport<
+  TId extends TwoToOneEntityId = number
+> {
+  readonly status: TwoToOnePlanningStatus;
+  readonly topologyClass: TwoToOneTopologyClass;
+  readonly originalSelectedCellIds: readonly TId[];
+  readonly effectiveSelectedCellIds: readonly TId[];
+  readonly actions: readonly ReadonlyTwoToOneCompensationAction<TId>[];
+  readonly affectedComponentCellIds: readonly TId[];
+  readonly preservedFarFieldCellCount: number;
+}
+
 export type TwoToOnePlanningErrorCode =
   | "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
   | "TWO_TO_ONE_UNSUPPORTED_PARITY"
@@ -147,7 +169,7 @@ export function serializeTwoToOnePlanningError<TId extends TwoToOneEntityId = nu
 }
 
 export function cloneTwoToOneCapabilityReport<TId extends TwoToOneEntityId>(
-  report: TwoToOneCapabilityReport<TId>
+  report: ReadonlyTwoToOneCapabilityReport<TId>
 ): TwoToOneCapabilityReport<TId> {
   return {
     status: report.status,

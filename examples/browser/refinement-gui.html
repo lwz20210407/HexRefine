@@ -1231,6 +1231,8 @@
       import {
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
+        activeBuildHasSessionNodeIds,
+        activeBuildSessionNodeIdsByNodeId,
         buildActiveMeshWithMap,
         buildRefinementSessionExport,
         checkRefinementSessionCommandConformance,
@@ -1248,7 +1250,8 @@
         replaceQ1BlockWithRectangleCircleTemplate,
         refineSessionPatch,
         redoRefinementSession,
-        undoRefinementSession
+        undoRefinementSession,
+        validateActiveBuildForSession
       } from "../../dist/index.js";
 
       const canvas = document.querySelector("#preview");
@@ -1807,8 +1810,8 @@
         };
       }
 
-      function activeBuildHasSessionNodeIds(build = activeBuild) {
-        return mesh.nodes.length === 0 || (build?.sessionNodeIdsByNodeId instanceof Map && build.sessionNodeIdsByNodeId.size > 0);
+      function activeBuildIncludesSessionNodeIds(build = activeBuild) {
+        return mesh.nodes.length === 0 || activeBuildHasSessionNodeIds(build);
       }
 
       function isActiveBuildAligned() {
@@ -1816,11 +1819,7 @@
           activeBuild &&
           activeBuild.mesh &&
           activeBuild.mesh.elements.length === mesh.elements.length &&
-          activeBuild.mesh.nodes.length === mesh.nodes.length &&
-          (
-            activeBuild.cellIdsByElementIdArray?.length > mesh.elements.length ||
-            (activeBuild.cellIdByElementId instanceof Map && activeBuild.cellIdByElementId.size === mesh.elements.length)
-          )
+          activeBuild.mesh.nodes.length === mesh.nodes.length
         );
       }
 
@@ -1834,11 +1833,14 @@
             !isElementHidden(elementId)
           )
         );
-        const shouldCheckNodeMap = selectedNodes.size > 0 && activeBuildHasSessionNodeIds();
+        const shouldCheckNodeMap = selectedNodes.size > 0 && activeBuildIncludesSessionNodeIds();
         const nextSelectedNodes = new Set(
           [...selectedNodes].filter((nodeId) => {
             const inRange = Number.isInteger(nodeId) && nodeId >= 1 && nodeId <= mesh.nodes.length;
-            return inRange && (!shouldCheckNodeMap || activeBuild.sessionNodeIdsByNodeId.has(nodeId));
+            return inRange && (
+              !shouldCheckNodeMap ||
+              activeBuildSessionNodeIdsByNodeId(activeBuild, nodeId).length > 0
+            );
           })
         );
         const changed = nextSelected.size !== selected.size || nextSelectedNodes.size !== selectedNodes.size;
@@ -1850,13 +1852,15 @@
       function ensureActiveBuildReady() {
         if (!isActiveBuildAligned()) {
           refreshMeshFromSession();
+        } else {
+          validateActiveBuildForSession(refinementSession, activeBuild);
         }
         return pruneSelectionAgainstActiveBuild();
       }
 
       function ensureActiveBuildNodeReverseMapsReady() {
         ensureActiveBuildReady();
-        if (activeBuildHasSessionNodeIds()) {
+        if (activeBuildIncludesSessionNodeIds()) {
           return;
         }
         const start = performance.now();
@@ -1870,7 +1874,7 @@
 
       function refreshMeshFromSession(reusedActiveBuild = null) {
         if (reusedActiveBuild) {
-          activeBuild = reusedActiveBuild;
+          activeBuild = validateActiveBuildForSession(refinementSession, reusedActiveBuild);
           performanceStats.activeBuildMs = 0;
         } else {
           const start = performance.now();
@@ -1895,7 +1899,9 @@
               includeElementIdByCellId: false,
               includeSessionNodeIdsByNodeId: selectionTargetEl.value === "nodes"
             });
-            activeBuild = response.activeBuild;
+            const validatedActiveBuild =
+              validateActiveBuildForSession(refinementSession, response.activeBuild);
+            activeBuild = validatedActiveBuild;
             performanceStats.activeBuildMs = response.activeBuildMs ?? 0;
             performanceStats.conformanceMs = response.conformanceMs ?? 0;
             mesh = activeBuild.mesh;
@@ -1960,7 +1966,7 @@
         const sessionNodeIds = [];
         const missing = [];
         for (const nodeId of nodeIds) {
-          const mapped = activeBuild.sessionNodeIdsByNodeId.get(nodeId);
+          const mapped = activeBuildSessionNodeIdsByNodeId(activeBuild, nodeId);
           if (!mapped || mapped.length === 0) {
             missing.push(nodeId);
           } else {
@@ -2084,21 +2090,35 @@
       }
 
       function cloneRefinementSessionCommand(command) {
-        return {
+        const twoToOne = command.twoToOne
+          ? cloneTwoToOneCapabilityReport(command.twoToOne)
+          : null;
+        for (const action of twoToOne?.actions ?? []) {
+          Object.freeze(action.addedParentCellIds);
+          Object.freeze(action.replacedTransitionCellIds);
+          Object.freeze(action);
+        }
+        if (twoToOne) {
+          Object.freeze(twoToOne.originalSelectedCellIds);
+          Object.freeze(twoToOne.effectiveSelectedCellIds);
+          Object.freeze(twoToOne.actions);
+          Object.freeze(twoToOne.affectedComponentCellIds);
+          Object.freeze(twoToOne);
+        }
+        return Object.freeze({
           ...command,
-          hiddenCellIds: [...command.hiddenCellIds],
-          createdCellIds: [...command.createdCellIds],
+          hiddenCellIds: Object.freeze([...command.hiddenCellIds]),
+          createdCellIds: Object.freeze([...command.createdCellIds]),
           ...(command.activeCreatedCellIds
-            ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
+            ? { activeCreatedCellIds: Object.freeze([...command.activeCreatedCellIds]) }
             : {}),
           ...(command.reactivatedCellIds
-            ? { reactivatedCellIds: [...command.reactivatedCellIds] }
+            ? { reactivatedCellIds: Object.freeze([...command.reactivatedCellIds]) }
             : {}),
-          createdNodeIds: [...command.createdNodeIds],
-          ...(command.twoToOne
-            ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
-            : {})
-        };
+          createdNodeIds: Object.freeze([...command.createdNodeIds]),
+          ...(command.quality ? { quality: Object.freeze({ ...command.quality }) } : {}),
+          ...(twoToOne ? { twoToOne } : {})
+        });
       }
 
       function cloneRefinementSessionState(source) {

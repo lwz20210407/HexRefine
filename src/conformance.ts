@@ -1,4 +1,4 @@
-import type { ElementKind, Mesh, Point } from "./types.js";
+import type { ElementKind, Point, ReadonlyMesh } from "./types.js";
 import { boundariesOf, boundaryKey } from "./topology.js";
 import { inferMeshKind } from "./mesh.js";
 import { distance } from "./vector.js";
@@ -32,7 +32,7 @@ interface BoundaryBox {
   max: [number, number, number];
 }
 
-export function checkNoHangingNodes(mesh: Mesh, tolerance = 1e-9): ConformanceReport {
+export function checkNoHangingNodes(mesh: ReadonlyMesh, tolerance = 1e-9): ConformanceReport {
   const kind = inferMeshKind(mesh);
   const unmatched = collectUnmatchedBoundaries(mesh, kind);
   const hanging: HangingEntity[] = [];
@@ -47,7 +47,7 @@ export function checkNoHangingNodes(mesh: Mesh, tolerance = 1e-9): ConformanceRe
   };
 }
 
-function collectUnmatchedBoundaries(mesh: Mesh, kind: ElementKind): BoundaryRecord[] {
+function collectUnmatchedBoundaries(mesh: ReadonlyMesh, kind: ElementKind): BoundaryRecord[] {
   const recordsByKey = new Map<string, BoundaryRecord | undefined>();
   mesh.elements.forEach((element, index) => {
     const elementId = index + 1;
@@ -64,7 +64,7 @@ function collectUnmatchedBoundaries(mesh: Mesh, kind: ElementKind): BoundaryReco
 }
 
 function compareNearbyUnmatchedBoundaries(
-  mesh: Mesh,
+  mesh: ReadonlyMesh,
   unmatched: BoundaryRecord[],
   kind: ElementKind,
   tolerance: number,
@@ -114,7 +114,7 @@ function compareNearbyUnmatchedBoundaries(
   }
 }
 
-function boundaryPoints(mesh: Mesh, nodeIds: readonly number[]): Point[] {
+function boundaryPoints(mesh: ReadonlyMesh, nodeIds: readonly number[]): Point[] {
   return nodeIds.map((nodeId) => {
     const point = mesh.nodes[nodeId - 1];
     if (!point) {

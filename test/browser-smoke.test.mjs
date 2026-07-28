@@ -46,8 +46,12 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.match(gui, /meshMergeTolerance\s*=\s*replay\.mergeTolerance\s*\?\?\s*meshMergeTolerance/);
   assert.match(gui, /function\s+buildActiveCellDataFromSession/);
   assert.match(gui, /activeBuildCellIdByElementId/);
+  assert.match(gui, /validateActiveBuildForSession\(refinementSession,\s*response\.activeBuild\)/);
+  assert.match(gui, /activeBuildSessionNodeIdsByNodeId/);
+  assert.match(gui, /activeBuildHasSessionNodeIds/);
   assert.match(gui, /includeCellIdByElementId:\s*false/);
   assert.doesNotMatch(gui, /cellIdByElementId\?\?\.has|cellIdByElementId\.has/);
+  assert.doesNotMatch(gui, /activeBuild\.sessionNodeIdsByNodeId\.(?:has|get)/);
   const standaloneBuilder = await readFile(new URL("scripts/build-standalone-lite.mjs", projectRoot), "utf8");
   assert.match(standaloneBuilder, /activeBuildCellIdByElementId/);
   assert.match(standaloneBuilder, /activeBuildElementIdByCellId/);
@@ -80,6 +84,7 @@ test("HexRefine browser GUI imports the project-local runtime build", async () =
   assert.equal(typeof runtime.parseMeshText, "function");
   assert.equal(typeof runtime.parseLegacyVtkMesh, "function");
   assert.equal(typeof runtime.prepareSessionRefineSelection, "function");
+  assert.equal(typeof runtime.validateActiveBuildForSession, "function");
   assert.equal(typeof runtime.previewSessionPatch, "function");
   assert.equal(typeof runtime.refineByElementIdsWithReport, "function");
 });
@@ -101,6 +106,9 @@ test("HexRefine standalone binds and executes the session preview runtime entry"
   for (const names of [builderImportNames, importNames]) {
     assert.ok(names.includes("previewSessionPatch"));
     assert.ok(names.includes("cloneTwoToOneCapabilityReport"));
+    assert.ok(names.includes("validateActiveBuildForSession"));
+    assert.ok(names.includes("activeBuildSessionNodeIdsByNodeId"));
+    assert.ok(names.includes("activeBuildHasSessionNodeIds"));
     assert.equal(names.includes("previewRefinementByElementIds"), false);
   }
   assert.equal(typeof runtime.previewSessionPatch, "function");
@@ -115,6 +123,48 @@ test("HexRefine standalone binds and executes the session preview runtime entry"
   });
   assert.equal(preview.planMode, "per-parent");
   assert.ok(preview.plan.length > 0);
+});
+
+test("HexRefine worker build validation trusts legal clones and isolates cached mappings", async () => {
+  const runtime = await import("../dist/index.js");
+  const workerSession = runtime.createRefinementSession(
+    runtime.createHexUnitCubeMesh(2, 1, 1)
+  );
+  const session = runtime.createRefinementSession(
+    runtime.createHexUnitCubeMesh(2, 1, 1)
+  );
+  const workerBuild = runtime.buildActiveMeshWithMap(workerSession, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9,
+    includeSessionNodeIdsByNodeId: true
+  });
+
+  const tampered = structuredClone(workerBuild);
+  tampered.elementIdByCellId.set("e1", 2);
+  assert.throws(
+    () => runtime.validateActiveBuildForSession(session, tampered),
+    (error) => error instanceof runtime.TwoToOnePlanningError
+      && error.code === "TWO_TO_ONE_UNRECOVERABLE_TOPOLOGY"
+  );
+
+  const transferred = structuredClone(workerBuild);
+  assert.equal(
+    runtime.validateActiveBuildForSession(session, transferred),
+    transferred
+  );
+  assert.equal(runtime.activeBuildHasSessionNodeIds(transferred), true);
+  const expectedSessionNodeIds =
+    runtime.activeBuildSessionNodeIdsByNodeId(transferred, 1);
+  assert.ok(expectedSessionNodeIds.length > 0);
+
+  Map.prototype.set.call(transferred.elementIdByCellId, "e1", 2);
+  Map.prototype.set.call(transferred.sessionNodeIdsByNodeId, 1, [999]);
+
+  assert.equal(runtime.activeBuildElementIdByCellId(session, transferred, "e1"), 1);
+  assert.deepEqual(
+    runtime.activeBuildSessionNodeIdsByNodeId(transferred, 1),
+    expectedSessionNodeIds
+  );
 });
 
 test("HexRefine browser reports aggregate refinement previews without per-parent placeholders", async () => {

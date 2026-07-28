@@ -39,6 +39,8 @@ function buildStandaloneHtml(html, importMap) {
   const importBlock = `import {
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
+        activeBuildHasSessionNodeIds,
+        activeBuildSessionNodeIdsByNodeId,
         buildActiveMeshWithMap,
         buildRefinementSessionExport,
         checkNoHangingNodes,
@@ -60,7 +62,8 @@ function buildStandaloneHtml(html, importMap) {
         regularizeHexSelection,
         replayHexRefineCommandScript,
         redoRefinementSession,
-        undoRefinementSession
+        undoRefinementSession,
+        validateActiveBuildForSession
       } from "hexrefine/index.js";`;
 
   const workerReplacement = `async function runRefinementWorker(request) {

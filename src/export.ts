@@ -119,7 +119,7 @@ export function prepareExportMesh(
   exported: RefinementSessionExportResult,
   requestedKind?: ExportTargetKind
 ): PreparedExportResult {
-  const meshKind = inferMeshKind(mutableMeshView(exported.mesh));
+  const meshKind = inferMeshKind(exported.mesh);
   const exportKind = normalizeExportKind(meshKind, requestedKind);
   const converted = convertMeshForExport(mutableMeshView(exported.mesh), exportKind);
   return {

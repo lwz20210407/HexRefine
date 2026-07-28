@@ -6,12 +6,12 @@ import type {
   RefinementSessionCommand
 } from "./refinement-session.js";
 import type { HexRefinementQualitySummary, Mesh, Point, ReadonlyMesh } from "./types.js";
-import { cloneTwoToOneCapabilityReport } from "./two-to-one-capability.js";
 import {
   activeBuildCellIdByElementId,
   activeBuildElementIdByCellId,
   activeBuildSessionNodeIdsByNodeId,
   buildActiveMeshWithMap,
+  cloneRefinementSessionCommand,
   createRefinementSession,
   isRefinableSessionCell,
   redoRefinementSession,
@@ -927,7 +927,7 @@ function replaySelectScreenRect(
 
   const next = selectionMode === "replace" ? new Set<number>() : new Set(state.selectedElementIds);
   if (mode === "surface") {
-    const items = buildReplaySurfaceItems(mutableMeshView(active.mesh), view, state.hiddenElementIds);
+    const items = buildReplaySurfaceItems(active.mesh, view, state.hiddenElementIds);
     for (const item of items) {
       if (surfaceFaceHitsRect(item, xMin, xMax, yMin, yMax)) {
         if (remove) {
@@ -943,7 +943,7 @@ function replaySelectScreenRect(
       if (state.hiddenElementIds.has(elementId)) {
         return;
       }
-      const projected = projectPointWithView(elementCenter3(mutableMeshView(active.mesh), element), view);
+      const projected = projectPointWithView(elementCenter3(active.mesh, element), view);
       if (projected.x >= xMin && projected.x <= xMax && projected.y >= yMin && projected.y <= yMax) {
         if (remove) {
           next.delete(elementId);
@@ -994,7 +994,7 @@ function replaySelectScreenCircle(
 
   const next = selectionMode === "replace" ? new Set<number>() : new Set(state.selectedElementIds);
   if (mode === "surface") {
-    const items = buildReplaySurfaceItems(mutableMeshView(active.mesh), view, state.hiddenElementIds);
+    const items = buildReplaySurfaceItems(active.mesh, view, state.hiddenElementIds);
     for (const item of items) {
       if (surfaceFaceHitsCircle(item, { x: center[0] ?? 0, y: center[1] ?? 0 }, radius)) {
         if (remove) {
@@ -1010,7 +1010,7 @@ function replaySelectScreenCircle(
       if (state.hiddenElementIds.has(elementId)) {
         return;
       }
-      const projected = projectPointWithView(elementCenter3(mutableMeshView(active.mesh), element), view);
+      const projected = projectPointWithView(elementCenter3(active.mesh, element), view);
       if (pointInCircle2(projected, { x: center[0] ?? 0, y: center[1] ?? 0 }, radius)) {
         if (remove) {
           next.delete(elementId);
@@ -1058,7 +1058,7 @@ function replaySelectCoordinateBox(state: ReplayState, payload: Record<string, u
     if (state.hiddenElementIds.has(elementId)) {
       return;
     }
-    if (pointInBounds(elementCenter3(mutableMeshView(active.mesh), element), box)) {
+    if (pointInBounds(elementCenter3(active.mesh, element), box)) {
       if (remove) {
         next.delete(elementId);
       } else {
@@ -1290,7 +1290,7 @@ function pointInBounds(point: Point, bounds: { min: Point; max: Point }): boolea
     && p[2] >= min[2] && p[2] <= max[2];
 }
 
-function elementCenter3(mesh: Mesh, element: readonly number[]): [number, number, number] {
+function elementCenter3(mesh: ReadonlyMesh, element: readonly number[]): [number, number, number] {
   const center: [number, number, number] = [0, 0, 0];
   for (const nodeId of element) {
     const point = toPoint3(mesh.nodes[nodeId - 1] ?? []);
@@ -1339,7 +1339,7 @@ function perspectiveDistanceForReplayView(view: ReplayScreenView): number {
 }
 
 function buildReplaySurfaceItems(
-  mesh: Mesh,
+  mesh: ReadonlyMesh,
   view: ReplayScreenView,
   hiddenElementIds: ReadonlySet<number>
 ): Array<{ elementId: number; points: Array<{ x: number; y: number; z: number }>; face: readonly number[]; depth: number }> {
@@ -1405,7 +1405,12 @@ function buildReplaySurfaceItems(
   return surface.sort((a, b) => a.depth - b.depth);
 }
 
-function isReplayFaceVisible(mesh: Mesh, element: readonly number[], face: readonly number[], view: ReplayScreenView): boolean {
+function isReplayFaceVisible(
+  mesh: ReadonlyMesh,
+  element: readonly number[],
+  face: readonly number[],
+  view: ReplayScreenView
+): boolean {
   const worldPoints = face.map((localIndex) => toPoint3(mesh.nodes[(element[localIndex] ?? 1) - 1] ?? []));
   const normal = faceNormal(worldPoints);
   const faceCenter = averagePoint(worldPoints);
@@ -1989,21 +1994,7 @@ function cloneRefinementSessionState(session: RefinementSession): RefinementSess
 function cloneReplayRefinementCommand(
   command: RefinementSessionCommand
 ): RefinementSessionCommand {
-  return {
-    ...command,
-    hiddenCellIds: [...command.hiddenCellIds],
-    createdCellIds: [...command.createdCellIds],
-    ...(command.activeCreatedCellIds
-      ? { activeCreatedCellIds: [...command.activeCreatedCellIds] }
-      : {}),
-    ...(command.reactivatedCellIds
-      ? { reactivatedCellIds: [...command.reactivatedCellIds] }
-      : {}),
-    createdNodeIds: [...command.createdNodeIds],
-    ...(command.twoToOne
-      ? { twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne) }
-      : {})
-  };
+  return cloneRefinementSessionCommand(command);
 }
 
 function cloneCellSets(source: Map<string, CellId[]>): Map<string, CellId[]> {
