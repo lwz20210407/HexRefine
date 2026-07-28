@@ -2126,8 +2126,24 @@ function readHexTwoToOneCompensation(
 
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const snapshot: Record<string, unknown> = {};
+  const modeDescriptor = descriptors.mode;
+  if (modeDescriptor !== undefined) {
+    const mode = "value" in modeDescriptor
+      ? modeDescriptor.value
+      : modeDescriptor.get?.call(value);
+    if (
+      mode !== "none"
+      && mode !== "selection"
+      && mode !== "local-topology"
+    ) {
+      throw new TypeError(
+        "hexTwoToOneCompensation.mode must be none, selection, or local-topology"
+      );
+    }
+    snapshot.mode = mode;
+  }
+
   for (const key of [
-    "mode",
     "maxAddedParentLayers",
     "maxAddedParentCount"
   ] as const) {

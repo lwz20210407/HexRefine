@@ -2401,6 +2401,70 @@ test("HexRefine command replay propagates compensation getter parse errors once"
   assert.deepEqual(reads, { mode: 1, maxAddedParentLayers: 0 });
 });
 
+test("HexRefine command replay rejects an invalid compensation mode before limit getters", () => {
+  const limitError = new Error("limit getter must not run");
+  const reads = { maxAddedParentLayers: 0, maxAddedParentCount: 0 };
+  const compensation = {
+    mode: "automatic",
+    get maxAddedParentLayers() {
+      reads.maxAddedParentLayers += 1;
+      throw limitError;
+    },
+    get maxAddedParentCount() {
+      reads.maxAddedParentCount += 1;
+      return 32;
+    }
+  };
+
+  const error = captureError(() => replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  ));
+
+  assert.equal(error instanceof TypeError, true);
+  assert.equal(
+    error.message,
+    "hexTwoToOneCompensation.mode must be none, selection, or local-topology"
+  );
+  assert.deepEqual(reads, {
+    maxAddedParentLayers: 0,
+    maxAddedParentCount: 0
+  });
+});
+
+test("HexRefine command replay preserves limit getter errors after a valid mode", () => {
+  const limitError = new Error("valid-mode limit getter failed");
+  const reads = {
+    mode: 0,
+    maxAddedParentLayers: 0,
+    maxAddedParentCount: 0
+  };
+  const compensation = {
+    get mode() {
+      reads.mode += 1;
+      return "selection";
+    },
+    get maxAddedParentLayers() {
+      reads.maxAddedParentLayers += 1;
+      throw limitError;
+    },
+    get maxAddedParentCount() {
+      reads.maxAddedParentCount += 1;
+      return 32;
+    }
+  };
+
+  const error = captureError(() => replayHexRefineCommandScript(
+    twoToOneCompensationReplayScript(compensation)
+  ));
+
+  assert.equal(error, limitError);
+  assert.deepEqual(reads, {
+    mode: 1,
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 0
+  });
+});
+
 test("HexRefine command replay warns and preserves the session when strict 2:1 compensation is disabled", () => {
   const baseline = replayHexRefineCommandScript(twoToOneCompensationReplayScript(
     undefined,
