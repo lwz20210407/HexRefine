@@ -10,6 +10,11 @@ import type {
 } from "./types.js";
 import { boundaryKey, boundariesOf, elementKindFromNodeCount } from "./topology.js";
 import { centroid, pointEquals } from "./vector.js";
+import {
+  forEachCandidateMergeBucketKey,
+  mergeBucketKey,
+  mergeBucketOrigin
+} from "./merge-buckets-internal.js";
 
 export interface NodeMergeResult {
   mesh: Mesh;
@@ -145,17 +150,30 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
   const inputNodeIdsByNodeIdArray: number[][] = [];
   const buckets = new Map<string, number[]>();
   const exactNodeIndexByKey = new Map<string, number>();
+  const bucketOrigin = mergeBucketOrigin(mesh.nodes);
 
   mesh.nodes.forEach((node, oldIndex) => {
     const inputNodeId = oldIndex + 1;
     const exactKey = exactMergeKey(node);
     const exactIndex = exactNodeIndexByKey.get(exactKey);
-    const existingIndex = exactIndex ?? findCoincidentNodeIndex(node, nodes, buckets, tolerance);
+    const existingIndex = exactIndex ?? findCoincidentNodeIndex(
+      node,
+      nodes,
+      buckets,
+      bucketOrigin,
+      tolerance
+    );
     const newNodeId = existingIndex === undefined ? nodes.length + 1 : existingIndex + 1;
     if (existingIndex === undefined) {
       nodes.push(node);
       exactNodeIndexByKey.set(exactKey, nodes.length - 1);
-      addNodeToMergeBucket(node, nodes.length - 1, buckets, tolerance);
+      addNodeToMergeBucket(
+        node,
+        nodes.length - 1,
+        buckets,
+        bucketOrigin,
+        tolerance
+      );
     }
     oldToNewArray[inputNodeId] = newNodeId;
     const inputNodeIds = inputNodeIdsByNodeIdArray[newNodeId] ?? [];
@@ -222,6 +240,11 @@ export function assertMergeToleranceBelowFinalEdgeLimit(
   if (mesh.elements.length === 0) {
     return;
   }
+  if (inferMeshKind(mesh) === "H1" && minElementEdgeLength(mesh) === 0) {
+    throw new RangeError(
+      "unmerged mesh contains a zero-length Hex element edge"
+    );
+  }
   const minimumFinalEdge = minNonzeroElementEdgeLength(mesh);
   if (!Number.isFinite(minimumFinalEdge)) {
     throw new RangeError(
@@ -244,10 +267,11 @@ function findCoincidentNodeIndex(
   node: Point,
   nodes: readonly Point[],
   buckets: ReadonlyMap<string, readonly number[]>,
+  origin: Point,
   tolerance: number
 ): number | undefined {
   let bestIndex: number | undefined;
-  forEachCandidateMergeBucketKey(node, tolerance, (key) => {
+  forEachCandidateMergeBucketKey(node, origin, tolerance, (key) => {
     for (const candidateIndex of buckets.get(key) ?? []) {
       if (
         (bestIndex === undefined || candidateIndex < bestIndex) &&
@@ -264,49 +288,13 @@ function addNodeToMergeBucket(
   node: Point,
   nodeIndex: number,
   buckets: Map<string, number[]>,
+  origin: Point,
   tolerance: number
 ): void {
-  const key = mergeBucketKeyForNode(node, tolerance);
+  const key = mergeBucketKey(node, origin, tolerance);
   const bucket = buckets.get(key) ?? [];
   bucket.push(nodeIndex);
   buckets.set(key, bucket);
-}
-
-function forEachCandidateMergeBucketKey(node: Point, tolerance: number, visit: (key: string) => void): void {
-  if (tolerance === 0) {
-    visit(node.join(":"));
-    return;
-  }
-  const i = Math.floor((node[0] ?? 0) / tolerance);
-  const j = Math.floor((node[1] ?? 0) / tolerance);
-  const k = Math.floor((node[2] ?? 0) / tolerance);
-  if (node.length <= 2) {
-    for (let di = -1; di <= 1; di += 1) {
-      for (let dj = -1; dj <= 1; dj += 1) {
-        visit(`${i + di}:${j + dj}`);
-      }
-    }
-    return;
-  }
-  for (let di = -1; di <= 1; di += 1) {
-    for (let dj = -1; dj <= 1; dj += 1) {
-      for (let dk = -1; dk <= 1; dk += 1) {
-        visit(`${i + di}:${j + dj}:${k + dk}`);
-      }
-    }
-  }
-}
-
-function mergeBucketKeyForNode(node: Point, tolerance: number): string {
-  if (tolerance === 0) {
-    return node.join(":");
-  }
-  const i = Math.floor((node[0] ?? 0) / tolerance);
-  const j = Math.floor((node[1] ?? 0) / tolerance);
-  if (node.length <= 2) {
-    return `${i}:${j}`;
-  }
-  return `${i}:${j}:${Math.floor((node[2] ?? 0) / tolerance)}`;
 }
 
 function exactMergeKey(node: Point): string {

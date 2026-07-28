@@ -5,7 +5,8 @@ import {
 import {
   auditHexRefinementPatchQuality,
   hexElementSignedVolume,
-  minimumOrientedHexCornerScaledJacobian
+  minimumOrientedHexCornerScaledJacobian,
+  type HexRefinementQualityReport
 } from "./hex-quality.js";
 import {
   minNonzeroElementEdgeLength,
@@ -46,49 +47,7 @@ export function assertHexPatchQuality(
   const quality = finalMesh === undefined
     ? auditHexRefinementPatchQuality(sourceMesh, replacements)
     : auditFinalHexPatchQuality(sourceMesh, replacements, finalMesh);
-  if (
-    !Number.isFinite(quality.parentOrientedVolume)
-    || !Number.isFinite(quality.childOrientedVolume)
-    || !Number.isFinite(quality.relativeVolumeError)
-  ) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_VOLUME",
-      "refinement patch produced a non-finite oriented volume or relative volume error"
-    );
-  }
-  if (!Number.isFinite(quality.parentMinimumOrientedScaledJacobian)) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_PARENT_JACOBIAN",
-      "refinement patch parent scaled Jacobian is non-finite"
-    );
-  }
-  if (!Number.isFinite(quality.childMinimumOrientedScaledJacobian)) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_CHILD_JACOBIAN",
-      "refinement patch child scaled Jacobian is non-finite"
-    );
-  }
-  if (quality.parentMinimumOrientedScaledJacobian <= 0) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_PARENT_JACOBIAN",
-      "refinement patch starts from a parent with non-positive scaled Jacobian " +
-      `${quality.parentMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (quality.childMinimumOrientedScaledJacobian <= 0) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_CHILD_JACOBIAN",
-      "refinement patch produced a non-positive scaled Jacobian " +
-      `${quality.childMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (quality.relativeVolumeError > 1e-8) {
-    throw new HexPatchQualityError(
-      "HEX_PATCH_VOLUME",
-      "refinement patch does not conserve parent volume; relative error is " +
-      `${quality.relativeVolumeError}`
-    );
-  }
+  assertHexPatchQualitySummary(quality);
   if (finalMesh !== undefined && requireConforming) {
     const minimumEdge = minNonzeroElementEdgeLength(finalMesh);
     const tolerance = Number.isFinite(minimumEdge)
@@ -107,6 +66,102 @@ export function assertHexPatchQuality(
     }
   }
   return quality;
+}
+
+export function assertHexRefinementQualityReport(
+  quality: HexRefinementQualityReport,
+  label = "refinement"
+): void {
+  assertHexQualityMetrics(
+    quality.parentSignedVolume,
+    quality.childSignedVolume,
+    quality.relativeVolumeError,
+    quality.parentMinimumOrientedScaledJacobian,
+    quality.childMinimumOrientedScaledJacobian,
+    quality.ok,
+    label
+  );
+}
+
+export function assertHexPatchQualitySummary(
+  quality: HexRefinementQualitySummary,
+  label = "refinement patch"
+): void {
+  if (
+    !Number.isFinite(quality.parentElementCount)
+    || !Number.isFinite(quality.childElementCount)
+    || !Number.isFinite(quality.parentOrientedVolume)
+    || !Number.isFinite(quality.childOrientedVolume)
+    || !Number.isFinite(quality.relativeVolumeError)
+  ) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_VOLUME",
+      `${label} produced a non-finite count, oriented volume, or relative volume error`
+    );
+  }
+  assertHexQualityMetrics(
+    quality.parentOrientedVolume,
+    quality.childOrientedVolume,
+    quality.relativeVolumeError,
+    quality.parentMinimumOrientedScaledJacobian,
+    quality.childMinimumOrientedScaledJacobian,
+    quality.ok,
+    label
+  );
+}
+
+function assertHexQualityMetrics(
+  parentVolume: number,
+  childVolume: number,
+  relativeVolumeError: number,
+  parentMinimumOrientedScaledJacobian: number,
+  childMinimumOrientedScaledJacobian: number,
+  ok: boolean,
+  label: string
+): void {
+  if (
+    !Number.isFinite(parentVolume)
+    || !Number.isFinite(childVolume)
+    || !Number.isFinite(relativeVolumeError)
+  ) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_VOLUME",
+      `${label} produced a non-finite volume or relative volume error`
+    );
+  }
+  if (!Number.isFinite(parentMinimumOrientedScaledJacobian)) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_PARENT_JACOBIAN",
+      `${label} parent scaled Jacobian is non-finite`
+    );
+  }
+  if (!Number.isFinite(childMinimumOrientedScaledJacobian)) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_CHILD_JACOBIAN",
+      `${label} child scaled Jacobian is non-finite`
+    );
+  }
+  if (parentMinimumOrientedScaledJacobian <= 0) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_PARENT_JACOBIAN",
+      `${label} starts from a parent with non-positive scaled Jacobian ` +
+      `${parentMinimumOrientedScaledJacobian}`
+    );
+  }
+  if (childMinimumOrientedScaledJacobian <= 0) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_CHILD_JACOBIAN",
+      `${label} produced a non-positive scaled Jacobian ` +
+      `${childMinimumOrientedScaledJacobian}`
+    );
+  }
+  if (relativeVolumeError > 1e-8 || !ok) {
+    throw new HexPatchQualityError(
+      "HEX_PATCH_VOLUME",
+      `${label} does not conserve parent volume; relative error is ` +
+      `${relativeVolumeError}`
+    );
+  }
 }
 
 export function buildAuditedHexRefinementOutput(

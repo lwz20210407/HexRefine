@@ -217,17 +217,27 @@ export function subdivideHex(
 }
 
 function trilinear(corners: readonly Point[], u: number, v: number, w: number): Point {
-  const weights = [
-    (1 - u) * (1 - v) * (1 - w),
-    u * (1 - v) * (1 - w),
-    u * v * (1 - w),
-    (1 - u) * v * (1 - w),
-    (1 - u) * (1 - v) * w,
-    u * (1 - v) * w,
-    u * v * w,
-    (1 - u) * v * w
-  ];
-  return mix(corners, weights);
+  const lower = relativeLerpPoint(
+    relativeLerpPoint(corners[0]!, corners[1]!, u),
+    relativeLerpPoint(corners[3]!, corners[2]!, u),
+    v
+  );
+  const upper = relativeLerpPoint(
+    relativeLerpPoint(corners[4]!, corners[5]!, u),
+    relativeLerpPoint(corners[7]!, corners[6]!, u),
+    v
+  );
+  return relativeLerpPoint(lower, upper, w);
+}
+
+function relativeLerpPoint(first: Point, second: Point, amount: number): Point {
+  return first.map((coordinate, index) => {
+    const target = second[index]!;
+    const delta = target - coordinate;
+    return Number.isFinite(delta)
+      ? coordinate + delta * amount
+      : coordinate * (1 - amount) + target * amount;
+  });
 }
 
 function estimateHexTolerance(vertices: readonly Point[]): number {

@@ -19,13 +19,15 @@ import {
 } from "../dist/two-to-one.js";
 import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
 import {
-  asTwoToOneFlatPlanningError
+  asTwoToOneFlatPlanningError,
+  HexPatchQualityError
 } from "../dist/refinement-errors.js";
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
 const {
   auditHexRefinementPatchQuality,
+  auditHexRefinementQuality,
   findBoundaryPairs,
   checkNoHangingNodes,
   minElementEdgeLength,
@@ -65,6 +67,7 @@ const {
   defaultRefinementPlanner,
   meshToLsdynaKeyword,
   minimumOrientedHexCornerScaledJacobian,
+  hexElementSignedVolume,
   cloneTwoToOneCapabilityReport,
   normalizeTwoToOneCompensation,
   planTwoToOneHexRefinement,
@@ -224,6 +227,33 @@ function createNearlyTouchingHexMesh(gap = 4e-9) {
       source: "near-interface-conformance"
     }
   };
+}
+
+function createAnisotropicHexVertices(
+  xScale,
+  yScale,
+  zScale,
+  transform = ([x, y, z]) => [x, y, z]
+) {
+  return [
+    [0, 0, 0],
+    [xScale, 0, 0],
+    [xScale, yScale, 0],
+    [0, yScale, 0],
+    [0, 0, zScale],
+    [xScale, 0, zScale],
+    [xScale, yScale, zScale],
+    [0, yScale, zScale]
+  ].map(transform);
+}
+
+function createSevenDistinctNodeHexMesh() {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  mesh.elements[0] = [1, 1, 3, 4, 5, 6, 7, 8];
+  mesh.data = {
+    source: "partial-zero-edge"
+  };
+  return mesh;
 }
 
 function createFourDimensionalLocalSweepMesh() {
@@ -2204,6 +2234,123 @@ test("Hex oriented corner Jacobian detects inversion in a negative-orientation e
   ];
 
   assert.ok(minimumOrientedHexCornerScaledJacobian(vertices, -1) < 0);
+});
+
+test("Hex volume remains stable for mixed exponents and axis permutations", () => {
+  const base = createAnisotropicHexVertices(1e200, 1e-200, 1e-200);
+  const swapped = createAnisotropicHexVertices(
+    1e200,
+    1e-200,
+    1e-200,
+    ([x, y, z]) => [y, x, z]
+  );
+  const cycled = createAnisotropicHexVertices(
+    1e200,
+    1e-200,
+    1e-200,
+    ([x, y, z]) => [y, z, x]
+  );
+  const warped = createAnisotropicHexVertices(
+    1e200,
+    1e-200,
+    1e-200,
+    ([x, y, z]) => [
+      x,
+      y * (x === 0 ? 1 : 1.125),
+      z * (y === 0 ? 1 : 1.0625)
+    ]
+  );
+
+  for (const [vertices, expected] of [
+    [base, 1e-200],
+    [swapped, -1e-200],
+    [cycled, 1e-200]
+  ]) {
+    const volume = hexElementSignedVolume(vertices);
+    assert.equal(Number.isFinite(volume), true);
+    assert.equal(Math.abs(volume / expected - 1) < 1e-12, true);
+  }
+  const warpedVolume = hexElementSignedVolume(warped);
+  assert.equal(Number.isFinite(warpedVolume), true);
+  assert.equal(warpedVolume > 1e-200, true);
+  assert.equal(warpedVolume < 1.3e-200, true);
+});
+
+test("anisotropic Hex volume loss remains visible to the quality gate", () => {
+  const vertices = createAnisotropicHexVertices(1e200, 1e-200, 1e-200);
+  const complete = refineHexTo8Hex(vertices);
+  const incomplete = {
+    ...complete,
+    source: "anisotropic_incomplete_hex",
+    elements: [complete.elements[0]]
+  };
+  const report = auditHexRefinementQuality(vertices, incomplete);
+
+  assert.equal(Number.isFinite(report.parentSignedVolume), true);
+  assert.equal(Number.isFinite(report.childSignedVolume), true);
+  assert.equal(Math.abs(report.relativeVolumeError - 0.875) < 1e-12, true);
+  assert.equal(report.ok, false);
+});
+
+test("3:1 trilinear Hex refinement preserves extreme anisotropic quality", () => {
+  for (const [xScale, yScale, zScale] of [
+    [1e20, 1e-20, 1e-20],
+    [1e100, 1e-100, 1e-100]
+  ]) {
+    const vertices = createAnisotropicHexVertices(xScale, yScale, zScale);
+    const refinement = refineHexTo27Hex(vertices);
+    const report = auditHexRefinementQuality(vertices, refinement);
+    const expectedVolume = xScale * yScale * zScale;
+
+    assert.equal(refinement.nodes.length, 64);
+    assert.equal(refinement.elements.length, 27);
+    assert.equal(report.ok, true);
+    assert.equal(report.parentMinimumOrientedScaledJacobian > 0.99, true);
+    assert.equal(report.childMinimumOrientedScaledJacobian > 0.5, true);
+    assert.equal(report.relativeVolumeError < 1e-12, true);
+    assert.equal(
+      Math.abs(report.parentSignedVolume / expectedVolume - 1) < 1e-12,
+      true
+    );
+    for (const value of Object.values(report).filter(
+      (candidate) => typeof candidate === "number"
+    )) {
+      assert.equal(Number.isFinite(value), true);
+    }
+  }
+});
+
+test("generic session Hex refinement rejects nonfinite quality before mutation", () => {
+  const operations = [
+    {
+      name: "single",
+      mesh: createScaledHexMesh(1e200),
+      invoke: (session) => refineSessionCell(session, "e1", refineHexTo27Hex)
+    },
+    {
+      name: "batch",
+      mesh: (() => {
+        const mesh = createHexUnitCubeMesh(2, 1, 1);
+        mesh.nodes = mesh.nodes.map((point) =>
+          point.map((coordinate) => coordinate * 1e200)
+        );
+        return mesh;
+      })(),
+      invoke: (session) =>
+        refineSessionCells(session, ["e1", "e2"], refineHexTo27Hex)
+    }
+  ];
+
+  for (const operation of operations) {
+    const session = createRefinementSession(operation.mesh);
+    const before = structuredClone(session);
+    const error = captureError(() => operation.invoke(session));
+
+    assert.equal(error instanceof HexPatchQualityError, true, operation.name);
+    assert.equal(error.code, "HEX_PATCH_VOLUME");
+    assert.match(error.message, /non-finite.*volume/i);
+    assert.deepEqual(session, before);
+  }
 });
 
 test("Hierarchical refinement session rejects incomplete Hex replacement volume atomically", () => {
@@ -5802,7 +5949,10 @@ test("indistinguishable element geometry is rejected explicitly", () => {
   for (const entry of [mergeCoincidentNodes, mergeCoincidentNodesWithMap]) {
     const error = captureError(() => entry(mesh, 0));
     assert.equal(error instanceof RangeError, true, entry.name);
-    assert.match(error.message, /no distinguishable nonzero element edge/i);
+    assert.match(
+      error.message,
+      /zero-length Hex element edge|no distinguishable nonzero element edge/i
+    );
   }
 
   const session = createRefinementSession(mesh);
@@ -5813,7 +5963,10 @@ test("indistinguishable element geometry is rejected explicitly", () => {
   ]) {
     const error = captureError(entry);
     assert.equal(error instanceof RangeError, true);
-    assert.match(error.message, /no distinguishable nonzero element edge/i);
+    assert.match(
+      error.message,
+      /zero-length Hex element edge|no distinguishable nonzero element edge/i
+    );
     assert.deepEqual(session, before);
   }
 
@@ -5825,6 +5978,47 @@ test("indistinguishable element geometry is rejected explicitly", () => {
   assert.equal(error instanceof TwoToOnePlanningError, true);
   assert.equal(error.code, "TWO_TO_ONE_PARENT_JACOBIAN");
   assert.deepEqual(mesh, snapshot);
+});
+
+test("partial zero Hex edges are never hidden by the nonzero edge threshold", () => {
+  const mesh = createSevenDistinctNodeHexMesh();
+  const snapshot = structuredClone(mesh);
+  assert.equal(minElementEdgeLength(mesh), 0);
+  assert.equal(Number.isFinite(minNonzeroElementEdgeLength(mesh)), true);
+
+  for (const entry of [mergeCoincidentNodes, mergeCoincidentNodesWithMap]) {
+    const error = captureError(() => entry(mesh, 0));
+    assert.equal(error instanceof RangeError, true, entry.name);
+    assert.match(error.message, /zero-length Hex element edge/i);
+    assert.deepEqual(mesh, snapshot);
+  }
+
+  const flatError = captureError(() => previewRefinementByElementIds(
+    mesh,
+    [1],
+    {
+      hexRefinementRatio: 3,
+      includeTransitions: false,
+      regularizeHexSelection: false
+    }
+  ));
+  assert.equal(flatError instanceof RangeError, true);
+  assert.match(flatError.message, /zero-length Hex element edge/i);
+  assert.deepEqual(mesh, snapshot);
+
+  for (const operation of ["build", "refine"]) {
+    const session = createRefinementSession(mesh);
+    const before = structuredClone(session);
+    const error = captureError(() => operation === "build"
+      ? buildActiveMesh(session, { mergeNodes: true, mergeTolerance: 0 })
+      : refineSessionCell(session, "e1", refineHexTo27Hex));
+    assert.equal(
+      error instanceof RangeError || error instanceof HexPatchQualityError,
+      true,
+      operation
+    );
+    assert.deepEqual(session, before);
+  }
 });
 
 test("low-level node merging requires a finite nonnegative tolerance", () => {
@@ -5904,6 +6098,36 @@ test("session default and explicit merge tolerances remain stable at extreme sca
       assert.deepEqual(session, before);
     }
   }
+});
+
+test("extreme anisotropic node buckets merge duplicate Hex geometry correctly", () => {
+  const vertices = createAnisotropicHexVertices(1e200, 1e-200, 1e-200)
+    .map(([x, y, z]) => [x - 1e200, y, z]);
+  const mesh = {
+    kind: "H1",
+    nodes: [
+      ...vertices.map((point) => [...point]),
+      ...vertices.map((point) => [...point])
+    ],
+    elements: [
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [9, 10, 11, 12, 13, 14, 15, 16]
+    ]
+  };
+  const tolerance = 1e-202;
+  const merged = mergeCoincidentNodesWithMap(mesh, tolerance);
+  assert.equal(merged.mesh.nodes.length, 8);
+  assert.deepEqual(merged.mesh.elements[0], merged.mesh.elements[1]);
+
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: tolerance
+  });
+  assert.equal(active.mesh.nodes.length, 8);
+  assert.deepEqual(active.mesh.elements[0], active.mesh.elements[1]);
+  assert.deepEqual(session, before);
 });
 
 test("final conformance failures use structured conformance diagnostics", () => {

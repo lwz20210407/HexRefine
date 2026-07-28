@@ -449,7 +449,7 @@ test("HexRefine refines an anonymized real-deck O-grid gauge slab at 2:1", () =>
   assert.equal(result.summary.unchangedElementCount, 440);
   assert.equal(result.mesh.elements.length, 7040);
   assert.equal(result.quality?.ok, true);
-  assert.equal(result.quality?.relativeVolumeError, 0);
+  assert.ok((result.quality?.relativeVolumeError ?? Infinity) < 1e-12);
   assert.ok((result.quality?.childMinimumOrientedScaledJacobian ?? 0) > 0.25);
   assert.equal(checkNoHangingNodes(result.mesh, 1e-8).ok, true);
 });

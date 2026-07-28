@@ -46,6 +46,13 @@ import {
   type GeometricFace
 } from "./geometric-face-index.js";
 import {
+  forEachCandidateMergeBucketKey,
+  mergeBucketKey,
+  mergeBucketOrigin
+} from "./merge-buckets-internal.js";
+import {
+  assertHexPatchQualitySummary,
+  assertHexRefinementQualityReport,
   assertHexPatchQuality,
   freezeTwoToOnePlanningErrorDiagnostic,
   HexPatchQualityError,
@@ -546,7 +553,8 @@ function buildMergedActiveMeshDirect(
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
   const sessionNodeIdsByNodeId = includeSessionNodeIdsByNodeId ? new Map<number, number[]>() : undefined;
   const exactNodeIndexByKey = tolerance === 0 ? new Map<string, number>() : undefined;
-  const buckets = tolerance === 0 ? undefined : new Map<number, number[]>();
+  const buckets = tolerance === 0 ? undefined : new Map<string, number[]>();
+  const bucketOrigin = mergeBucketOrigin(sessionNodes);
 
   for (let index = 0; index < activeIds.length; index += 1) {
     const cellId = activeIds[index]!;
@@ -580,11 +588,23 @@ function buildMergedActiveMeshDirect(
             exactNodeIndexByKey.set(exactKey, nodeIndex);
           }
         } else if (buckets) {
-          nodeIndex = findMergedActiveNodeIndex(point, nodes, buckets, tolerance);
+          nodeIndex = findMergedActiveNodeIndex(
+            point,
+            nodes,
+            buckets,
+            bucketOrigin,
+            tolerance
+          );
           if (nodeIndex === undefined) {
             nodeIndex = nodes.length;
             nodes.push([...point]);
-            addActiveMergeBucket(point, nodeIndex, buckets, tolerance);
+            addActiveMergeBucket(
+              point,
+              nodeIndex,
+              buckets,
+              bucketOrigin,
+              tolerance
+            );
           }
         } else {
           nodeIndex = nodes.length;
@@ -1145,105 +1165,40 @@ function measureActiveMeshGeometryResolution(
 function findMergedActiveNodeIndex(
   point: Point,
   nodes: readonly Point[],
-  buckets: ReadonlyMap<number, readonly number[]>,
+  buckets: ReadonlyMap<string, readonly number[]>,
+  origin: Point,
   tolerance: number
 ): number | undefined {
   let bestIndex: number | undefined;
-  const px = point[0] ?? 0;
-  const py = point[1] ?? 0;
-  const pz = point[2] ?? 0;
-  const i = Math.floor(px / tolerance);
-  const j = Math.floor(py / tolerance);
-  const k = Math.floor(pz / tolerance);
-  if (point.length <= 2) {
-    for (let di = -1; di <= 1; di += 1) {
-      for (let dj = -1; dj <= 1; dj += 1) {
-        for (const candidateIndex of buckets.get(activeMergeBucketHash2(i + di, j + dj)) ?? []) {
-          if (bestIndex !== undefined && candidateIndex >= bestIndex) {
-            continue;
-          }
-          const candidate = nodes[candidateIndex]!;
-          if (Math.hypot(
-            (candidate[0] ?? 0) - px,
-            (candidate[1] ?? 0) - py
-          ) <= tolerance) {
-            bestIndex = candidateIndex;
-          }
-        }
+  forEachCandidateMergeBucketKey(point, origin, tolerance, (key) => {
+    for (const candidateIndex of buckets.get(key) ?? []) {
+      if (bestIndex !== undefined && candidateIndex >= bestIndex) {
+        continue;
+      }
+      const candidate = nodes[candidateIndex]!;
+      if (Math.hypot(
+        ...point.map((coordinate, dimension) =>
+          (candidate[dimension] ?? 0) - coordinate
+        )
+      ) <= tolerance) {
+        bestIndex = candidateIndex;
       }
     }
-    return bestIndex;
-  }
-  for (let di = -1; di <= 1; di += 1) {
-    for (let dj = -1; dj <= 1; dj += 1) {
-      for (let dk = -1; dk <= 1; dk += 1) {
-        for (const candidateIndex of buckets.get(activeMergeBucketHash3(i + di, j + dj, k + dk)) ?? []) {
-          if (bestIndex !== undefined && candidateIndex >= bestIndex) {
-            continue;
-          }
-          const candidate = nodes[candidateIndex]!;
-          if (Math.hypot(
-            (candidate[0] ?? 0) - px,
-            (candidate[1] ?? 0) - py,
-            (candidate[2] ?? 0) - pz
-          ) <= tolerance) {
-            bestIndex = candidateIndex;
-          }
-        }
-      }
-    }
-  }
+  });
   return bestIndex;
 }
 
 function addActiveMergeBucket(
   point: Point,
   nodeIndex: number,
-  buckets: Map<number, number[]>,
+  buckets: Map<string, number[]>,
+  origin: Point,
   tolerance: number
 ): void {
-  const key = activeMergeBucketKey(point, tolerance);
+  const key = mergeBucketKey(point, origin, tolerance);
   const bucket = buckets.get(key) ?? [];
   bucket.push(nodeIndex);
   buckets.set(key, bucket);
-}
-
-function forEachActiveMergeCandidateKey(point: Point, tolerance: number, visit: (key: number) => void): void {
-  const i = Math.floor((point[0] ?? 0) / tolerance);
-  const j = Math.floor((point[1] ?? 0) / tolerance);
-  const k = Math.floor((point[2] ?? 0) / tolerance);
-  if (point.length <= 2) {
-    for (let di = -1; di <= 1; di += 1) {
-      for (let dj = -1; dj <= 1; dj += 1) {
-        visit(activeMergeBucketHash2(i + di, j + dj));
-      }
-    }
-    return;
-  }
-  for (let di = -1; di <= 1; di += 1) {
-    for (let dj = -1; dj <= 1; dj += 1) {
-      for (let dk = -1; dk <= 1; dk += 1) {
-        visit(activeMergeBucketHash3(i + di, j + dj, k + dk));
-      }
-    }
-  }
-}
-
-function activeMergeBucketKey(point: Point, tolerance: number): number {
-  const i = Math.floor((point[0] ?? 0) / tolerance);
-  const j = Math.floor((point[1] ?? 0) / tolerance);
-  if (point.length <= 2) {
-    return activeMergeBucketHash2(i, j);
-  }
-  return activeMergeBucketHash3(i, j, Math.floor((point[2] ?? 0) / tolerance));
-}
-
-function activeMergeBucketHash2(i: number, j: number): number {
-  return i * 73856093 + j * 19349663;
-}
-
-function activeMergeBucketHash3(i: number, j: number, k: number): number {
-  return i * 73856093 + j * 19349663 + k * 83492791;
 }
 
 function exactActiveMergeKey(point: Point): string {
@@ -1526,6 +1481,9 @@ export function refineSessionCells(
         }))
       )
     : undefined;
+  if (quality !== undefined) {
+    assertHexPatchQualitySummary(quality, "session refinement patch");
+  }
   const createdCellIds: CellId[] = [];
   const createdNodeIds: number[] = [];
   const hiddenCellIds: CellId[] = [];
@@ -2053,12 +2011,10 @@ function refineSessionPatchWithRebuiltTransitionShell(
         [...activeCreatedCellIds, ...reactivatedCellIds]
       )
     : undefined;
-  if (quality && !quality.ok) {
-    throw new Error(
-      "automatic transition-shell rebuilding failed its net quality gate: " +
-      `parent minimum Jacobian ${quality.parentMinimumOrientedScaledJacobian}, ` +
-      `child minimum Jacobian ${quality.childMinimumOrientedScaledJacobian}, ` +
-      `relative volume error ${quality.relativeVolumeError}`
+  if (quality !== undefined) {
+    assertHexPatchQualitySummary(
+      quality,
+      "automatic transition-shell rebuilding"
     );
   }
   const createdNodeIds = Array.from(
@@ -2767,10 +2723,20 @@ function auditNetHexCellReplacementQuality(
   const child = summarizeHexSessionCells(childSession, childCellIds);
   const parentOrientedVolume = parent.orientedVolume;
   const childOrientedVolume = child.orientedVolume;
-  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
-    / Math.max(parentOrientedVolume, Number.EPSILON);
+  const volumeDifference = Math.abs(
+    childOrientedVolume - parentOrientedVolume
+  );
+  const volumeScale = Math.abs(parentOrientedVolume);
+  const relativeVolumeError = volumeScale === 0
+    ? (volumeDifference === 0 ? 0 : Number.POSITIVE_INFINITY)
+    : volumeDifference / volumeScale;
   return {
-    ok: parent.minimumOrientedScaledJacobian > 0
+    ok: Number.isFinite(parentOrientedVolume)
+      && Number.isFinite(childOrientedVolume)
+      && Number.isFinite(relativeVolumeError)
+      && Number.isFinite(parent.minimumOrientedScaledJacobian)
+      && Number.isFinite(child.minimumOrientedScaledJacobian)
+      && parent.minimumOrientedScaledJacobian > 0
       && child.minimumOrientedScaledJacobian > 0
       && relativeVolumeError <= relativeVolumeTolerance,
     parentElementCount: parentCellIds.length,
@@ -3923,24 +3889,7 @@ function assertHexRefinementQuality(
   label: string
 ): void {
   const report = auditHexRefinementQuality(parentVertices, refinement);
-  if (report.parentMinimumOrientedScaledJacobian <= 0) {
-    throw new Error(
-      `${label} starts from a parent with non-positive scaled Jacobian ` +
-      `${report.parentMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (report.childMinimumOrientedScaledJacobian <= 0) {
-    throw new Error(
-      `${label} produced a non-positive scaled Jacobian ` +
-      `${report.childMinimumOrientedScaledJacobian}`
-    );
-  }
-  if (report.relativeVolumeError > 1e-8) {
-    throw new Error(
-      `${label} does not conserve parent volume; relative error is ` +
-      `${report.relativeVolumeError}`
-    );
-  }
+  assertHexRefinementQualityReport(report, label);
 }
 
 function namedSetEntries<T extends string | number>(

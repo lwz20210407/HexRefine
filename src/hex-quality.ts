@@ -64,8 +64,10 @@ export function auditHexRefinementQuality(
       minimumOrientedHexCornerScaledJacobian(vertices, orientation)
     );
   }
-  const relativeVolumeError = Math.abs(childSignedVolume - parentSignedVolume)
-    / Math.max(Math.abs(parentSignedVolume), Number.EPSILON);
+  const relativeVolumeError = relativeVolumeErrorFor(
+    parentSignedVolume,
+    childSignedVolume
+  );
   return {
     ok: Number.isFinite(parentSignedVolume)
       && Number.isFinite(childSignedVolume)
@@ -132,8 +134,10 @@ export function auditHexRefinementPatchQuality(
     childElementCount += replacement.refinement.elements.length;
   }
 
-  const relativeVolumeError = Math.abs(childOrientedVolume - parentOrientedVolume)
-    / Math.max(parentOrientedVolume, Number.EPSILON);
+  const relativeVolumeError = relativeVolumeErrorFor(
+    parentOrientedVolume,
+    childOrientedVolume
+  );
   return {
     ok: Number.isFinite(parentOrientedVolume)
       && Number.isFinite(childOrientedVolume)
@@ -156,10 +160,22 @@ export function auditHexRefinementPatchQuality(
 export function hexElementSignedVolume(vertices: readonly Point[]): number {
   assertHexVertices(vertices, "Hex");
   let volume = 0;
+  let correction = 0;
   for (const xi of GAUSS_POINTS) {
     for (const eta of GAUSS_POINTS) {
       for (const zeta of GAUSS_POINTS) {
-        volume += determinant3(hexJacobian(vertices, xi, eta, zeta));
+        const determinant = determinant3(
+          hexJacobian(vertices, xi, eta, zeta)
+        );
+        if (!Number.isFinite(volume) || !Number.isFinite(determinant)) {
+          volume += determinant;
+          correction = 0;
+          continue;
+        }
+        const adjusted = determinant - correction;
+        const next = volume + adjusted;
+        correction = (next - volume) - adjusted;
+        volume = next;
       }
     }
   }
@@ -197,32 +213,105 @@ function hexJacobian(
   eta: number,
   zeta: number
 ): [number[], number[], number[]] {
-  const columns: [number[], number[], number[]] = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0]
+  return [
+    weightedHexEdgeDifferences(vertices, [
+      [1, 0, (1 - eta) * (1 - zeta) / 8],
+      [2, 3, (1 + eta) * (1 - zeta) / 8],
+      [5, 4, (1 - eta) * (1 + zeta) / 8],
+      [6, 7, (1 + eta) * (1 + zeta) / 8]
+    ]),
+    weightedHexEdgeDifferences(vertices, [
+      [3, 0, (1 - xi) * (1 - zeta) / 8],
+      [2, 1, (1 + xi) * (1 - zeta) / 8],
+      [7, 4, (1 - xi) * (1 + zeta) / 8],
+      [6, 5, (1 + xi) * (1 + zeta) / 8]
+    ]),
+    weightedHexEdgeDifferences(vertices, [
+      [4, 0, (1 - xi) * (1 - eta) / 8],
+      [5, 1, (1 + xi) * (1 - eta) / 8],
+      [7, 3, (1 - xi) * (1 + eta) / 8],
+      [6, 2, (1 + xi) * (1 + eta) / 8]
+    ])
   ];
-  CORNER_SIGNS.forEach(([sx, sy, sz], corner) => {
-    const derivatives = [
-      sx * (1 + sy * eta) * (1 + sz * zeta) / 8,
-      sy * (1 + sx * xi) * (1 + sz * zeta) / 8,
-      sz * (1 + sx * xi) * (1 + sy * eta) / 8
-    ];
-    for (let axis = 0; axis < 3; axis += 1) {
-      for (let component = 0; component < 3; component += 1) {
-        columns[axis]![component] = columns[axis]![component]!
-          + derivatives[axis]! * vertices[corner]![component]!;
-      }
+}
+
+function weightedHexEdgeDifferences(
+  vertices: readonly Point[],
+  terms: readonly [number, number, number][]
+): number[] {
+  return [0, 1, 2].map((component) => {
+    let sum = 0;
+    let correction = 0;
+    for (const [positive, negative, weight] of terms) {
+      const difference = vertices[positive]![component]!
+        - vertices[negative]![component]!;
+      const value = difference * weight;
+      const adjusted = value - correction;
+      const next = sum + adjusted;
+      correction = (next - sum) - adjusted;
+      sum = next;
     }
+    return sum;
   });
-  return columns;
 }
 
 function determinant3(matrix: readonly number[][]): number {
+  const normalized: number[][] = [];
+  let totalExponent = 0;
+  for (const column of matrix) {
+    const maximum = Math.max(...column.map((component) => Math.abs(component)));
+    if (maximum === 0) {
+      return 0;
+    }
+    if (!Number.isFinite(maximum)) {
+      return Number.NaN;
+    }
+    const exponent = Math.floor(Math.log2(maximum));
+    const scale = 2 ** exponent;
+    normalized.push(column.map((component) => component / scale));
+    totalExponent += exponent;
+  }
+  return restoreBinaryExponent(
+    determinant3Normalized(normalized),
+    totalExponent
+  );
+}
+
+function determinant3Normalized(matrix: readonly number[][]): number {
   const [a, b, c] = matrix;
   return a![0]! * (b![1]! * c![2]! - b![2]! * c![1]!)
     - b![0]! * (a![1]! * c![2]! - a![2]! * c![1]!)
     + c![0]! * (a![1]! * b![2]! - a![2]! * b![1]!);
+}
+
+function restoreBinaryExponent(value: number, exponent: number): number {
+  if (value === 0 || !Number.isFinite(value)) {
+    return value;
+  }
+  const valueExponent = Math.floor(Math.log2(Math.abs(value)));
+  const mantissa = value / (2 ** valueExponent);
+  const combinedExponent = exponent + valueExponent;
+  if (combinedExponent > 1023) {
+    return value < 0
+      ? Number.NEGATIVE_INFINITY
+      : Number.POSITIVE_INFINITY;
+  }
+  if (combinedExponent < -1074) {
+    return value < 0 ? -0 : 0;
+  }
+  return mantissa * (2 ** combinedExponent);
+}
+
+function relativeVolumeErrorFor(
+  parentVolume: number,
+  childVolume: number
+): number {
+  const difference = Math.abs(childVolume - parentVolume);
+  const denominator = Math.abs(parentVolume);
+  if (denominator === 0) {
+    return difference === 0 ? 0 : Number.POSITIVE_INFINITY;
+  }
+  return difference / denominator;
 }
 
 function vectorLength(vector: readonly number[]): number {
