@@ -1577,6 +1577,160 @@ test("cell geometry validation rejects truly low-rank 4D corner sets", () => {
   }
 });
 
+test("cell geometry exact affine rank accepts a binary64-nonzero 1e-14 Q1 residual", () => {
+  const geometry = {
+    originalCellId: "near-line-q1",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0],
+      [1, 1],
+      [2, 2],
+      [3, 3 + 1e-14]
+    ]
+  };
+  const index = new RefinementCellGeometryIndex(0);
+  index.add("near-line-q1", geometry);
+
+  assert.equal(
+    index.uniqueMatch({
+      ...geometry,
+      originalCellId: "old-q1",
+      points: [...geometry.points].reverse()
+    }),
+    "near-line-q1"
+  );
+});
+
+test("cell geometry exact affine rank accepts a binary64-nonzero 5e-14 H1 residual", () => {
+  const points = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+    [2, 0],
+    [2, 1],
+    [0, 2],
+    [1, 2]
+  ].map(([x, y], index) => [
+    x,
+    y,
+    x + y + (index === 7 ? 5e-14 : 0)
+  ]);
+  const geometry = {
+    originalCellId: "near-plane-h1",
+    kind: "H1",
+    level: 0,
+    role: "base",
+    points
+  };
+  const index = new RefinementCellGeometryIndex(0);
+  index.add("near-plane-h1", geometry);
+
+  assert.equal(
+    index.uniqueMatch({
+      ...geometry,
+      originalCellId: "old-h1",
+      points: [...geometry.points].reverse()
+    }),
+    "near-plane-h1"
+  );
+});
+
+test("cell geometry exact affine rank rejects rotated translated low-rank 4D cells", () => {
+  const base = [
+    2 ** 500,
+    -(2 ** 500),
+    2 ** 400,
+    -(2 ** 400)
+  ];
+  const firstDirection = [
+    2 ** 470,
+    2 ** 469,
+    -(2 ** 370),
+    2 ** 369
+  ];
+  const secondDirection = [
+    -(2 ** 466),
+    2 ** 465,
+    2 ** 366,
+    2 ** 365
+  ];
+  const point = (first, second = 0) =>
+    base.map((coordinate, index) =>
+      coordinate
+        + first * firstDirection[index]
+        + second * secondDirection[index]
+    );
+  const collinearQ1 = {
+    originalCellId: "translated-line-q1",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [0, 1, 2, 3].map((coefficient) =>
+      point(coefficient)
+    )
+  };
+  const coplanarH1 = {
+    originalCellId: "translated-plane-h1",
+    kind: "H1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [1, 1],
+      [2, 0],
+      [0, 2],
+      [2, 1],
+      [1, 2]
+    ].map(([first, second]) => point(first, second))
+  };
+
+  for (const geometry of [collinearQ1, coplanarH1]) {
+    assert.throws(
+      () => new RefinementCellGeometryIndex(0).add(
+        geometry.originalCellId,
+        geometry
+      ),
+      (error) =>
+        error instanceof RefinementCellGeometryMatchError
+        && /collapsed/.test(error.message)
+    );
+  }
+});
+
+test("cell geometry exact affine rank preserves MIN_VALUE mixed-exponent H1 geometry", () => {
+  const points = [];
+  for (const x of [0, 1e308]) {
+    for (const y of [0, 1e-300]) {
+      for (const w of [0, Number.MIN_VALUE]) {
+        points.push([x, y, 0, w]);
+      }
+    }
+  }
+  const geometry = {
+    originalCellId: "mixed-exponent-h1",
+    kind: "H1",
+    level: 0,
+    role: "base",
+    points
+  };
+  const index = new RefinementCellGeometryIndex(0);
+  index.add("mixed-exponent-h1", geometry);
+
+  assert.equal(
+    index.uniqueMatch({
+      ...geometry,
+      originalCellId: "old-mixed",
+      points: [...geometry.points].reverse()
+    }),
+    "mixed-exponent-h1"
+  );
+});
+
 test("cell geometry index validates tolerance and ids and snapshots candidates on add", () => {
   for (const tolerance of [
     -1,

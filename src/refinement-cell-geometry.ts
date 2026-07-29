@@ -24,6 +24,13 @@ interface IndexedCellGeometry {
   readonly exactKey: string;
 }
 
+interface ExactBinary64 {
+  readonly significand: bigint;
+  readonly exponent: number;
+}
+
+const binary64View = new DataView(new ArrayBuffer(8));
+
 export class RefinementCellGeometryMatchError extends Error {
   readonly cellIds: readonly CellId[];
 
@@ -313,7 +320,7 @@ function assertNotCollapsed(
   }
 
   const requiredRank = kind === "Q1" ? 2 : 3;
-  if (affineRank(points) < requiredRank) {
+  if (!hasExactAffineRankAtLeast(points, requiredRank)) {
     throw geometryError(
       cellId,
       `${kind} geometry is collapsed`
@@ -321,88 +328,188 @@ function assertNotCollapsed(
   }
 }
 
-function affineRank(
-  points: readonly (readonly number[])[]
-): number {
+function hasExactAffineRankAtLeast(
+  points: readonly (readonly number[])[],
+  requiredRank: number
+): boolean {
   const dimension = points[0]!.length;
-  if (dimension === 0 || points.length < 2) {
-    return 0;
+  const rowCount = points.length - 1;
+  if (
+    requiredRank <= 0
+    || Math.min(rowCount, dimension) < requiredRank
+  ) {
+    return requiredRank <= 0;
   }
 
-  const coordinateScales = Array.from(
-    { length: dimension },
-    (_, coordinateIndex) => Math.max(
-      ...points.map((point) => Math.abs(point[coordinateIndex]!))
-    )
+  const matrix = exactAffineDifferenceMatrix(points);
+  let pivotRow = 0;
+  for (
+    let column = 0;
+    column < dimension && pivotRow < rowCount;
+    column += 1
+  ) {
+    let sourceRow = pivotRow;
+    while (
+      sourceRow < rowCount
+      && matrix[sourceRow]![column] === 0n
+    ) {
+      sourceRow += 1;
+    }
+    if (sourceRow === rowCount) {
+      continue;
+    }
+    if (sourceRow !== pivotRow) {
+      [matrix[pivotRow], matrix[sourceRow]] = [
+        matrix[sourceRow]!,
+        matrix[pivotRow]!
+      ];
+    }
+    reduceIntegerRow(matrix[pivotRow]!, column);
+    const pivot = matrix[pivotRow]![column]!;
+    for (let rowIndex = pivotRow + 1; rowIndex < rowCount; rowIndex += 1) {
+      const row = matrix[rowIndex]!;
+      const factor = row[column]!;
+      if (factor === 0n) {
+        continue;
+      }
+      const commonFactor = bigintGcd(
+        bigintAbs(pivot),
+        bigintAbs(factor)
+      );
+      const pivotMultiplier = pivot / commonFactor;
+      const rowMultiplier = factor / commonFactor;
+      for (
+        let innerColumn = column + 1;
+        innerColumn < dimension;
+        innerColumn += 1
+      ) {
+        row[innerColumn] = pivotMultiplier * row[innerColumn]!
+          - rowMultiplier * matrix[pivotRow]![innerColumn]!;
+      }
+      row[column] = 0n;
+      reduceIntegerRow(row, column + 1);
+    }
+    pivotRow += 1;
+    if (pivotRow >= requiredRank) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function exactAffineDifferenceMatrix(
+  points: readonly (readonly number[])[]
+): bigint[][] {
+  const rowCount = points.length - 1;
+  const dimension = points[0]!.length;
+  const matrix = Array.from(
+    { length: rowCount },
+    () => Array.from({ length: dimension }, () => 0n)
   );
-  const normalized = points
-    .map((point) =>
-      Array.from(
-        { length: dimension },
-        (_, index) => coordinateScales[index] === 0
-          ? 0
-          : point[index]! / coordinateScales[index]!
-      )
-    )
-    .sort(comparePoints);
-  const origin = normalized[0]!;
-  const rows = normalized.slice(1).map((point) =>
-    point.map((coordinate, index) => coordinate - origin[index]!)
-  );
+
   for (
     let coordinateIndex = 0;
     coordinateIndex < dimension;
     coordinateIndex += 1
   ) {
-    const span = Math.max(
-      ...rows.map((row) => Math.abs(row[coordinateIndex]!))
+    const decomposed = points.map((point) =>
+      decomposeFiniteBinary64(point[coordinateIndex]!)
     );
-    if (span === 0) {
+    let minimumExponent = Number.POSITIVE_INFINITY;
+    for (const value of decomposed) {
+      if (value.significand !== 0n) {
+        minimumExponent = Math.min(
+          minimumExponent,
+          value.exponent
+        );
+      }
+    }
+    if (!Number.isFinite(minimumExponent)) {
       continue;
     }
-    for (const row of rows) {
-      row[coordinateIndex] = row[coordinateIndex]! / span;
+    const scaledCoordinates = decomposed.map((value) =>
+      value.significand === 0n
+        ? 0n
+        : value.significand
+          << BigInt(value.exponent - minimumExponent)
+    );
+    const base = scaledCoordinates[0]!;
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      matrix[rowIndex]![coordinateIndex] =
+        scaledCoordinates[rowIndex + 1]! - base;
     }
   }
-  const threshold = Number.EPSILON
-    * Math.max(points.length, dimension)
-    * 16;
-  let rank = 0;
+  return matrix;
+}
 
-  for (
-    let column = 0;
-    column < dimension && rank < rows.length;
-    column += 1
-  ) {
-    let pivotRow = rank;
-    for (let row = rank + 1; row < rows.length; row += 1) {
-      if (
-        Math.abs(rows[row]![column]!)
-        > Math.abs(rows[pivotRow]![column]!)
-      ) {
-        pivotRow = row;
-      }
-    }
-    const pivot = rows[pivotRow]![column]!;
-    if (Math.abs(pivot) <= threshold) {
-      continue;
-    }
-    [rows[rank], rows[pivotRow]] = [rows[pivotRow]!, rows[rank]!];
-    for (let row = rank + 1; row < rows.length; row += 1) {
-      const rowValues = rows[row]!;
-      const factor = rowValues[column]! / rows[rank]![column]!;
-      for (
-        let innerColumn = column;
-        innerColumn < dimension;
-        innerColumn += 1
-      ) {
-        rowValues[innerColumn] = rowValues[innerColumn]!
-          - factor * rows[rank]![innerColumn]!;
-      }
-    }
-    rank += 1;
+function decomposeFiniteBinary64(value: number): ExactBinary64 {
+  binary64View.setFloat64(0, value, false);
+  const highBits = binary64View.getUint32(0, false);
+  const lowBits = binary64View.getUint32(4, false);
+  const exponentBits = (highBits >>> 20) & 0x7ff;
+  const fraction = (
+    BigInt(highBits & 0x000fffff) << 32n
+  ) | BigInt(lowBits);
+  if (exponentBits === 0 && fraction === 0n) {
+    return { significand: 0n, exponent: 0 };
   }
-  return rank;
+  if (exponentBits === 0x7ff) {
+    throw new Error("exact affine rank requires finite coordinates");
+  }
+
+  let significand = exponentBits === 0
+    ? fraction
+    : (1n << 52n) | fraction;
+  let exponent = exponentBits === 0
+    ? -1074
+    : exponentBits - 1075;
+  while ((significand & 1n) === 0n) {
+    significand >>= 1n;
+    exponent += 1;
+  }
+  if ((highBits & 0x80000000) !== 0) {
+    significand = -significand;
+  }
+  return { significand, exponent };
+}
+
+function reduceIntegerRow(
+  row: bigint[],
+  startColumn: number
+): void {
+  let divisor = 0n;
+  for (let column = startColumn; column < row.length; column += 1) {
+    divisor = bigintGcd(divisor, bigintAbs(row[column]!));
+    if (divisor === 1n) {
+      break;
+    }
+  }
+  if (divisor > 1n) {
+    for (let column = startColumn; column < row.length; column += 1) {
+      row[column] = row[column]! / divisor;
+    }
+  }
+  const firstNonzero = row
+    .slice(startColumn)
+    .find((value) => value !== 0n);
+  if (firstNonzero !== undefined && firstNonzero < 0n) {
+    for (let column = startColumn; column < row.length; column += 1) {
+      row[column] = -row[column]!;
+    }
+  }
+}
+
+function bigintGcd(first: bigint, second: bigint): bigint {
+  let a = first;
+  let b = second;
+  while (b !== 0n) {
+    [a, b] = [b, a % b];
+  }
+  return a;
+}
+
+function bigintAbs(value: bigint): bigint {
+  return value < 0n ? -value : value;
 }
 
 function pointSetsMatch(
@@ -542,19 +649,6 @@ function exactPointKey(point: readonly number[]): string {
   return JSON.stringify(
     point.map((coordinate) => coordinate === 0 ? 0 : coordinate)
   );
-}
-
-function comparePoints(
-  first: readonly number[],
-  second: readonly number[]
-): number {
-  for (let index = 0; index < first.length; index += 1) {
-    const difference = first[index]! - second[index]!;
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
 }
 
 function appendBucket(
