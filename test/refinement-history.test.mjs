@@ -34,6 +34,30 @@ function sampleGeometry(originalCellId, offset = 0) {
   };
 }
 
+function q1GeometryInDimension(originalCellId, dimension) {
+  const point = (x, y) => {
+    const coordinates = Array.from(
+      { length: dimension },
+      () => 0
+    );
+    coordinates[0] = x;
+    coordinates[1] = y;
+    return coordinates;
+  };
+  return {
+    originalCellId,
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      point(0, 0),
+      point(1, 0),
+      point(1, 1),
+      point(0, 1)
+    ]
+  };
+}
+
 function defineReadOnce(
   target,
   key,
@@ -2149,36 +2173,72 @@ test("cell geometry tolerance matching avoids squared-distance overflow and unde
   assert.equal(underflowIndex.uniqueMatch(underflowQuery), undefined);
 });
 
-test("cell geometry tolerance matching supports 125k-dimensional Q1 points without argument spreading", () => {
-  const dimension = 125_000;
-  const point = (x, y) => {
-    const coordinates = Array.from(
-      { length: dimension },
-      () => 0
-    );
-    coordinates[0] = x;
-    coordinates[1] = y;
-    return coordinates;
-  };
-  const candidate = {
-    originalCellId: "candidate",
-    kind: "Q1",
-    level: 0,
-    role: "base",
-    points: [
-      point(0, 0),
-      point(1, 0),
-      point(1, 1),
-      point(0, 1)
-    ]
-  };
+test("cell geometry tolerance matching rejects two MIN_VALUE deltas at MIN_VALUE tolerance", () => {
+  const candidate = q1GeometryInDimension("candidate", 4);
   const query = structuredClone(candidate);
   query.originalCellId = "old";
-  query.points[0][dimension - 1] = 5e-9;
-  const index = new RefinementCellGeometryIndex(1e-8);
+  query.points[0][2] = Number.MIN_VALUE;
+  query.points[0][3] = Number.MIN_VALUE;
+  const index = new RefinementCellGeometryIndex(Number.MIN_VALUE);
+  index.add("candidate", candidate);
+
+  assert.equal(index.uniqueMatch(query), undefined);
+});
+
+test("cell geometry tolerance matching retains 125k small components after a boundary component", () => {
+  const dimension = 125_000;
+  const tolerance = 1e-8;
+  const candidate = q1GeometryInDimension(
+    "candidate",
+    dimension
+  );
+  const query = structuredClone(candidate);
+  query.originalCellId = "old";
+  query.points[0].fill(1e-16, 2);
+  query.points[0][2] = tolerance;
+  const index = new RefinementCellGeometryIndex(tolerance);
+  index.add("candidate", candidate);
+
+  assert.equal(index.uniqueMatch(query), undefined);
+});
+
+test("cell geometry tolerance matching accepts one boundary component and zero remainder", () => {
+  const tolerance = 1e-8;
+  const candidate = q1GeometryInDimension("candidate", 32);
+  const query = structuredClone(candidate);
+  query.originalCellId = "old";
+  query.points[0][2] = tolerance;
+  const index = new RefinementCellGeometryIndex(tolerance);
   index.add("candidate", candidate);
 
   assert.equal(index.uniqueMatch(query), "candidate");
+});
+
+test("cell geometry compensated squared norm distinguishes sums just below and above one", () => {
+  const componentCount = 16;
+  const candidate = q1GeometryInDimension(
+    "candidate",
+    componentCount + 2
+  );
+  const index = new RefinementCellGeometryIndex(1);
+  index.add("candidate", candidate);
+
+  const queryAt = (lastComponent) => {
+    const query = structuredClone(candidate);
+    query.originalCellId = "old";
+    query.points[0].fill(0.25, 2);
+    query.points[0][componentCount + 1] = lastComponent;
+    return query;
+  };
+
+  assert.equal(
+    index.uniqueMatch(queryAt(0.25 - 1e-12)),
+    "candidate"
+  );
+  assert.equal(
+    index.uniqueMatch(queryAt(0.25 + 1e-12)),
+    undefined
+  );
 });
 
 test("cell geometry matching finds an augmenting path when query-order greedy would fail", () => {

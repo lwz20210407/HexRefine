@@ -632,18 +632,38 @@ function pointsWithinTolerance(
     );
   }
 
-  let distance = 0;
+  let squaredNorm = 0;
+  let compensation = 0;
   for (let index = 0; index < first.length; index += 1) {
     const delta = Math.abs(first[index]! - second[index]!);
     if (!Number.isFinite(delta) || delta > tolerance) {
       return false;
     }
-    distance = Math.hypot(distance, delta);
-    if (distance > tolerance) {
+    const normalized = delta / tolerance;
+    const term = normalized * normalized;
+    const nextSquaredNorm = squaredNorm + term;
+    compensation += squaredNorm >= term
+      ? (squaredNorm - nextSquaredNorm) + term
+      : (term - nextSquaredNorm) + squaredNorm;
+    squaredNorm = nextSquaredNorm;
+    if (compensatedSumExceedsOne(squaredNorm, compensation)) {
       return false;
     }
   }
-  return true;
+  return !compensatedSumExceedsOne(squaredNorm, compensation);
+}
+
+function compensatedSumExceedsOne(
+  sum: number,
+  compensation: number
+): boolean {
+  if (sum > 1) {
+    return compensation >= 0 || sum - 1 > -compensation;
+  }
+  if (sum < 1) {
+    return compensation > 1 - sum;
+  }
+  return compensation > 0;
 }
 
 function hasCompletePointMatching(
