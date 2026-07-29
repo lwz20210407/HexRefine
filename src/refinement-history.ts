@@ -315,76 +315,136 @@ export function buildRefinementHistoryClosure(
     | "active-predecessor"
     | "identity"
     | "state-consumer";
+  type CommandTraversalContext =
+    | {
+      readonly kind: "independent";
+      readonly originCommandId: string;
+    }
+    | {
+      readonly kind: "identity-restoration";
+      readonly originCommandId: string;
+    };
+  interface CommandWorkItem {
+    readonly commandId: string;
+    readonly reason: CommandInclusionReason;
+    readonly context: CommandTraversalContext;
+    readonly originCommandId: string;
+    readonly producerCommandId?: string;
+  }
+  interface CommandContextState {
+    readonly commandId: string;
+    readonly context: CommandTraversalContext;
+    readonly reasons: Set<CommandInclusionReason>;
+    readonly originCommandIds: Set<string>;
+    readonly producerCommandIds: Set<string>;
+  }
   const includedCommandIds = new Set<string>();
-  const inclusionReasonsByCommandId =
-    new Map<string, Set<CommandInclusionReason>>();
-  const commandWorklist: Array<{
-    readonly commandId: string;
-    readonly initialReason: CommandInclusionReason;
-  }> = [];
-  const activeProducerWorklist: Array<{
-    readonly commandId: string;
-    readonly triggeringReason: Exclude<
-      CommandInclusionReason,
-      "identity"
-    >;
-  }> = [];
-  const queuedActiveProducerCommandIds = new Set<string>();
-  const expandedActiveProducerCommandIds = new Set<string>();
+  const identityCommandIds = new Set<string>();
+  const contextStatesByCommandId =
+    new Map<string, Map<string, CommandContextState>>();
+  const commandWorklist: CommandWorkItem[] = [];
+  const activeProducerWorklist: CommandWorkItem[] = [];
+  const queuedCommandContextStates =
+    new Set<CommandContextState>();
+  const processedCommandContextStates =
+    new Set<CommandContextState>();
+  const queuedActiveProducerContextStates =
+    new Set<CommandContextState>();
+  const expandedActiveProducerContextStates =
+    new Set<CommandContextState>();
+  const contextClassKey = (
+    context: CommandTraversalContext
+  ): string => context.kind === "independent"
+    ? "independent"
+    : `identity-restoration:${context.originCommandId}`;
+  const commandContextState = (
+    item: CommandWorkItem
+  ): CommandContextState => {
+    let contextStates =
+      contextStatesByCommandId.get(item.commandId);
+    if (contextStates === undefined) {
+      contextStates = new Map<string, CommandContextState>();
+      contextStatesByCommandId.set(item.commandId, contextStates);
+    }
+    const contextKey = contextClassKey(item.context);
+    let state = contextStates.get(contextKey);
+    if (state === undefined) {
+      state = {
+        commandId: item.commandId,
+        context: item.context,
+        reasons: new Set<CommandInclusionReason>(),
+        originCommandIds: new Set<string>(),
+        producerCommandIds: new Set<string>()
+      };
+      contextStates.set(contextKey, state);
+    }
+    return state;
+  };
   const scheduleActiveProducer = (
-    commandId: string,
-    triggeringReason: Exclude<
-      CommandInclusionReason,
-      "identity"
-    >
+    item: CommandWorkItem,
+    state: CommandContextState
   ): void => {
     if (
-      expandedActiveProducerCommandIds.has(commandId)
-      || queuedActiveProducerCommandIds.has(commandId)
+      expandedActiveProducerContextStates.has(state)
+      || queuedActiveProducerContextStates.has(state)
     ) {
       return;
     }
-    queuedActiveProducerCommandIds.add(commandId);
-    activeProducerWorklist.push({
-      commandId,
-      triggeringReason
-    });
+    queuedActiveProducerContextStates.add(state);
+    activeProducerWorklist.push(item);
   };
-  const includeCommandId = (
-    commandId: string | undefined,
-    reason: CommandInclusionReason
+  const includeCommand = (
+    item: CommandWorkItem
   ): void => {
-    if (commandId === undefined) {
-      return;
+    includedCommandIds.add(item.commandId);
+    if (item.reason === "identity") {
+      identityCommandIds.add(item.commandId);
     }
-    let reasons = inclusionReasonsByCommandId.get(commandId);
-    if (reasons === undefined) {
-      reasons = new Set<CommandInclusionReason>();
-      inclusionReasonsByCommandId.set(commandId, reasons);
-      includedCommandIds.add(commandId);
-      commandWorklist.push({
-        commandId,
-        initialReason: reason
-      });
+    const state = commandContextState(item);
+    const addedReason = !state.reasons.has(item.reason);
+    state.reasons.add(item.reason);
+    state.originCommandIds.add(item.originCommandId);
+    if (item.producerCommandId !== undefined) {
+      state.producerCommandIds.add(item.producerCommandId);
     }
-    if (reasons.has(reason)) {
-      return;
+    if (
+      !processedCommandContextStates.has(state)
+      && !queuedCommandContextStates.has(state)
+    ) {
+      queuedCommandContextStates.add(state);
+      commandWorklist.push(item);
     }
-    reasons.add(reason);
-    if (reason !== "identity") {
-      scheduleActiveProducer(commandId, reason);
+    if (item.reason !== "identity" && addedReason) {
+      scheduleActiveProducer(item, state);
     }
   };
   for (const cellId of seedCellIds) {
-    includeCommandId(
-      index.creatorCommandIdByCellId.get(cellId),
-      "seed"
-    );
+    const creatorCommandId =
+      index.creatorCommandIdByCellId.get(cellId);
+    if (creatorCommandId !== undefined) {
+      includeCommand({
+        commandId: creatorCommandId,
+        reason: "seed",
+        context: {
+          kind: "independent",
+          originCommandId: creatorCommandId
+        },
+        originCommandId: creatorCommandId
+      });
+    }
     for (
       const commandId of
         index.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
-      includeCommandId(commandId, "seed");
+      includeCommand({
+        commandId,
+        reason: "seed",
+        context: {
+          kind: "independent",
+          originCommandId: commandId
+        },
+        originCommandId: commandId
+      });
     }
   }
 
@@ -403,6 +463,12 @@ export function buildRefinementHistoryClosure(
           `history closure command worklist is sparse at ${commandWorklistIndex - 1}`
         );
       }
+      const state = commandContextState(item);
+      queuedCommandContextStates.delete(state);
+      if (processedCommandContextStates.has(state)) {
+        continue;
+      }
+      processedCommandContextStates.add(state);
       const { commandId } = item;
       for (
         const predecessorCommandId of
@@ -410,10 +476,12 @@ export function buildRefinementHistoryClosure(
             commandId
           ) ?? []
       ) {
-        includeCommandId(
-          predecessorCommandId,
-          "active-predecessor"
-        );
+        includeCommand({
+          commandId: predecessorCommandId,
+          reason: "active-predecessor",
+          context: state.context,
+          originCommandId: item.originCommandId
+        });
       }
       for (
         const identityPredecessorCommandId of
@@ -421,13 +489,24 @@ export function buildRefinementHistoryClosure(
             commandId
           ) ?? []
       ) {
-        includeCommandId(
-          identityPredecessorCommandId,
-          "identity"
-        );
+        includeCommand({
+          commandId: identityPredecessorCommandId,
+          reason: "identity",
+          context: {
+            kind: "identity-restoration",
+            originCommandId: identityPredecessorCommandId
+          },
+          originCommandId: identityPredecessorCommandId
+        });
       }
     }
 
+    if (
+      activeProducerWorklistIndex
+      >= activeProducerWorklist.length
+    ) {
+      continue;
+    }
     const item =
       activeProducerWorklist[activeProducerWorklistIndex];
     activeProducerWorklistIndex += 1;
@@ -436,37 +515,36 @@ export function buildRefinementHistoryClosure(
         `history closure active worklist is sparse at ${activeProducerWorklistIndex - 1}`
       );
     }
-    const { commandId } = item;
-    queuedActiveProducerCommandIds.delete(commandId);
-    const reasons = inclusionReasonsByCommandId.get(commandId);
-    if (reasons === undefined) {
-      throw new Error(
-        `history closure has no inclusion reason for ${commandId}`
-      );
-    }
-    const hasIndependentActiveReason =
-      reasons.has("seed")
-      || reasons.has("active-predecessor");
-    const hasUnblockedStateConsumerReason =
-      reasons.has("state-consumer")
-      && !reasons.has("identity");
-    if (
-      expandedActiveProducerCommandIds.has(commandId)
+    const state = commandContextState(item);
+    queuedActiveProducerContextStates.delete(state);
+    const { commandId } = state;
+    const canExpandActiveProducer =
+      state.context.kind === "independent"
+      || state.reasons.has("active-predecessor")
       || (
-        !hasIndependentActiveReason
-        && !hasUnblockedStateConsumerReason
-      )
+        state.reasons.has("state-consumer")
+        && !identityCommandIds.has(commandId)
+      );
+    if (
+      expandedActiveProducerContextStates.has(state)
+      || !canExpandActiveProducer
     ) {
       continue;
     }
-    expandedActiveProducerCommandIds.add(commandId);
+    expandedActiveProducerContextStates.add(state);
     for (
       const consumerCommandId of
         stateDependencies.consumerCommandIdsByProducerCommandId.get(
           commandId
         ) ?? []
     ) {
-      includeCommandId(consumerCommandId, "state-consumer");
+      includeCommand({
+        commandId: consumerCommandId,
+        reason: "state-consumer",
+        context: state.context,
+        originCommandId: item.originCommandId,
+        producerCommandId: commandId
+      });
     }
   }
 

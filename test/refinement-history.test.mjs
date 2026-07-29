@@ -644,6 +644,118 @@ test("shared identity upstream is stable under reversed seed order", () => {
   assert.deepEqual(reverse, forward);
 });
 
+test("independent producer paths activate an identity-restored command", () => {
+  const commands = [
+    command("p", ["root-p"], ["x", "z"]),
+    command("creator", ["x"], ["a"]),
+    command("old", ["a"], ["old-cell"]),
+    command("q", ["root-q"], ["t", "u"]),
+    command("reactivate", ["t"], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("seed-p", ["z"], ["sp"]),
+    command("seed-q", ["u"], ["sq"]),
+    command("new", ["a"], ["new-cell"]),
+    command("far", ["far-root"], ["far-cell"])
+  ];
+  const knownCellIds = [
+    "root-p",
+    "x",
+    "z",
+    "a",
+    "old-cell",
+    "root-q",
+    "t",
+    "u",
+    "w",
+    "sp",
+    "sq",
+    "new-cell",
+    "far-root",
+    "far-cell"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const componentCellIds = new Set(
+    knownCellIds.filter((cellId) => !cellId.startsWith("far"))
+  );
+  const forward = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["sp", "sq"],
+    componentCellIds
+  });
+  const reverse = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["sq", "sp"],
+    componentCellIds
+  });
+
+  assert.deepEqual(forward.supportCommandIds, ["p", "q"]);
+  assert.deepEqual(
+    forward.downstreamCommandIds,
+    [
+      "creator",
+      "old",
+      "reactivate",
+      "seed-p",
+      "seed-q",
+      "new"
+    ]
+  );
+  assert.deepEqual(forward.preservedCommandIds, ["far"]);
+  assert.deepEqual(reverse, forward);
+});
+
+test("diamond producer paths activate an identity creator once", () => {
+  const commands = [
+    command("p1", ["root-1"], ["x", "z1"]),
+    command("p2", ["root-2"], ["y", "z2"]),
+    command("creator", ["x", "y"], ["a"]),
+    command("old", ["a"], ["old-cell"]),
+    command("reactivate", [], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("seed-1", ["z1"], ["s1"]),
+    command("seed-2", ["z2"], ["s2"]),
+    command("new", ["a"], ["new-cell"])
+  ];
+  const knownCellIds = [
+    "root-1",
+    "root-2",
+    "x",
+    "y",
+    "z1",
+    "z2",
+    "a",
+    "old-cell",
+    "w",
+    "s1",
+    "s2",
+    "new-cell"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const componentCellIds = new Set(knownCellIds);
+  const forward = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["w", "s1", "s2"],
+    componentCellIds
+  });
+  const reverse = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["s2", "s1", "w"],
+    componentCellIds
+  });
+
+  assert.deepEqual(forward.supportCommandIds, ["p1", "p2"]);
+  assert.deepEqual(
+    forward.downstreamCommandIds,
+    [
+      "creator",
+      "old",
+      "reactivate",
+      "seed-1",
+      "seed-2",
+      "new"
+    ]
+  );
+  assert.deepEqual(reverse, forward);
+});
+
 test("history index rejects duplicate command ids before other provenance", () => {
   assert.throws(
     () => buildRefinementHistoryIndex([
