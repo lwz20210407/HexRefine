@@ -63,6 +63,11 @@ import {
   HexPatchQualityError,
   qualityPlanningErrorCode
 } from "./refinement-errors.js";
+import {
+  freezeRefinementSessionCommandRecipe,
+  type RefinementCellGeometrySnapshot,
+  type RefinementSessionCommandRecipeV1
+} from "./refinement-history.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -94,6 +99,7 @@ export interface RefinementSessionCommand {
   readonly createdNodeIds: readonly number[];
   readonly quality?: Readonly<HexRefinementQualitySummary>;
   readonly twoToOne?: ReadonlyTwoToOneCapabilityReport<CellId>;
+  readonly recipe?: RefinementSessionCommandRecipeV1;
 }
 
 /**
@@ -305,6 +311,7 @@ interface RefinementSessionPatchPlan {
   hiddenCellIds: CellId[];
   quality?: HexRefinementQualitySummary;
   twoToOne?: TwoToOneCapabilityReport<CellId>;
+  recipe: RefinementSessionCommandRecipeV1;
 }
 
 export function createRefinementSession(mesh: ReadonlyMesh): RefinementSession {
@@ -1806,7 +1813,8 @@ function applyRefinementSessionPatchPlan(
     ...(plan.quality ? { quality: plan.quality } : {}),
     ...(plan.twoToOne
       ? { twoToOne: cloneTwoToOneCapabilityReport(plan.twoToOne) }
-      : {})
+      : {}),
+    recipe: plan.recipe
   });
   mutable.nextCommandId += 1;
   mutable.undoStack.push(command);
@@ -2121,6 +2129,11 @@ function refineSessionPatchWithRebuiltTransitionShell(
     ])].sort(compareCellIds),
     preservedFarFieldCellCount: originalActiveLeafIds.size - hiddenCellIds.length
   };
+  const recipe = createRefinementSessionCommandRecipe(
+    session,
+    validation.cellIds,
+    resolvedOptions
+  );
   const command = freezeRefinementSessionCommand({
     id: compoundCommandId,
     kind: "refine",
@@ -2130,7 +2143,8 @@ function refineSessionPatchWithRebuiltTransitionShell(
     reactivatedCellIds,
     createdNodeIds,
     ...(quality ? { quality } : {}),
-    twoToOne
+    twoToOne,
+    recipe
   }) as RefinementSessionCommand & {
     readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
   };
@@ -2947,6 +2961,9 @@ function freezeRefinementSessionCommand(
   const twoToOne = command.twoToOne === undefined
     ? undefined
     : freezeRefinementSessionCapabilityReport(command.twoToOne);
+  const recipe = command.recipe === undefined
+    ? undefined
+    : freezeRefinementSessionCommandRecipe(command.recipe);
   return Object.freeze({
     id: command.id,
     kind: command.kind,
@@ -2960,7 +2977,8 @@ function freezeRefinementSessionCommand(
       : { reactivatedCellIds: Object.freeze([...command.reactivatedCellIds]) }),
     createdNodeIds: Object.freeze([...command.createdNodeIds]),
     ...(quality === undefined ? {} : { quality }),
-    ...(twoToOne === undefined ? {} : { twoToOne })
+    ...(twoToOne === undefined ? {} : { twoToOne }),
+    ...(recipe === undefined ? {} : { recipe })
   });
 }
 
@@ -3224,6 +3242,11 @@ function buildRefinementSessionPatchPlan(
         session.activeLeafIds.size
       )
     : undefined;
+  const recipe = createRefinementSessionCommandRecipe(
+    session,
+    validation.cellIds,
+    options
+  );
 
   return {
     sourceActive,
@@ -3231,10 +3254,70 @@ function buildRefinementSessionPatchPlan(
     replacements,
     sourceReplacements,
     hiddenCellIds: [...parentIds].sort(compareCellIds),
+    recipe,
     ...(quality ? { quality } : {}),
     ...(twoToOne
       ? { twoToOne }
       : {})
+  };
+}
+
+function createRefinementSessionCommandRecipe(
+  session: RefinementSession,
+  selectedCellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions
+): RefinementSessionCommandRecipeV1 {
+  const stableSelectedCellIds = stableCellIds(selectedCellIds);
+  const stableTransitionSupportCellIds = stableCellIds(
+    options.transitionSupportCellIds ?? []
+  );
+  const normalizedCompensation = (
+    options as Partial<ResolvedRefinementSessionPatchOptions>
+  ).normalizedTwoToOneCompensation
+    ?? normalizeTwoToOneCompensation(stableSelectedCellIds.length, {});
+  return freezeRefinementSessionCommandRecipe({
+    version: 1,
+    selectedCellIds: stableSelectedCellIds,
+    selectedCellGeometry: stableSelectedCellIds.map((cellId) =>
+      refinementCellGeometrySnapshot(session, cellId)
+    ),
+    transitionSupportCellIds: stableTransitionSupportCellIds,
+    transitionSupportCellGeometry:
+      stableTransitionSupportCellIds.map((cellId) =>
+        refinementCellGeometrySnapshot(session, cellId)
+      ),
+    options: {
+      includeTransitions: options.includeTransitions ?? true,
+      hexRefinementRatio: options.hexRefinementRatio ?? 3,
+      hexTwoToOneSelectionMode:
+        options.hexTwoToOneSelectionMode ?? "section",
+      hexTwoToOneCompensation: normalizedCompensation,
+      rebuildExistingTransitions:
+        normalizedCompensation.mode === "local-topology",
+      ...(options.mergeTolerance === undefined
+        ? {}
+        : { mergeTolerance: options.mergeTolerance })
+    }
+  });
+}
+
+function refinementCellGeometrySnapshot(
+  session: RefinementSession,
+  cellId: CellId
+): RefinementCellGeometrySnapshot {
+  const cell = requiredCell(session, cellId);
+  return {
+    originalCellId: cell.id,
+    kind: cell.kind,
+    level: cell.level,
+    role: cell.role,
+    points: cell.element.map((nodeId) => {
+      const point = session.nodes[nodeId - 1];
+      if (point === undefined) {
+        throw new Error(`cell ${cellId} references missing node ${nodeId}`);
+      }
+      return [...point];
+    })
   };
 }
 

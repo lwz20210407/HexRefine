@@ -78,6 +78,7 @@ const {
   meshToLsdynaKeyword,
   minimumOrientedHexCornerScaledJacobian,
   hexElementSignedVolume,
+  cloneRefinementSessionCommand,
   cloneTwoToOneCapabilityReport,
   normalizeTwoToOneCompensation,
   planTwoToOneHexRefinement,
@@ -182,6 +183,29 @@ function assertFrozenPlanningDiagnostic(error) {
     error.diagnostic.suggestion.kind = "reduce-level";
   }, TypeError);
   assert.deepEqual(serializeTwoToOnePlanningError(error), serialized);
+}
+
+function assertFrozenRecipe(recipe) {
+  assert.equal(Object.isFrozen(recipe), true);
+  assert.equal(Object.isFrozen(recipe.selectedCellIds), true);
+  assert.equal(Object.isFrozen(recipe.selectedCellGeometry), true);
+  assert.equal(Object.isFrozen(recipe.transitionSupportCellIds), true);
+  assert.equal(Object.isFrozen(recipe.transitionSupportCellGeometry), true);
+  assert.equal(Object.isFrozen(recipe.options), true);
+  assert.equal(
+    Object.isFrozen(recipe.options.hexTwoToOneCompensation),
+    true
+  );
+  for (const geometry of [
+    ...recipe.selectedCellGeometry,
+    ...recipe.transitionSupportCellGeometry
+  ]) {
+    assert.equal(Object.isFrozen(geometry), true);
+    assert.equal(Object.isFrozen(geometry.points), true);
+    for (const point of geometry.points) {
+      assert.equal(Object.isFrozen(point), true);
+    }
+  }
 }
 
 function createMergeCollapsedHexMesh() {
@@ -7468,6 +7492,211 @@ test("Hex 2:1 session preparation can keep a local box core", () => {
   assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
 });
 
+test("refinement command recipe snapshots immutable replay inputs across history paths", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(3, 3, 3));
+  const activeBuild = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const selectedCellId = activeBuildCellIdByElementId(
+    activeBuild,
+    elementIdAt(3, 3, 3, 1, 1, 1)
+  );
+  assert.ok(selectedCellId);
+  const selectedCellIds = [selectedCellId, selectedCellId];
+  const transitionSupportCellIds = ["e3", "e1", "e3"];
+  const compensationValues = {
+    mode: "local-topology",
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 32
+  };
+  const compensationReads = {
+    mode: 0,
+    maxAddedParentLayers: 0,
+    maxAddedParentCount: 0
+  };
+  const compensation = {};
+  for (const key of Object.keys(compensationValues)) {
+    Object.defineProperty(compensation, key, {
+      enumerable: true,
+      get() {
+        compensationReads[key] += 1;
+        return compensationValues[key];
+      },
+      set(value) {
+        compensationValues[key] = value;
+      }
+    });
+  }
+  const options = {
+    includeTransitions: true,
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    hexTwoToOneCompensation: compensation,
+    rebuildExistingTransitions: true,
+    transitionSupportCellIds,
+    mergeTolerance: 1e-9,
+    activeBuild
+  };
+
+  const command = refineSessionPatch(session, selectedCellIds, options);
+  assert.deepEqual(compensationReads, {
+    mode: 1,
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 1
+  });
+  assert.equal(command.recipe.version, 1);
+  assert.deepEqual(command.recipe.selectedCellIds, [selectedCellId]);
+  assert.equal(command.recipe.selectedCellGeometry.length, 1);
+  assert.equal(command.recipe.selectedCellGeometry[0].points.length, 8);
+  assert.deepEqual(command.recipe.transitionSupportCellIds, ["e1", "e3"]);
+  assert.deepEqual(
+    command.recipe.transitionSupportCellGeometry.map(
+      (geometry) => geometry.originalCellId
+    ),
+    ["e1", "e3"]
+  );
+  assert.deepEqual(Object.keys(command.recipe.options).sort(), [
+    "hexRefinementRatio",
+    "hexTwoToOneCompensation",
+    "hexTwoToOneSelectionMode",
+    "includeTransitions",
+    "mergeTolerance",
+    "rebuildExistingTransitions"
+  ]);
+  assert.equal(Object.hasOwn(command.recipe.options, "activeBuild"), false);
+  assert.equal(
+    Object.hasOwn(command.recipe.options, "transitionSupportCellIds"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(command.recipe.options, "normalizedTwoToOneCompensation"),
+    false
+  );
+  assert.deepEqual(command.recipe.options, {
+    includeTransitions: true,
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    hexTwoToOneCompensation: {
+      mode: "local-topology",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 32
+    },
+    rebuildExistingTransitions: true,
+    mergeTolerance: 1e-9
+  });
+  assertFrozenRecipe(command.recipe);
+
+  selectedCellIds.push("mutated-selected");
+  transitionSupportCellIds[0] = "mutated-support";
+  compensation.mode = "none";
+  compensation.maxAddedParentLayers = 99;
+  options.includeTransitions = false;
+  options.hexRefinementRatio = 3;
+  assert.deepEqual(command.recipe.selectedCellIds, [selectedCellId]);
+  assert.deepEqual(command.recipe.transitionSupportCellIds, ["e1", "e3"]);
+  assert.equal(command.recipe.options.includeTransitions, true);
+  assert.equal(command.recipe.options.hexRefinementRatio, 2);
+  assert.deepEqual(command.recipe.options.hexTwoToOneCompensation, {
+    mode: "local-topology",
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 32
+  });
+  assert.deepEqual(compensationReads, {
+    mode: 1,
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 1
+  });
+
+  const clonedCommand = cloneRefinementSessionCommand(command);
+  assert.deepEqual(clonedCommand.recipe, command.recipe);
+  assert.notStrictEqual(clonedCommand.recipe, command.recipe);
+  assert.notStrictEqual(
+    clonedCommand.recipe.selectedCellGeometry,
+    command.recipe.selectedCellGeometry
+  );
+  assert.notStrictEqual(
+    clonedCommand.recipe.selectedCellGeometry[0].points[0],
+    command.recipe.selectedCellGeometry[0].points[0]
+  );
+  assert.notStrictEqual(
+    clonedCommand.recipe.options,
+    command.recipe.options
+  );
+  assertFrozenRecipe(clonedCommand.recipe);
+
+  const structuredCommand = structuredClone(command);
+  assert.deepEqual(structuredCommand.recipe, command.recipe);
+  assert.notStrictEqual(structuredCommand.recipe, command.recipe);
+  assert.notStrictEqual(
+    structuredCommand.recipe.selectedCellGeometry[0].points[0],
+    command.recipe.selectedCellGeometry[0].points[0]
+  );
+  const restoredStructuredCommand =
+    cloneRefinementSessionCommand(structuredCommand);
+  assertFrozenRecipe(restoredStructuredCommand.recipe);
+
+  const structuredSession = structuredClone(session);
+  const structuredSessionRecipe = structuredSession.undoStack[0].recipe;
+  assert.deepEqual(structuredSessionRecipe, command.recipe);
+  assert.notStrictEqual(structuredSessionRecipe, command.recipe);
+  assert.notStrictEqual(
+    structuredSessionRecipe.transitionSupportCellGeometry[0].points[0],
+    command.recipe.transitionSupportCellGeometry[0].points[0]
+  );
+  assertFrozenRecipe(
+    cloneRefinementSessionCommand(structuredSession.undoStack[0]).recipe
+  );
+
+  const undone = undoRefinementSession(session);
+  assert.deepEqual(undone.recipe, command.recipe);
+  assertFrozenRecipe(undone.recipe);
+  const redone = redoRefinementSession(session);
+  assert.deepEqual(redone.recipe, command.recipe);
+  assertFrozenRecipe(redone.recipe);
+});
+
+test("generic session refinement factories do not attach replay recipes", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const command = refineSessionCells(session, ["e1"], refineHexTo8Hex);
+
+  assert.equal(Object.hasOwn(command, "recipe"), false);
+});
+
+test("refinement command recipe survives internal session cloning", () => {
+  const {
+    session,
+    firstRefined,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const originalCommand = session.undoStack.at(-1);
+  assert.ok(originalCommand?.recipe);
+  const originalRecipe = originalCommand.recipe;
+
+  const compoundCommand = refineSessionPatch(session, [candidate], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
+  });
+  const clonedHistoricalCommand = session.undoStack.find(
+    (command) => command.id === originalCommand.id
+  );
+
+  assert.equal(compoundCommand.twoToOne.status, "compensated");
+  assert.ok(compoundCommand.recipe);
+  assert.ok(clonedHistoricalCommand?.recipe);
+  assert.deepEqual(clonedHistoricalCommand.recipe, originalRecipe);
+  assert.notStrictEqual(clonedHistoricalCommand, originalCommand);
+  assert.notStrictEqual(clonedHistoricalCommand.recipe, originalRecipe);
+  assert.notStrictEqual(
+    clonedHistoricalCommand.recipe.selectedCellGeometry[0].points[0],
+    originalRecipe.selectedCellGeometry[0].points[0]
+  );
+  assertFrozenRecipe(clonedHistoricalCommand.recipe);
+  assertFrozenRecipe(compoundCommand.recipe);
+});
+
 test("Hex 2:1 session refinement preserves an explicit L-shaped core", () => {
   const mesh = createHexUnitCubeMesh(5, 5, 2);
   const session = createRefinementSession(mesh);
@@ -9258,8 +9487,37 @@ test("session patch direct refine and preview use the nonuniform full-geometry d
       ? refineSessionPatch(localToleranceSession, ["e1"], localToleranceOptions)
       : previewSessionPatch(localToleranceSession, ["e1"], localToleranceOptions);
 
-    assert.deepEqual(implicitResult, explicitResult);
-    assert.deepEqual(implicitSession, explicitSession);
+    if (operation === "refine") {
+      assert.ok(implicitResult.recipe);
+      assert.ok(explicitResult.recipe);
+      assert.notEqual(
+        implicitResult.recipe.options.mergeTolerance,
+        explicitResult.recipe.options.mergeTolerance
+      );
+      assert.equal(
+        explicitResult.recipe.options.mergeTolerance,
+        explicitOptions.mergeTolerance
+      );
+      assert.ok(
+        Math.abs(
+          implicitResult.recipe.options.mergeTolerance
+          - explicitOptions.mergeTolerance
+        ) <= Number.EPSILON
+      );
+
+      const comparableImplicitResult = structuredClone(implicitResult);
+      comparableImplicitResult.recipe.options.mergeTolerance =
+        explicitResult.recipe.options.mergeTolerance;
+      assert.deepEqual(comparableImplicitResult, explicitResult);
+
+      const comparableImplicitSession = structuredClone(implicitSession);
+      comparableImplicitSession.undoStack[0].recipe.options.mergeTolerance =
+        explicitSession.undoStack[0].recipe.options.mergeTolerance;
+      assert.deepEqual(comparableImplicitSession, explicitSession);
+    } else {
+      assert.deepEqual(implicitResult, explicitResult);
+      assert.deepEqual(implicitSession, explicitSession);
+    }
     assert.notDeepEqual(implicitResult, localToleranceResult);
     assert.equal(Object.hasOwn(implicitOptions, "activeBuild"), false);
     assert.equal(Object.hasOwn(implicitOptions, "mergeTolerance"), false);
