@@ -13,6 +13,9 @@ import {
   planRefinementSessionHistoryTransaction
 } from "../dist/refinement-session.js";
 import {
+  RefinementCellGeometryIndex
+} from "../dist/refinement-cell-geometry.js";
+import {
   pattern3PairTemplateLibrary,
   regularSweepTemplateLibrary
 } from "../dist/two-to-one-sweep-templates.js";
@@ -6319,6 +6322,17 @@ test("refinement session public facade preserves the legacy API and hides histor
     typeof planRefinementSessionHistoryTransaction,
     "function"
   );
+  assert.equal(
+    Object.hasOwn(api, "TransitionHistoryComponent"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(
+      api.refinementHistory,
+      "TransitionHistoryComponent"
+    ),
+    false
+  );
 });
 
 test("flat build preview refine and Hex entries reject invalid explicit merge tolerances", () => {
@@ -10512,6 +10526,12 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
     mergeTolerance: 1e-9
   };
   const sourceSnapshot = structuredClone(session);
+  const originalActiveCellIds =
+    [...session.activeLeafIds].sort();
+  const originalUndoCommandIds =
+    session.undoStack.map((command) => command.id);
+  const originalNextCommandId = session.nextCommandId;
+  const originalNextCellOrdinal = session.nextCellOrdinal;
   const publicError = captureError(() =>
     refineSessionPatch(session, [boundaryCellId], {
       ...requestOptions,
@@ -10521,6 +10541,21 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
   assert.equal(publicError.code, "TWO_TO_ONE_HISTORY_CONFLICT");
   assert.deepEqual(
     publicError.diagnostic.historyCommandIds,
+    [supportCommand.id, replayedCommand.id]
+  );
+  assert.deepEqual(session, sourceSnapshot);
+  const previewError = captureError(() =>
+    previewSessionPatch(session, [boundaryCellId], {
+      ...requestOptions,
+      activeBuild: currentActive
+    })
+  );
+  assert.equal(
+    previewError.code,
+    "TWO_TO_ONE_HISTORY_CONFLICT"
+  );
+  assert.deepEqual(
+    previewError.diagnostic.historyCommandIds,
     [supportCommand.id, replayedCommand.id]
   );
   assert.deepEqual(session, sourceSnapshot);
@@ -10569,7 +10604,15 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
     [supportCommand.id, replayedCommand.id, "cmd-3"]
   );
   assert.equal(transaction.finalSession.redoStack.length, 0);
-  assert.equal(transaction.finalSession.nextCommandId, 4);
+  assert.equal(
+    transaction.finalSession.nextCommandId,
+    originalNextCommandId + 1
+  );
+  assert.equal(
+    transaction.finalSession.nextCellOrdinal
+      > originalNextCellOrdinal,
+    true
+  );
   assert.equal(transaction.command.id, "cmd-3");
   assert.strictEqual(
     transaction.finalSession.undoStack.at(-1),
@@ -10611,6 +10654,20 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
       mergeTolerance: 1e-9
     }
   );
+  const finalActiveCellIds = [
+    ...transaction.finalSession.activeLeafIds
+  ].sort();
+  const finalSortedActiveLeafIds = [
+    ...transaction.finalSession.sortedActiveLeafIds
+  ];
+  const finalNextCommandId =
+    transaction.finalSession.nextCommandId;
+  const finalNextCellOrdinal =
+    transaction.finalSession.nextCellOrdinal;
+  assert.equal(
+    transaction.finalSession.sortedActiveLeafIdsDirty,
+    false
+  );
   assert.deepEqual(transaction.preview.quality, transaction.command.quality);
   assert.deepEqual(
     transaction.preview.twoToOne,
@@ -10629,15 +10686,64 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
     transaction.command.id
   );
   assert.deepEqual(
+    [...transaction.finalSession.activeLeafIds].sort(),
+    originalActiveCellIds
+  );
+  assert.equal(
+    transaction.finalSession.sortedActiveLeafIdsDirty,
+    true
+  );
+  assert.deepEqual(
+    transaction.finalSession.sortedActiveLeafIds,
+    finalSortedActiveLeafIds
+  );
+  assert.equal(
+    transaction.finalSession.nextCommandId,
+    finalNextCommandId
+  );
+  assert.equal(
+    transaction.finalSession.nextCellOrdinal,
+    finalNextCellOrdinal
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack.map(
+      (command) => command.id
+    ),
+    originalUndoCommandIds
+  );
+  assert.deepEqual(
     buildActiveMesh(transaction.finalSession, {
       mergeNodes: true,
       mergeTolerance: 1e-9
     }),
     currentActive.mesh
   );
+  const originalSortedActiveLeafIds = [
+    ...transaction.finalSession.sortedActiveLeafIds
+  ];
   assert.equal(
     redoRefinementSession(transaction.finalSession)?.id,
     transaction.command.id
+  );
+  assert.deepEqual(
+    [...transaction.finalSession.activeLeafIds].sort(),
+    finalActiveCellIds
+  );
+  assert.equal(
+    transaction.finalSession.sortedActiveLeafIdsDirty,
+    true
+  );
+  assert.deepEqual(
+    transaction.finalSession.sortedActiveLeafIds,
+    originalSortedActiveLeafIds
+  );
+  assert.equal(
+    transaction.finalSession.nextCommandId,
+    finalNextCommandId
+  );
+  assert.equal(
+    transaction.finalSession.nextCellOrdinal,
+    finalNextCellOrdinal
   );
   assert.deepEqual(
     buildActiveMesh(transaction.finalSession, {
@@ -10648,46 +10754,182 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
   );
 });
 
-test("Hex 2:1 history transaction planner maps missing and unmatched replay recipes atomically", () => {
-  for (const fault of ["missing-recipe", "unmatched-geometry"]) {
+test("Hex 2:1 history transactions replay none selection and local compensation without recursive fallback", () => {
+  for (const mode of [
+    "none",
+    "selection",
+    "local-topology"
+  ]) {
     const {
       session,
       boundaryCellId,
-      replayedCommand,
+      replayedCommand
+    } = createConsumedSupportHistoryFixture({
+      downstreamCompensationMode: mode
+    });
+    const {
       resolvedOptions,
       faceResolution
-    } = createConsumedSupportHistoryFixture();
-    if (fault === "missing-recipe") {
-      replaceSessionCommand(session, replayedCommand, {
-        recipe: undefined
-      });
-    } else {
-      const recipe = structuredClone(replayedCommand.recipe);
-      recipe.selectedCellGeometry[0].points[0][0] += 10;
-      replaceSessionCommand(session, replayedCommand, {
-        recipe
-      });
-    }
+    } = createHistoryTransactionRequest(session, {
+      hexTwoToOneCompensation: { mode },
+      rebuildExistingTransitions: mode !== "none"
+    });
     const before = structuredClone(session);
+    const originalCommandCount = session.undoStack.length;
+    const nextCommandId = session.nextCommandId;
 
-    const error = captureError(() =>
+    assert.equal(
+      replayedCommand.recipe.options
+        .hexTwoToOneCompensation.mode,
+      mode
+    );
+    assert.equal(
+      replayedCommand.recipe.options
+        .rebuildExistingTransitions,
+      mode !== "none"
+    );
+    assert.equal(replayedCommand.twoToOne, undefined);
+
+    const transaction =
       planRefinementSessionHistoryTransaction(
         session,
         [boundaryCellId],
         resolvedOptions,
         faceResolution
-      )
-    );
+      );
 
-    assert.equal(error instanceof TwoToOnePlanningError, true, fault);
-    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT", fault);
-    assert.deepEqual(
-      error.diagnostic.historyCommandIds,
-      [replayedCommand.id],
-      fault
+    assert.deepEqual(session, before, mode);
+    assert.equal(
+      transaction.finalSession.undoStack.length,
+      originalCommandCount + 1,
+      mode
     );
-    assert.deepEqual(session, before, fault);
+    assert.deepEqual(
+      transaction.finalSession.undoStack
+        .slice(0, originalCommandCount)
+        .map((command) => command.id),
+      session.undoStack.map((command) => command.id),
+      mode
+    );
+    assert.equal(
+      transaction.finalSession.undoStack.some(
+        (command) =>
+          Number(command.id.slice(4)) > nextCommandId
+      ),
+      false,
+      mode
+    );
+    assert.equal(
+      transaction.command.twoToOne.status,
+      "compensated",
+      mode
+    );
+    assert.deepEqual(
+      transaction.command.twoToOne.originalSelectedCellIds,
+      [boundaryCellId],
+      mode
+    );
+    assert.equal(
+      transaction.command.twoToOne.effectiveSelectedCellIds
+        .length,
+      1,
+      mode
+    );
   }
+});
+
+test("Hex 2:1 history transaction planner maps a real generic command without a recipe atomically", () => {
+  const {
+    session,
+    boundaryCellId,
+    replayedCommand,
+    resolvedOptions,
+    faceResolution
+  } = createConsumedSupportHistoryFixture({
+    genericDownstream: true
+  });
+  assert.equal(Object.hasOwn(replayedCommand, "recipe"), false);
+  const before = structuredClone(session);
+
+  const error = captureError(() =>
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    )
+  );
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+  assert.deepEqual(
+    error.diagnostic.historyCommandIds,
+    [replayedCommand.id]
+  );
+  assert.deepEqual(session, before);
+});
+
+test("history recipe remapping converts real zero and duplicate geometry matches to history conflicts", async () => {
+  const directSessionModule = await import(
+    "../dist/refinement-session.js"
+  );
+  const remap =
+    directSessionModule.remapRefinementSessionHistoryRecipeCells;
+  assert.equal(typeof remap, "function");
+
+  const session = createRefinementSession(
+    createHexUnitCubeMesh(1, 1, 1)
+  );
+  const command = refineSessionPatch(session, ["e1"], {
+    hexRefinementRatio: 2,
+    includeTransitions: false
+  });
+  const geometry = command.recipe.selectedCellGeometry[0];
+  const historyCommandIds = [command.id];
+
+  const noMatchError = captureError(() =>
+    remap(
+      new RefinementCellGeometryIndex(1e-9),
+      command.recipe.selectedCellIds,
+      command.recipe.selectedCellGeometry,
+      "selection",
+      historyCommandIds
+    )
+  );
+  assert.equal(noMatchError.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+  assert.deepEqual(
+    noMatchError.diagnostic.conflictingCellIds,
+    ["e1"]
+  );
+  assert.deepEqual(
+    noMatchError.diagnostic.historyCommandIds,
+    historyCommandIds
+  );
+
+  const duplicateIndex = new RefinementCellGeometryIndex(1e-9);
+  duplicateIndex.add("duplicate-a", geometry);
+  duplicateIndex.add("duplicate-b", geometry);
+  const ambiguousError = captureError(() =>
+    remap(
+      duplicateIndex,
+      command.recipe.selectedCellIds,
+      command.recipe.selectedCellGeometry,
+      "selection",
+      historyCommandIds
+    )
+  );
+  assert.equal(
+    ambiguousError.code,
+    "TWO_TO_ONE_HISTORY_CONFLICT"
+  );
+  assert.deepEqual(
+    ambiguousError.diagnostic.conflictingCellIds,
+    ["e1", "duplicate-a", "duplicate-b"]
+  );
+  assert.deepEqual(
+    ambiguousError.diagnostic.historyCommandIds,
+    historyCommandIds
+  );
 });
 
 test("Hex 2:1 history transaction planner preserves an independent later command", () => {
@@ -10772,6 +11014,190 @@ test("Hex 2:1 history transaction planner preserves an independent later command
   assert.deepEqual(
     transaction.finalSession.undoStack[2].recipe,
     independentCommand.recipe
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack
+      .slice(0, -1)
+      .map((command) => command.id),
+    session.undoStack.map((command) => command.id)
+  );
+  assert.deepEqual(
+    independentCommand.createdCellIds
+      .filter((cellId) =>
+        transaction.finalSession.activeLeafIds.has(cellId)
+      )
+      .sort(),
+    independentActiveCellIds.sort()
+  );
+});
+
+test("Hex 2:1 history transaction planning preserves dirty source caches on success and failure", () => {
+  for (const outcome of ["success", "limit"]) {
+    const {
+      session,
+      boundaryCellId,
+      replayedCommand,
+      resolvedOptions,
+      faceResolution
+    } = createConsumedSupportHistoryFixture();
+    assert.equal(
+      undoRefinementSession(session)?.id,
+      replayedCommand.id
+    );
+    assert.equal(
+      redoRefinementSession(session)?.id,
+      replayedCommand.id
+    );
+    assert.equal(session.sortedActiveLeafIdsDirty, true);
+    const before = structuredClone(session);
+
+    if (outcome === "success") {
+      const transaction =
+        planRefinementSessionHistoryTransaction(
+          session,
+          [boundaryCellId],
+          resolvedOptions,
+          faceResolution
+        );
+      assert.ok(transaction.command);
+    } else {
+      const compensation = {
+        mode: "local-topology",
+        maxAddedParentLayers: 1,
+        maxAddedParentCount: 0
+      };
+      const error = captureError(() =>
+        planRefinementSessionHistoryTransaction(
+          session,
+          [boundaryCellId],
+          {
+            ...resolvedOptions,
+            hexTwoToOneCompensation: compensation,
+            normalizedTwoToOneCompensation: compensation
+          },
+          faceResolution
+        )
+      );
+      assert.equal(
+        error.code,
+        "TWO_TO_ONE_COMPENSATION_LIMIT"
+      );
+    }
+
+    assert.deepEqual(session, before, outcome);
+    assert.equal(session.sortedActiveLeafIdsDirty, true);
+  }
+});
+
+test("Hex 2:1 history transaction planning clears only the cloned redo history", () => {
+  const {
+    session,
+    boundaryCellId,
+    supportCommand,
+    replayedCommand
+  } = createConsumedSupportHistoryFixture();
+  assert.equal(
+    undoRefinementSession(session)?.id,
+    replayedCommand.id
+  );
+  const {
+    resolvedOptions,
+    faceResolution
+  } = createHistoryTransactionRequest(session);
+  const before = structuredClone(session);
+
+  const transaction =
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    );
+
+  assert.deepEqual(session, before);
+  assert.deepEqual(
+    session.redoStack.map((command) => command.id),
+    [replayedCommand.id]
+  );
+  assert.deepEqual(
+    transaction.historyClosure.supportCommandIds,
+    [supportCommand.id]
+  );
+  assert.deepEqual(
+    transaction.historyClosure.downstreamCommandIds,
+    []
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack.map(
+      (command) => command.id
+    ),
+    [supportCommand.id, "cmd-3"]
+  );
+  assert.deepEqual(transaction.finalSession.redoStack, []);
+});
+
+test("Hex 2:1 history transaction clones named sets and extra session structure", () => {
+  const {
+    session,
+    boundaryCellId,
+    resolvedOptions,
+    faceResolution
+  } = createConsumedSupportHistoryFixture();
+  session.namedSets = {
+    cellSets: new Map([
+      ["REQUEST", [boundaryCellId]]
+    ]),
+    nodeSets: {
+      CORNER: [1, 2, 3]
+    }
+  };
+  session.extra = {
+    labels: ["source"],
+    nested: {
+      retained: true
+    }
+  };
+  session.baseMesh.namedSets = {
+    BASE: ["e1"]
+  };
+  const before = structuredClone(session);
+
+  const transaction =
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    );
+
+  assert.deepEqual(session, before);
+  assert.deepEqual(
+    transaction.finalSession.namedSets,
+    session.namedSets
+  );
+  assert.deepEqual(
+    transaction.finalSession.extra,
+    session.extra
+  );
+  assert.deepEqual(
+    transaction.finalSession.baseMesh.namedSets,
+    session.baseMesh.namedSets
+  );
+  assert.notStrictEqual(
+    transaction.finalSession.namedSets,
+    session.namedSets
+  );
+  assert.notStrictEqual(
+    transaction.finalSession.namedSets.cellSets,
+    session.namedSets.cellSets
+  );
+  assert.notStrictEqual(
+    transaction.finalSession.extra.nested,
+    session.extra.nested
+  );
+  assert.notStrictEqual(
+    transaction.finalSession.baseMesh.namedSets,
+    session.baseMesh.namedSets
   );
 });
 
@@ -12012,7 +12438,10 @@ function createTransitionShellRegressionFixture() {
   };
 }
 
-function createConsumedSupportHistoryFixture() {
+function createConsumedSupportHistoryFixture({
+  downstreamCompensationMode,
+  genericDownstream = false
+} = {}) {
   const {
     session,
     candidate: boundaryCellId
@@ -12051,14 +12480,47 @@ function createConsumedSupportHistoryFixture() {
       first.distance - second.distance
     )[0]?.cellId;
   assert.ok(centerCellId);
-  const replayedCommand = refineSessionPatch(
+  const replayedCommand = genericDownstream
+    ? refineSessionCells(
+        session,
+        [centerCellId],
+        refineHexTo8Hex
+      )
+    : refineSessionPatch(
+        session,
+        [centerCellId],
+        downstreamCompensationMode === undefined
+          ? {
+              hexRefinementRatio: 2,
+              includeTransitions: false
+            }
+          : {
+              hexRefinementRatio: 2,
+              includeTransitions: false,
+              rebuildExistingTransitions:
+                downstreamCompensationMode !== "none",
+              hexTwoToOneCompensation: {
+                mode: downstreamCompensationMode
+              },
+              mergeTolerance: 1e-9
+            }
+      );
+  const transactionRequest =
+    createHistoryTransactionRequest(session);
+  return {
     session,
-    [centerCellId],
-    {
-      hexRefinementRatio: 2,
-      includeTransitions: false
-    }
-  );
+    boundaryCellId,
+    centerCellId,
+    supportCommand,
+    replayedCommand,
+    ...transactionRequest
+  };
+}
+
+function createHistoryTransactionRequest(
+  session,
+  requestOverrides = {}
+) {
   const activeBuild = buildActiveMeshWithMap(session, {
     mergeNodes: true,
     mergeTolerance: 1e-9
@@ -12067,7 +12529,8 @@ function createConsumedSupportHistoryFixture() {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
-    mergeTolerance: 1e-9
+    mergeTolerance: 1e-9,
+    ...requestOverrides
   };
   const compensation = normalizeTwoToOneCompensation(
     1,
@@ -12076,11 +12539,6 @@ function createConsumedSupportHistoryFixture() {
   const resolution = activeBuild.geometryResolution;
   assert.ok(resolution);
   return {
-    session,
-    boundaryCellId,
-    centerCellId,
-    supportCommand,
-    replayedCommand,
     resolvedOptions: {
       ...requestOptions,
       activeBuild,

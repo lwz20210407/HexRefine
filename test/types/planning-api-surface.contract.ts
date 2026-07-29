@@ -137,3 +137,7 @@ root.refinementSession.planRefinementSessionHistoryTransaction;
 type RootSessionFaceResolution = root.SessionFaceResolution;
 // @ts-expect-error history transaction plan is absent from the public namespace
 type NamespaceHistoryTransactionPlan = root.refinementSession.RefinementSessionHistoryTransactionPlan;
+// @ts-expect-error transition history component discovery is session-internal
+type RootTransitionHistoryComponent = root.TransitionHistoryComponent;
+// @ts-expect-error transition history component discovery is absent from the public history namespace
+type NamespaceTransitionHistoryComponent = root.refinementHistory.TransitionHistoryComponent;

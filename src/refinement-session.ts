@@ -70,7 +70,6 @@ import {
   RefinementHistoryClosureError,
   type RefinementCellGeometrySnapshot,
   type RefinementHistoryClosure,
-  type TransitionHistoryComponent,
   type RefinementSessionCommandRecipeV1
 } from "./refinement-history.js";
 import {
@@ -1573,30 +1572,67 @@ export function refineSessionCells(
   return command;
 }
 
+interface RefinementSessionPatchInternalOptions {
+  readonly allowExistingTransitionShellRebuild: boolean;
+}
+
+const PUBLIC_REFINEMENT_SESSION_PATCH = Object.freeze({
+  allowExistingTransitionShellRebuild: true
+});
+
+const TRANSACTION_REFINEMENT_SESSION_PATCH = Object.freeze({
+  allowExistingTransitionShellRebuild: false
+});
+
 export function refineSessionPatch(
   session: RefinementSession,
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionCommand {
+  return refineSessionPatchInternal(
+    session,
+    cellIds,
+    options,
+    PUBLIC_REFINEMENT_SESSION_PATCH
+  );
+}
+
+function refineSessionPatchInternal(
+  session: RefinementSession,
+  cellIds: CellId[],
+  options: RefinementSessionPatchOptions,
+  internalOptions: RefinementSessionPatchInternalOptions,
+  prebuiltPlan?: RefinementSessionPatchPlan
+): RefinementSessionCommand {
+  if (prebuiltPlan !== undefined) {
+    return applyRefinementSessionPatchPlan(
+      session,
+      prebuiltPlan
+    );
+  }
   const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
   try {
     let plan: RefinementSessionPatchPlan;
     try {
       plan = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
     } catch (error) {
-      const faceResolution = resolveExistingTransitionShellRebuild(
-        session,
-        cellIds,
-        resolvedOptions,
-        error
-      );
-      if (faceResolution !== undefined) {
-        return refineSessionPatchWithRebuiltTransitionShell(
+      if (
+        internalOptions.allowExistingTransitionShellRebuild
+      ) {
+        const faceResolution = resolveExistingTransitionShellRebuild(
           session,
           cellIds,
           resolvedOptions,
-          faceResolution
+          error
         );
+        if (faceResolution !== undefined) {
+          return refineSessionPatchWithRebuiltTransitionShell(
+            session,
+            cellIds,
+            resolvedOptions,
+            faceResolution
+          );
+        }
       }
       throw error;
     }
@@ -1621,6 +1657,8 @@ function resolveSessionPatchOptions(
   diagnosticCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): ResolvedRefinementSessionPatchOptions {
+  const recipeCompensationCarrier =
+    snapshotRecipeCompensationCarrier(options);
   const optionDescriptors = Object.getOwnPropertyDescriptors(options);
   const compensationDescriptor = optionDescriptors.hexTwoToOneCompensation;
   delete optionDescriptors.hexTwoToOneCompensation;
@@ -1745,6 +1783,13 @@ function resolveSessionPatchOptions(
     );
     optionsSnapshot.hexTwoToOneCompensation =
       normalizedTwoToOneCompensation;
+  } else {
+    normalizedTwoToOneCompensation = Object.freeze(
+      normalizeTwoToOneCompensation(
+        new Set(diagnosticCellIds).size,
+        recipeCompensationCarrier
+      )
+    );
   }
   return {
     ...optionsSnapshot,
@@ -2067,7 +2112,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
 
   const retryOptions: RefinementSessionPatchOptions = {
     ...resolvedOptions,
-    rebuildExistingTransitions: false
+    rebuildExistingTransitions: compensation.mode !== "none"
   };
   delete retryOptions.activeBuild;
   delete retryOptions.transitionSupportCellIds;
@@ -2085,8 +2130,11 @@ function refineSessionPatchWithRebuiltTransitionShell(
     supportCommand,
     faceTolerance
   );
-  const rebuiltSupportCommand = applyRefinementSessionPatchPlan(
+  const rebuiltSupportCommand = refineSessionPatchInternal(
     working,
+    rebuiltSupportPlan.hiddenCellIds,
+    retryOptions,
+    TRANSACTION_REFINEMENT_SESSION_PATCH,
     rebuiltSupportPlan
   );
   const rebuiltSelectedCellsByGeometry = new Map<string, CellId>();
@@ -2103,7 +2151,12 @@ function refineSessionPatchWithRebuiltTransitionShell(
     }
     return cellId;
   });
-  refineSessionPatch(working, remappedCellIds, retryOptions);
+  refineSessionPatchInternal(
+    working,
+    remappedCellIds,
+    retryOptions,
+    TRANSACTION_REFINEMENT_SESSION_PATCH
+  );
 
   const createdCellIds = [...working.cells.keys()]
     .filter((cellId) => !originalCellIds.has(cellId))
@@ -2380,8 +2433,11 @@ export function planRefinementSessionHistoryTransaction(
     supportCommand,
     faceResolution.tolerance
   );
-  applyRefinementSessionPatchPlan(
+  refineSessionPatchInternal(
     working,
+    rebuiltSupportPlan.hiddenCellIds,
+    retryOptions,
+    TRANSACTION_REFINEMENT_SESSION_PATCH,
     rebuiltSupportPlan
   );
 
@@ -2405,16 +2461,17 @@ export function planRefinementSessionHistoryTransaction(
     buildActiveRefinementGeometryIndex(
       currentPlanningWorking,
       faceResolution.tolerance
-    );
-  const preReplayRemappedCellIds = remapHistoryRecipeCells(
-    preReplayCurrentGeometryIndex,
-    currentRecipe.selectedCellIds,
-    currentRecipe.selectedCellGeometry,
-    "current selection",
-    closureCommandIds
   );
+  const preReplayRemappedCellIds =
+    remapRefinementSessionHistoryRecipeCells(
+      preReplayCurrentGeometryIndex,
+      currentRecipe.selectedCellIds,
+      currentRecipe.selectedCellGeometry,
+      "current selection",
+      closureCommandIds
+    );
   const preReplayTransitionSupportCellIds =
-    remapHistoryRecipeCells(
+    remapRefinementSessionHistoryRecipeCells(
       preReplayCurrentGeometryIndex,
       currentRecipe.transitionSupportCellIds,
       currentRecipe.transitionSupportCellGeometry,
@@ -2428,6 +2485,16 @@ export function planRefinementSessionHistoryTransaction(
       currentRecipe.options,
       preReplayTransitionSupportCellIds
     )
+  );
+  refineSessionPatchInternal(
+    currentPlanningWorking,
+    preReplayRemappedCellIds,
+    replaySessionPatchOptions(
+      currentRecipe.options,
+      preReplayTransitionSupportCellIds
+    ),
+    TRANSACTION_REFINEMENT_SESSION_PATCH,
+    currentPatchPlan
   );
 
   for (const commandId of historyClosure.downstreamCommandIds) {
@@ -2450,27 +2517,35 @@ export function planRefinementSessionHistoryTransaction(
       working,
       faceResolution.tolerance
     );
-    const selectedCellIds = remapHistoryRecipeCells(
+    const selectedCellIds =
+      remapRefinementSessionHistoryRecipeCells(
       geometryIndex,
       recipe.selectedCellIds,
       recipe.selectedCellGeometry,
       "selection",
       [commandId]
     );
-    const transitionSupportCellIds = remapHistoryRecipeCells(
+    const transitionSupportCellIds =
+      remapRefinementSessionHistoryRecipeCells(
       geometryIndex,
       recipe.transitionSupportCellIds,
       recipe.transitionSupportCellGeometry,
       "transition support",
       [commandId]
     );
-    refineSessionPatch(
+    const replayedCommand = refineSessionPatchInternal(
       working,
       selectedCellIds,
       replaySessionPatchOptions(
         recipe.options,
         transitionSupportCellIds
-      )
+      ),
+      TRANSACTION_REFINEMENT_SESSION_PATCH
+    );
+    assertHistoryReplayCommandEquivalent(
+      historicalCommand,
+      replayedCommand,
+      commandId
     );
   }
 
@@ -2479,15 +2554,16 @@ export function planRefinementSessionHistoryTransaction(
       working,
       faceResolution.tolerance
     );
-  const remappedCellIds = remapHistoryRecipeCells(
-    currentGeometryIndex,
-    currentRecipe.selectedCellIds,
-    currentRecipe.selectedCellGeometry,
-    "current selection",
-    closureCommandIds
-  );
+  const remappedCellIds =
+    remapRefinementSessionHistoryRecipeCells(
+      currentGeometryIndex,
+      currentRecipe.selectedCellIds,
+      currentRecipe.selectedCellGeometry,
+      "current selection",
+      closureCommandIds
+    );
   const remappedTransitionSupportCellIds =
-    remapHistoryRecipeCells(
+    remapRefinementSessionHistoryRecipeCells(
       currentGeometryIndex,
       currentRecipe.transitionSupportCellIds,
       currentRecipe.transitionSupportCellGeometry,
@@ -2515,8 +2591,14 @@ export function planRefinementSessionHistoryTransaction(
       closureCommandIds
     );
   }
-  applyRefinementSessionPatchPlan(
+  refineSessionPatchInternal(
     working,
+    remappedCellIds,
+    replaySessionPatchOptions(
+      currentRecipe.options,
+      remappedTransitionSupportCellIds
+    ),
+    TRANSACTION_REFINEMENT_SESSION_PATCH,
     rebaseRefinementSessionPatchPlan(
       working,
       currentPatchPlan,
@@ -2630,6 +2712,14 @@ export function planRefinementSessionHistoryTransaction(
     finalSession: working,
     preview
   };
+}
+
+interface TransitionHistoryComponent {
+  readonly selectedCellIds: readonly CellId[];
+  readonly supportCellIds: readonly CellId[];
+  readonly collidingTransitionParentIds: readonly CellId[];
+  readonly componentCellIds: ReadonlySet<CellId>;
+  readonly boundaryCellIds: readonly CellId[];
 }
 
 interface DiscoveredTransitionHistoryComponent {
@@ -2831,7 +2921,7 @@ function buildActiveRefinementGeometryIndex(
   return index;
 }
 
-function remapHistoryRecipeCells(
+export function remapRefinementSessionHistoryRecipeCells(
   index: RefinementCellGeometryIndex,
   originalCellIds: readonly CellId[],
   geometries: readonly RefinementCellGeometrySnapshot[],
@@ -2967,12 +3057,49 @@ function replaySessionPatchOptions(
       maxAddedParentCount:
         options.hexTwoToOneCompensation.maxAddedParentCount
     },
-    rebuildExistingTransitions: false,
+    rebuildExistingTransitions:
+      options.rebuildExistingTransitions,
     transitionSupportCellIds: [...transitionSupportCellIds],
     ...(options.mergeTolerance === undefined
       ? {}
       : { mergeTolerance: options.mergeTolerance })
   };
+}
+
+function assertHistoryReplayCommandEquivalent(
+  historicalCommand: RefinementSessionCommand,
+  replayedCommand: RefinementSessionCommand,
+  historyCommandId: string
+): void {
+  const historicalReport = historicalCommand.twoToOne;
+  const replayedReport = replayedCommand.twoToOne;
+  const historicalActiveCreatedCount =
+    historicalCommand.activeCreatedCellIds?.length
+    ?? historicalCommand.createdCellIds.length;
+  const replayedActiveCreatedCount =
+    replayedCommand.activeCreatedCellIds?.length
+    ?? replayedCommand.createdCellIds.length;
+  const reportIsEquivalent =
+    historicalReport === undefined
+      ? replayedReport === undefined
+      : replayedReport !== undefined
+        && replayedReport.status === historicalReport.status
+        && replayedReport.originalSelectedCellIds.length
+          === historicalReport.originalSelectedCellIds.length
+        && replayedReport.effectiveSelectedCellIds.length
+          === historicalReport.effectiveSelectedCellIds.length;
+  if (
+    !reportIsEquivalent
+    || replayedCommand.createdCellIds.length
+      !== historicalCommand.createdCellIds.length
+    || replayedActiveCreatedCount !== historicalActiveCreatedCount
+  ) {
+    throw historyConflict(
+      `history command ${historyCommandId} replay changed its refinement output`,
+      historicalCommand.recipe?.selectedCellIds ?? [],
+      [historyCommandId]
+    );
+  }
 }
 
 function buildCompletedRebuiltSupportPlan(
@@ -3728,7 +3855,12 @@ function refinementCellGeometryKey(
 }
 
 function cloneRefinementSession(session: RefinementSession): MutableRefinementSession {
+  const clonedExtras = cloneEnumerableExtraProperties(
+    session,
+    REFINEMENT_SESSION_STATE_KEYS
+  );
   return {
+    ...clonedExtras,
     revision: session.revision,
     baseMesh: cloneMesh(session.baseMesh),
     kind: session.kind,
@@ -3749,8 +3881,24 @@ function cloneRefinementSession(session: RefinementSession): MutableRefinementSe
     redoStack: session.redoStack.map(cloneRefinementSessionCommand),
     nextCommandId: session.nextCommandId,
     nextCellOrdinal: session.nextCellOrdinal
-  };
+  } as MutableRefinementSession;
 }
+
+const REFINEMENT_SESSION_STATE_KEYS = new Set([
+  "revision",
+  "baseMesh",
+  "kind",
+  "nodes",
+  "cells",
+  "activeLeafIds",
+  "sortedActiveLeafIds",
+  "sortedActiveLeafIdsDirty",
+  "activeLeafIdsByNodeKey",
+  "undoStack",
+  "redoStack",
+  "nextCommandId",
+  "nextCellOrdinal"
+]);
 
 export function cloneRefinementSessionCommand(
   command: RefinementSessionCommand
@@ -4094,7 +4242,10 @@ function createRefinementSessionCommandRecipe(
   const normalizedCompensation = (
     options as Partial<ResolvedRefinementSessionPatchOptions>
   ).normalizedTwoToOneCompensation
-    ?? normalizeTwoToOneCompensation(stableSelectedCellIds.length, {});
+    ?? normalizeTwoToOneCompensation(
+      stableSelectedCellIds.length,
+      snapshotRecipeCompensationCarrier(options)
+    );
   return freezeRefinementSessionCommandRecipe({
     version: 1,
     selectedCellIds: stableSelectedCellIds,
@@ -4119,6 +4270,72 @@ function createRefinementSessionCommandRecipe(
         : { mergeTolerance: options.mergeTolerance })
     }
   });
+}
+
+function snapshotRecipeCompensationCarrier(
+  options: RefinementSessionPatchOptions
+): TwoToOneCompensationCarrier {
+  const carrier: TwoToOneCompensationCarrier = {};
+  const optionDescriptors =
+    Object.getOwnPropertyDescriptors(options);
+  const rebuildDescriptor =
+    optionDescriptors.rebuildExistingTransitions;
+  if (
+    rebuildDescriptor !== undefined
+    && "value" in rebuildDescriptor
+    && typeof rebuildDescriptor.value === "boolean"
+  ) {
+    carrier.rebuildExistingTransitions =
+      rebuildDescriptor.value;
+  }
+  const compensationDescriptor =
+    optionDescriptors.hexTwoToOneCompensation;
+  if (
+    compensationDescriptor === undefined
+    || !("value" in compensationDescriptor)
+    || typeof compensationDescriptor.value !== "object"
+    || compensationDescriptor.value === null
+  ) {
+    return carrier;
+  }
+  const compensationDescriptors =
+    Object.getOwnPropertyDescriptors(
+      compensationDescriptor.value
+    );
+  const compensation: TwoToOneCompensationOptions = {};
+  const modeDescriptor = compensationDescriptors.mode;
+  if (modeDescriptor !== undefined) {
+    if (
+      !("value" in modeDescriptor)
+      || (
+        modeDescriptor.value !== "none"
+        && modeDescriptor.value !== "selection"
+        && modeDescriptor.value !== "local-topology"
+      )
+    ) {
+      return carrier;
+    }
+    compensation.mode = modeDescriptor.value;
+  }
+  for (const key of [
+    "maxAddedParentLayers",
+    "maxAddedParentCount"
+  ] as const) {
+    const descriptor = compensationDescriptors[key];
+    if (descriptor === undefined) {
+      continue;
+    }
+    if (
+      !("value" in descriptor)
+      || !Number.isSafeInteger(descriptor.value)
+      || descriptor.value < 0
+    ) {
+      return carrier;
+    }
+    compensation[key] = descriptor.value;
+  }
+  carrier.hexTwoToOneCompensation = compensation;
+  return carrier;
 }
 
 function refinementCellGeometrySnapshot(
@@ -4673,11 +4890,29 @@ function baseCellId(elementId: number): CellId {
 }
 
 function cloneMesh(mesh: ReadonlyMesh): Mesh {
+  const clonedExtras = cloneEnumerableExtraProperties(
+    mesh,
+    new Set(["nodes", "elements", "kind"])
+  );
   const clone = {
+    ...clonedExtras,
     nodes: mesh.nodes.map((point) => [...point]),
     elements: mesh.elements.map((element) => [...element])
   };
-  return mesh.kind ? { ...clone, kind: mesh.kind } : clone;
+  return (mesh.kind ? { ...clone, kind: mesh.kind } : clone) as Mesh;
+}
+
+function cloneEnumerableExtraProperties(
+  source: object,
+  excludedKeys: ReadonlySet<string>
+): Record<string, unknown> {
+  const extras: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!excludedKeys.has(key)) {
+      extras[key] = structuredClone(value);
+    }
+  }
+  return extras;
 }
 
 function mutableMeshView(mesh: ReadonlyMesh): Mesh {
