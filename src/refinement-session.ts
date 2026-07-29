@@ -70,6 +70,7 @@ import {
   RefinementHistoryClosureError,
   type RefinementCellGeometrySnapshot,
   type RefinementHistoryClosure,
+  type RefinementHistoryIndex,
   type RefinementSessionCommandRecipeV1
 } from "./refinement-history.js";
 import {
@@ -2250,54 +2251,54 @@ export function planRefinementSessionHistoryTransaction(
     validation.cellIds,
     resolvedOptions
   );
-  const discovered = discoverTransitionHistoryComponent(
-    session,
-    validation.cellIds,
-    validation.level,
-    resolvedOptions,
-    faceResolution.tolerance
-  );
+  const supportDiscovery =
+    discoverTransitionHistorySupportComponent(
+      session,
+      validation.cellIds,
+      validation.level,
+      faceResolution.tolerance
+    );
   const historyIndex = buildRefinementHistoryIndex(
     session.undoStack,
     [...session.cells.keys()]
   );
-  let historyClosure: RefinementHistoryClosure;
-  try {
-    historyClosure = buildRefinementHistoryClosure(
+  const preliminaryHistoryClosure =
+    buildSessionHistoryClosure(
       historyIndex,
-      {
-        seedCellIds: [
-          ...discovered.component.supportCellIds,
-          ...discovered.component.collidingTransitionParentIds
-        ],
-        componentCellIds:
-          discovered.component.componentCellIds
-      }
+      supportDiscovery.component,
+      supportDiscovery.component.supportCellIds
     );
-  } catch (error) {
-    if (error instanceof RefinementHistoryClosureError) {
-      throw historyConflict(
-        error.message,
-        error.cellIds,
-        error.commandIds
-      );
-    }
-    throw error;
-  }
-  if (
-    historyClosure.supportCommandIds.length !== 1
-    || historyClosure.supportCommandIds[0]
-      !== discovered.supportCommand.id
-  ) {
-    throw historyConflict(
-      "history transaction requires one supporting root command",
-      discovered.component.supportCellIds,
-      [
-        discovered.supportCommand.id,
-        ...historyClosure.supportCommandIds
-      ]
-    );
-  }
+  assertEligibleDownstreamHistoryCommands(
+    historyIndex,
+    preliminaryHistoryClosure
+  );
+  assertSingleHistorySupportCommand(
+    preliminaryHistoryClosure,
+    supportDiscovery
+  );
+  const discovered = completeTransitionHistoryComponent(
+    session,
+    supportDiscovery,
+    validation.level,
+    resolvedOptions,
+    faceResolution.tolerance
+  );
+  const historyClosure = buildSessionHistoryClosure(
+    historyIndex,
+    discovered.component,
+    [
+      ...discovered.component.supportCellIds,
+      ...discovered.component.collidingTransitionParentIds
+    ]
+  );
+  assertEligibleDownstreamHistoryCommands(
+    historyIndex,
+    historyClosure
+  );
+  assertSingleHistorySupportCommand(
+    historyClosure,
+    discovered
+  );
 
   const working = cloneRefinementSession(session);
   const originalUndoStack = working.undoStack.slice();
@@ -2543,8 +2544,12 @@ export function planRefinementSessionHistoryTransaction(
       TRANSACTION_REFINEMENT_SESSION_PATCH
     );
     assertHistoryReplayCommandEquivalent(
+      session,
+      working,
       historicalCommand,
       replayedCommand,
+      selectedCellIds,
+      transitionSupportCellIds,
       commandId
     );
   }
@@ -2727,11 +2732,10 @@ interface DiscoveredTransitionHistoryComponent {
   readonly supportCommand: RefinementSessionCommand;
 }
 
-function discoverTransitionHistoryComponent(
+function discoverTransitionHistorySupportComponent(
   session: RefinementSession,
   selectedCellIds: readonly CellId[],
   selectedLevel: number,
-  options: RefinementSessionPatchOptions,
   tolerance: number
 ): DiscoveredTransitionHistoryComponent {
   const supportCommand = findSingleSupportCommand(
@@ -2756,20 +2760,6 @@ function discoverTransitionHistoryComponent(
     selectedCellIds,
     tolerance
   );
-  const collidingTransitionParentIds =
-    findCollidingTransitionParentIds(
-      session,
-      selectedCellIds,
-      supportCellIds,
-      selectedLevel,
-      options,
-      tolerance
-    );
-  if (collidingTransitionParentIds.length === 0) {
-    throw new Error(
-      "history transaction could not isolate colliding transition parents"
-    );
-  }
   const supportParentIds = stableCellIds(
     supportCellIds.map((cellId) => {
       const parentId = requiredCell(session, cellId).parentId;
@@ -2798,7 +2788,6 @@ function discoverTransitionHistoryComponent(
     ...selectedCellIds,
     ...supportCellIds,
     ...supportParentIds,
-    ...collidingTransitionParentIds,
     ...boundaryCellIds
   ]) {
     collectRefinementCellDescendants(
@@ -2814,13 +2803,170 @@ function discoverTransitionHistoryComponent(
         stableCellIds(selectedCellIds)
       ),
       supportCellIds: Object.freeze([...supportCellIds]),
-      collidingTransitionParentIds: Object.freeze([
-        ...collidingTransitionParentIds
-      ]),
+      collidingTransitionParentIds: Object.freeze([]),
       componentCellIds,
       boundaryCellIds: Object.freeze(boundaryCellIds)
     }
   };
+}
+
+function completeTransitionHistoryComponent(
+  session: RefinementSession,
+  discovered: DiscoveredTransitionHistoryComponent,
+  selectedLevel: number,
+  options: RefinementSessionPatchOptions,
+  tolerance: number
+): DiscoveredTransitionHistoryComponent {
+  const collidingTransitionParentIds =
+    findCollidingTransitionParentIds(
+      session,
+      discovered.component.selectedCellIds,
+      discovered.component.supportCellIds,
+      selectedLevel,
+      options,
+      tolerance
+    );
+  if (collidingTransitionParentIds.length === 0) {
+    throw new Error(
+      "history transaction could not isolate colliding transition parents"
+    );
+  }
+  const componentCellIds = new Set(
+    discovered.component.componentCellIds
+  );
+  for (const cellId of collidingTransitionParentIds) {
+    collectRefinementCellDescendants(
+      session,
+      cellId,
+      componentCellIds
+    );
+  }
+  return {
+    supportCommand: discovered.supportCommand,
+    component: {
+      ...discovered.component,
+      collidingTransitionParentIds: Object.freeze([
+        ...collidingTransitionParentIds
+      ]),
+      componentCellIds
+    }
+  };
+}
+
+function buildSessionHistoryClosure(
+  historyIndex: RefinementHistoryIndex,
+  component: TransitionHistoryComponent,
+  seedCellIds: readonly CellId[]
+): RefinementHistoryClosure {
+  try {
+    return buildRefinementHistoryClosure(
+      historyIndex,
+      {
+        seedCellIds,
+        componentCellIds: component.componentCellIds
+      }
+    );
+  } catch (error) {
+    if (error instanceof RefinementHistoryClosureError) {
+      throw historyConflict(
+        error.message,
+        error.cellIds,
+        error.commandIds
+      );
+    }
+    throw error;
+  }
+}
+
+function assertSingleHistorySupportCommand(
+  historyClosure: RefinementHistoryClosure,
+  discovered: DiscoveredTransitionHistoryComponent
+): void {
+  if (
+    historyClosure.supportCommandIds.length === 1
+    && historyClosure.supportCommandIds[0]
+      === discovered.supportCommand.id
+  ) {
+    return;
+  }
+  throw historyConflict(
+    "history transaction requires one supporting root command",
+    discovered.component.supportCellIds,
+    [
+      discovered.supportCommand.id,
+      ...historyClosure.supportCommandIds
+    ]
+  );
+}
+
+export function isRefinementSessionHistoryCommandRecipeReplayEligible(
+  command: RefinementSessionCommand
+): boolean {
+  if ((command.reactivatedCellIds?.length ?? 0) > 0) {
+    return false;
+  }
+  if (
+    command.activeCreatedCellIds !== undefined
+    && !sameCellIdSet(
+      command.activeCreatedCellIds,
+      command.createdCellIds
+    )
+  ) {
+    return false;
+  }
+  return !command.twoToOne?.actions.some(
+    (action) => action.kind === "transition-shell-rebuild"
+  );
+}
+
+function assertEligibleDownstreamHistoryCommands(
+  historyIndex: RefinementHistoryIndex,
+  historyClosure: RefinementHistoryClosure
+): void {
+  for (const commandId of historyClosure.downstreamCommandIds) {
+    const command = historyIndex.commandById.get(commandId);
+    if (command === undefined) {
+      throw new Error(
+        `history closure references unknown downstream command ${commandId}`
+      );
+    }
+    if (
+      isRefinementSessionHistoryCommandRecipeReplayEligible(
+        command
+      )
+    ) {
+      continue;
+    }
+    throw historyConflict(
+      `history command ${commandId} cannot be replayed from its recipe without compound effects`,
+      historyReplayCompoundEffectCellIds(command),
+      [commandId]
+    );
+  }
+}
+
+function historyReplayCompoundEffectCellIds(
+  command: RefinementSessionCommand
+): CellId[] {
+  const activeCreatedCellIds = new Set(
+    command.activeCreatedCellIds ?? command.createdCellIds
+  );
+  const inactiveCreatedCellIds = command.createdCellIds.filter(
+    (cellId) => !activeCreatedCellIds.has(cellId)
+  );
+  const shellEffectCellIds = command.twoToOne?.actions.flatMap(
+    (action) => action.kind === "transition-shell-rebuild"
+      ? [
+          ...action.addedParentCellIds,
+          ...action.replacedTransitionCellIds
+        ]
+      : []
+  ) ?? [];
+  return stableCellIds([
+    ...(command.reactivatedCellIds ?? []),
+    ...inactiveCreatedCellIds,
+    ...shellEffectCellIds
+  ]);
 }
 
 function collectRefinementCellDescendants(
@@ -2882,29 +3028,77 @@ function reverseRefinementHistoryCommands(
       cell.hidden = false;
       addActiveLeafCellId(session, cellId);
     }
-    assertNoActiveRefinementCellHasActiveDescendant(session);
+    assertActivatedRefinementSessionCellsHaveNoActiveRelations(
+      session,
+      command.hiddenCellIds
+    );
   }
 }
 
-function assertNoActiveRefinementCellHasActiveDescendant(
-  session: RefinementSession
+export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
+  session: Pick<RefinementSession, "cells">,
+  activatedCellIds: readonly CellId[]
 ): void {
-  for (const cell of session.cells.values()) {
-    if (!cell.active || cell.hidden) {
-      continue;
+  const visitedAncestorIds = new Set<CellId>();
+  const visitedDescendantIds = new Set<CellId>();
+  for (const activatedCellId of new Set(activatedCellIds)) {
+    const activatedCell = requiredHierarchyCell(
+      session,
+      activatedCellId
+    );
+    if (!activatedCell.active || activatedCell.hidden) {
+      throw new Error(
+        `reversed hidden cell ${activatedCellId} is not active`
+      );
     }
-    const pending = [...cell.children];
+
+    let descendantId = activatedCellId;
+    let ancestorId = activatedCell.parentId;
+    while (ancestorId !== undefined) {
+      if (visitedAncestorIds.has(ancestorId)) {
+        break;
+      }
+      const ancestor = requiredHierarchyCell(session, ancestorId);
+      if (ancestor.active && !ancestor.hidden) {
+        throw new Error(
+          `active cell ${ancestorId} has active descendant ${descendantId}`
+        );
+      }
+      visitedAncestorIds.add(ancestorId);
+      descendantId = ancestorId;
+      ancestorId = ancestor.parentId;
+    }
+
+    const pending = [...activatedCell.children];
     while (pending.length > 0) {
       const descendantId = pending.pop()!;
-      const descendant = requiredCell(session, descendantId);
+      if (visitedDescendantIds.has(descendantId)) {
+        continue;
+      }
+      visitedDescendantIds.add(descendantId);
+      const descendant = requiredHierarchyCell(
+        session,
+        descendantId
+      );
       if (descendant.active && !descendant.hidden) {
         throw new Error(
-          `active cell ${cell.id} has active descendant ${descendantId}`
+          `active cell ${activatedCellId} has active descendant ${descendantId}`
         );
       }
       pending.push(...descendant.children);
     }
   }
+}
+
+function requiredHierarchyCell(
+  session: Pick<RefinementSession, "cells">,
+  cellId: CellId
+): RefinementSessionCell {
+  const cell = session.cells.get(cellId);
+  if (cell === undefined) {
+    throw new Error(`unknown refinement cell ${cellId}`);
+  }
+  return cell;
 }
 
 function buildActiveRefinementGeometryIndex(
@@ -3067,32 +3261,77 @@ function replaySessionPatchOptions(
 }
 
 function assertHistoryReplayCommandEquivalent(
+  historicalSession: RefinementSession,
+  replaySession: RefinementSession,
   historicalCommand: RefinementSessionCommand,
   replayedCommand: RefinementSessionCommand,
+  remappedSelectedCellIds: readonly CellId[],
+  remappedTransitionSupportCellIds: readonly CellId[],
   historyCommandId: string
 ): void {
-  const historicalReport = historicalCommand.twoToOne;
-  const replayedReport = replayedCommand.twoToOne;
-  const historicalActiveCreatedCount =
-    historicalCommand.activeCreatedCellIds?.length
-    ?? historicalCommand.createdCellIds.length;
-  const replayedActiveCreatedCount =
-    replayedCommand.activeCreatedCellIds?.length
-    ?? replayedCommand.createdCellIds.length;
-  const reportIsEquivalent =
-    historicalReport === undefined
-      ? replayedReport === undefined
-      : replayedReport !== undefined
-        && replayedReport.status === historicalReport.status
-        && replayedReport.originalSelectedCellIds.length
-          === historicalReport.originalSelectedCellIds.length
-        && replayedReport.effectiveSelectedCellIds.length
-          === historicalReport.effectiveSelectedCellIds.length;
+  const historicalRecipe = historicalCommand.recipe;
+  const replayedRecipe = replayedCommand.recipe;
+  const recipeIsEquivalent =
+    historicalRecipe !== undefined
+    && replayedRecipe !== undefined
+    && replayedRecipe.version === historicalRecipe.version
+    && sameReplayRecipeOptions(
+      historicalRecipe.options,
+      replayedRecipe.options
+    )
+    && sameCellIdSet(
+      replayedRecipe.selectedCellIds,
+      remappedSelectedCellIds
+    )
+    && sameCellIdSet(
+      replayedRecipe.transitionSupportCellIds,
+      remappedTransitionSupportCellIds
+    )
+    && sameGeometrySnapshotStructures(
+      historicalRecipe.selectedCellGeometry,
+      replayedRecipe.selectedCellGeometry
+    )
+    && sameGeometrySnapshotStructures(
+      historicalRecipe.transitionSupportCellGeometry,
+      replayedRecipe.transitionSupportCellGeometry
+    );
+  const deltaIsEquivalent =
+    sameCommandCellStructures(
+      historicalSession,
+      historicalCommand.hiddenCellIds,
+      replaySession,
+      replayedCommand.hiddenCellIds
+    )
+    && sameCommandCellStructures(
+      historicalSession,
+      historicalCommand.createdCellIds,
+      replaySession,
+      replayedCommand.createdCellIds
+    )
+    && sameCommandCellStructures(
+      historicalSession,
+      historicalCommand.activeCreatedCellIds
+        ?? historicalCommand.createdCellIds,
+      replaySession,
+      replayedCommand.activeCreatedCellIds
+        ?? replayedCommand.createdCellIds
+    )
+    && sameCommandCellStructures(
+      historicalSession,
+      historicalCommand.reactivatedCellIds ?? [],
+      replaySession,
+      replayedCommand.reactivatedCellIds ?? []
+    );
   if (
-    !reportIsEquivalent
-    || replayedCommand.createdCellIds.length
-      !== historicalCommand.createdCellIds.length
-    || replayedActiveCreatedCount !== historicalActiveCreatedCount
+    replayedCommand.kind !== historicalCommand.kind
+    || !recipeIsEquivalent
+    || !deltaIsEquivalent
+    || !sameHistoryCapabilityReportStructure(
+      historicalSession,
+      historicalCommand.twoToOne,
+      replaySession,
+      replayedCommand.twoToOne
+    )
   ) {
     throw historyConflict(
       `history command ${historyCommandId} replay changed its refinement output`,
@@ -3100,6 +3339,170 @@ function assertHistoryReplayCommandEquivalent(
       [historyCommandId]
     );
   }
+}
+
+function sameReplayRecipeOptions(
+  first: RefinementSessionCommandRecipeV1["options"],
+  second: RefinementSessionCommandRecipeV1["options"]
+): boolean {
+  return first.includeTransitions === second.includeTransitions
+    && first.hexRefinementRatio === second.hexRefinementRatio
+    && first.hexTwoToOneSelectionMode
+      === second.hexTwoToOneSelectionMode
+    && first.rebuildExistingTransitions
+      === second.rebuildExistingTransitions
+    && Object.is(first.mergeTolerance, second.mergeTolerance)
+    && first.hexTwoToOneCompensation.mode
+      === second.hexTwoToOneCompensation.mode
+    && first.hexTwoToOneCompensation.maxAddedParentLayers
+      === second.hexTwoToOneCompensation.maxAddedParentLayers
+    && first.hexTwoToOneCompensation.maxAddedParentCount
+      === second.hexTwoToOneCompensation.maxAddedParentCount;
+}
+
+function sameGeometrySnapshotStructures(
+  first: readonly RefinementCellGeometrySnapshot[],
+  second: readonly RefinementCellGeometrySnapshot[]
+): boolean {
+  return sameSortedStrings(
+    first.map(refinementGeometrySnapshotStructure),
+    second.map(refinementGeometrySnapshotStructure)
+  );
+}
+
+function refinementGeometrySnapshotStructure(
+  geometry: RefinementCellGeometrySnapshot
+): string {
+  const points = geometry.points.map((point) =>
+    point.map((coordinate) =>
+      coordinate.toPrecision(17)
+    ).join(",")
+  ).sort();
+  return JSON.stringify({
+    kind: geometry.kind,
+    level: geometry.level,
+    role: geometry.role,
+    points
+  });
+}
+
+function sameCommandCellStructures(
+  firstSession: RefinementSession,
+  firstCellIds: readonly CellId[],
+  secondSession: RefinementSession,
+  secondCellIds: readonly CellId[]
+): boolean {
+  return sameSortedStrings(
+    firstCellIds.map((cellId) =>
+      refinementCellReplayStructure(firstSession, cellId)
+    ),
+    secondCellIds.map((cellId) =>
+      refinementCellReplayStructure(secondSession, cellId)
+    )
+  );
+}
+
+function refinementCellReplayStructure(
+  session: RefinementSession,
+  cellId: CellId
+): string {
+  const cell = requiredCell(session, cellId);
+  const parent = cell.parentId === undefined
+    ? undefined
+    : requiredCell(session, cell.parentId);
+  return JSON.stringify({
+    kind: cell.kind,
+    level: cell.level,
+    role: cell.role,
+    template: cell.template ?? null,
+    geometry: refinementCellGeometryKey(session, cell),
+    parent: parent === undefined
+      ? null
+      : {
+          kind: parent.kind,
+          level: parent.level,
+          role: parent.role,
+          geometry: refinementCellGeometryKey(
+            session,
+            parent
+          )
+        }
+  });
+}
+
+function sameHistoryCapabilityReportStructure(
+  firstSession: RefinementSession,
+  first:
+    ReadonlyTwoToOneCapabilityReport<CellId> | undefined,
+  secondSession: RefinementSession,
+  second:
+    ReadonlyTwoToOneCapabilityReport<CellId> | undefined
+): boolean {
+  if (first === undefined || second === undefined) {
+    return first === second;
+  }
+  if (
+    first.status !== second.status
+    || first.topologyClass !== second.topologyClass
+    || first.actions.length !== second.actions.length
+  ) {
+    return false;
+  }
+  if (
+    !sameCommandCellStructures(
+      firstSession,
+      first.originalSelectedCellIds,
+      secondSession,
+      second.originalSelectedCellIds
+    )
+    || !sameCommandCellStructures(
+      firstSession,
+      first.effectiveSelectedCellIds,
+      secondSession,
+      second.effectiveSelectedCellIds
+    )
+    || !sameCommandCellStructures(
+      firstSession,
+      first.affectedComponentCellIds,
+      secondSession,
+      second.affectedComponentCellIds
+    )
+  ) {
+    return false;
+  }
+  return first.actions.every((firstAction, index) => {
+    const secondAction = second.actions[index];
+    return secondAction !== undefined
+      && firstAction.kind === secondAction.kind
+      && firstAction.reason === secondAction.reason
+      && firstAction.templateId === secondAction.templateId
+      && sameCommandCellStructures(
+        firstSession,
+        firstAction.addedParentCellIds,
+        secondSession,
+        secondAction.addedParentCellIds
+      )
+      && sameCommandCellStructures(
+        firstSession,
+        firstAction.replacedTransitionCellIds,
+        secondSession,
+        secondAction.replacedTransitionCellIds
+      );
+  });
+}
+
+function sameSortedStrings(
+  first: readonly string[],
+  second: readonly string[]
+): boolean {
+  if (first.length !== second.length) {
+    return false;
+  }
+  const firstSorted = [...first].sort();
+  const secondSorted = [...second].sort();
+  return firstSorted.every(
+    (value, index) => value === secondSorted[index]
+  );
 }
 
 function buildCompletedRebuiltSupportPlan(

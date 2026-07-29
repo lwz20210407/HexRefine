@@ -10838,6 +10838,243 @@ test("Hex 2:1 history transactions replay none selection and local compensation 
   }
 });
 
+test("Hex 2:1 history transaction planner rejects a real Stage A compound downstream atomically", () => {
+  const {
+    session,
+    boundaryCellId,
+    compoundCommand,
+    resolvedOptions,
+    faceResolution
+  } = createCompoundDownstreamHistoryFixture();
+  assert.equal(
+    compoundCommand.twoToOne.actions.some(
+      (action) => action.kind === "transition-shell-rebuild"
+    ),
+    true
+  );
+  assert.notDeepEqual(
+    [...compoundCommand.activeCreatedCellIds].sort(),
+    [...compoundCommand.createdCellIds].sort()
+  );
+  const publicHistoryClosure = api.buildRefinementHistoryClosure(
+    api.buildRefinementHistoryIndex(
+      session.undoStack,
+      [...session.cells.keys()]
+    ),
+    {
+      seedCellIds: compoundCommand.recipe.selectedCellIds,
+      componentCellIds: new Set(session.cells.keys())
+    }
+  );
+  assert.deepEqual(
+    publicHistoryClosure.downstreamCommandIds,
+    [compoundCommand.id]
+  );
+  const before = structuredClone(session);
+
+  const error = captureError(() =>
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    )
+  );
+
+  assert.equal(error instanceof TwoToOnePlanningError, true);
+  assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+  assert.match(
+    error.message,
+    new RegExp(
+      `${compoundCommand.id} cannot be replayed from its recipe without compound effects`
+    )
+  );
+  assert.deepEqual(
+    error.diagnostic.historyCommandIds,
+    [compoundCommand.id]
+  );
+  assert.deepEqual(session, before);
+});
+
+test("history replay eligibility accepts ordinary and selection-compensated commands", async () => {
+  const directSessionModule = await import(
+    "../dist/refinement-session.js"
+  );
+  const isEligible =
+    directSessionModule
+      .isRefinementSessionHistoryCommandRecipeReplayEligible;
+  assert.equal(typeof isEligible, "function");
+
+  const ordinarySession = createRefinementSession(
+    createHexUnitCubeMesh(1, 1, 1)
+  );
+  const ordinaryCommand = refineSessionPatch(
+    ordinarySession,
+    ["e1"],
+    {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }
+  );
+  assert.equal(isEligible(ordinaryCommand), true);
+
+  const selectionSession = createRefinementSession(
+    createHexUnitCubeMesh(2, 2, 5)
+  );
+  const selectionCommand = refineSessionPatch(
+    selectionSession,
+    ["e5", "e6", "e7", "e8"],
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: {
+        mode: "selection"
+      }
+    }
+  );
+  assert.equal(selectionCommand.twoToOne.status, "compensated");
+  assert.equal(isEligible(selectionCommand), true);
+
+  const {
+    compoundCommand
+  } = createCompoundDownstreamHistoryFixture();
+  assert.equal(isEligible(compoundCommand), false);
+});
+
+test("Hex 2:1 history transaction planner replays three ordinary downstream commands", () => {
+  const {
+    session,
+    boundaryCellId,
+    replayedCommand
+  } = createConsumedSupportHistoryFixture();
+  const secondDownstream = refineSessionPatch(
+    session,
+    [firstActiveSelectedCreatedCell(session, replayedCommand)],
+    {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }
+  );
+  const thirdDownstream = refineSessionPatch(
+    session,
+    [firstActiveSelectedCreatedCell(session, secondDownstream)],
+    {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }
+  );
+  const {
+    resolvedOptions,
+    faceResolution
+  } = createHistoryTransactionRequest(session);
+  const before = structuredClone(session);
+
+  const transaction =
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    );
+
+  assert.deepEqual(session, before);
+  assert.deepEqual(
+    transaction.historyClosure.downstreamCommandIds,
+    [
+      replayedCommand.id,
+      secondDownstream.id,
+      thirdDownstream.id
+    ]
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack
+      .slice(0, -1)
+      .map((command) => command.id),
+    session.undoStack.map((command) => command.id)
+  );
+});
+
+test("activated-cell hierarchy checks do not scan unrelated far-field cells", async () => {
+  const directSessionModule = await import(
+    "../dist/refinement-session.js"
+  );
+  const assertActivatedCells =
+    directSessionModule
+      .assertActivatedRefinementSessionCellsHaveNoActiveRelations;
+  assert.equal(typeof assertActivatedCells, "function");
+
+  const cells = new Map([
+    ["root", {
+      id: "root",
+      active: false,
+      hidden: true,
+      children: ["activated"]
+    }],
+    ["activated", {
+      id: "activated",
+      parentId: "root",
+      active: true,
+      hidden: false,
+      children: ["descendant"]
+    }],
+    ["descendant", {
+      id: "descendant",
+      parentId: "activated",
+      active: false,
+      hidden: true,
+      children: []
+    }]
+  ]);
+  let unrelatedCellReads = 0;
+  for (let ordinal = 0; ordinal < 5000; ordinal += 1) {
+    const id = `far-${ordinal}`;
+    cells.set(id, new Proxy({
+      id,
+      active: true,
+      hidden: false,
+      children: []
+    }, {
+      get(target, property, receiver) {
+        unrelatedCellReads += 1;
+        return Reflect.get(target, property, receiver);
+      }
+    }));
+  }
+  const originalValues = cells.values.bind(cells);
+  let valuesCallCount = 0;
+  Object.defineProperty(cells, "values", {
+    value() {
+      valuesCallCount += 1;
+      return originalValues();
+    }
+  });
+  const session = { cells };
+
+  assert.doesNotThrow(() =>
+    assertActivatedCells(session, ["activated"])
+  );
+  assert.equal(valuesCallCount, 0);
+  assert.equal(unrelatedCellReads, 0);
+
+  cells.get("root").active = true;
+  cells.get("root").hidden = false;
+  assert.throws(
+    () => assertActivatedCells(session, ["activated"]),
+    /active cell root has active descendant activated/
+  );
+  cells.get("root").active = false;
+  cells.get("root").hidden = true;
+  cells.get("descendant").active = true;
+  cells.get("descendant").hidden = false;
+  assert.throws(
+    () => assertActivatedCells(session, ["activated"]),
+    /active cell activated has active descendant descendant/
+  );
+  assert.equal(valuesCallCount, 0);
+  assert.equal(unrelatedCellReads, 0);
+});
+
 test("Hex 2:1 history transaction planner maps a real generic command without a recipe atomically", () => {
   const {
     session,
@@ -12515,6 +12752,40 @@ function createConsumedSupportHistoryFixture({
     replayedCommand,
     ...transactionRequest
   };
+}
+
+function createCompoundDownstreamHistoryFixture() {
+  const {
+    session,
+    firstRefined,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const compoundCommand = refineSessionPatch(
+    session,
+    [candidate],
+    transitionShellRegressionOptions(firstRefined)
+  );
+  const boundaryCellId = activeBoundaryCoreCellIds(session)
+    .find((cellId) =>
+      compoundCommand.createdCellIds.includes(cellId)
+    );
+  assert.ok(boundaryCellId);
+  return {
+    session,
+    boundaryCellId,
+    compoundCommand,
+    ...createHistoryTransactionRequest(session)
+  };
+}
+
+function firstActiveSelectedCreatedCell(session, command) {
+  const cellId = command.createdCellIds.find((candidate) => {
+    const cell = session.cells.get(candidate);
+    return session.activeLeafIds.has(candidate)
+      && cell?.role === "selected";
+  });
+  assert.ok(cellId);
+  return cellId;
 }
 
 function createHistoryTransactionRequest(
