@@ -6620,7 +6620,52 @@ test("exact node merging keeps coincident 3D and 4D Q1 nodes distinct", () => {
 
   assert.equal(merged.mesh.nodes.length, 8);
   assert.deepEqual(merged.mesh.elements, mesh.elements);
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 0
+  });
+  assert.equal(active.mesh.nodes.length, 8);
+  assert.deepEqual(active.mesh.elements, mesh.elements);
   assert.deepEqual(mesh, snapshot);
+  assert.deepEqual(session, before);
+});
+
+test("exact node merging compares every coordinate of 4D Q1 nodes", () => {
+  const mesh = {
+    kind: "Q1",
+    nodes: [
+      [0, 0, 0, 7],
+      [1, 0, 0, 7],
+      [1, 1, 0, 7],
+      [0, 1, 0, 7],
+      [0, 0, 0, 8],
+      [1, 0, 0, 8],
+      [1, 1, 0, 8],
+      [0, 1, 0, 8]
+    ],
+    elements: [
+      [1, 2, 3, 4],
+      [5, 6, 7, 8]
+    ]
+  };
+  const snapshot = structuredClone(mesh);
+
+  const merged = mergeCoincidentNodesWithMap(mesh, 0);
+  const session = createRefinementSession(mesh);
+  const before = structuredClone(session);
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 0
+  });
+
+  assert.equal(merged.mesh.nodes.length, 8);
+  assert.deepEqual(merged.mesh.elements, mesh.elements);
+  assert.equal(active.mesh.nodes.length, 8);
+  assert.deepEqual(active.mesh.elements, mesh.elements);
+  assert.deepEqual(mesh, snapshot);
+  assert.deepEqual(session, before);
 });
 
 test("node merging rejects empty unreferenced coordinate arrays", () => {
@@ -6640,7 +6685,7 @@ test("node merging rejects empty unreferenced coordinate arrays", () => {
 
   assert.equal(error instanceof Error, true);
   assert.match(error.message, /node id 5/i);
-  assert.match(error.message, /non-empty coordinate array/i);
+  assert.match(error.message, /coordinates must be a non-empty array/i);
   assert.deepEqual(mesh, snapshot);
 });
 
@@ -6667,6 +6712,29 @@ for (const [label, coordinate] of [
     assert.equal(error instanceof Error, true);
     assert.match(error.message, /node id 5/i);
     assert.match(error.message, /axis 0/i);
+    assert.deepEqual(mesh, snapshot);
+  });
+}
+
+for (const tolerance of [0, 0.1]) {
+  test(`node merging rejects sparse outer nodes before edge inspection at tolerance ${tolerance}`, () => {
+    const nodes = createHexUnitCubeMesh(1, 1, 1).nodes.map((point) => [...point]);
+    nodes.length = 9;
+    const mesh = {
+      kind: "H1",
+      nodes,
+      elements: [[1, 1, 1, 1, 1, 1, 1, 1]]
+    };
+    const snapshot = structuredClone(mesh);
+
+    const error = captureError(() =>
+      mergeCoincidentNodesWithMap(mesh, tolerance)
+    );
+
+    assert.equal(
+      error.message,
+      "mesh node id 9 coordinates must be a non-empty array"
+    );
     assert.deepEqual(mesh, snapshot);
   });
 }

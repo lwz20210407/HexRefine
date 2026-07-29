@@ -52,6 +52,7 @@ import {
   mergeBucketKey,
   type MergeBucketLayout
 } from "./merge-buckets-internal.js";
+import { pointEquals } from "./vector.js";
 import {
   assertHexPatchQualitySummary,
   assertHexRefinementQualityReport,
@@ -583,7 +584,11 @@ function buildMergedActiveMeshDirect(
         let nodeIndex: number | undefined;
         if (exactNodeIndexByKey) {
           const exactKey = exactActiveMergeKey(point);
-          nodeIndex = exactNodeIndexByKey.get(exactKey);
+          const exactCandidateIndex = exactNodeIndexByKey.get(exactKey);
+          nodeIndex = exactCandidateIndex !== undefined
+            && pointEquals(nodes[exactCandidateIndex]!, point, 0)
+            ? exactCandidateIndex
+            : undefined;
           if (nodeIndex === undefined) {
             nodeIndex = nodes.length;
             nodes.push([...point]);
@@ -1207,9 +1212,10 @@ function addActiveMergeBucket(
 }
 
 function exactActiveMergeKey(point: Point): string {
-  return point.length <= 2
-    ? `${point[0] ?? 0}:${point[1] ?? 0}`
-    : `${point[0] ?? 0}:${point[1] ?? 0}:${point[2] ?? 0}`;
+  const coordinates = point.map((coordinate) =>
+    Object.is(coordinate, -0) ? 0 : coordinate
+  );
+  return `${point.length}|${coordinates.join(":")}`;
 }
 
 export function activeBuildCellIdByElementId(build: ActiveMeshBuildResult, elementId: number): CellId | undefined {

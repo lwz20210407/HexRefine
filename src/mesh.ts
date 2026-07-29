@@ -228,11 +228,12 @@ export function validateMergeTolerance(tolerance: unknown): asserts tolerance is
 }
 
 function assertFiniteMergeNodes(nodes: readonly Point[]): void {
-  nodes.forEach((node, index) => {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
     const nodeId = index + 1;
     if (!Array.isArray(node) || node.length === 0) {
       throw new TypeError(
-        `mesh node id ${nodeId} must have a non-empty coordinate array`
+        `mesh node id ${nodeId} coordinates must be a non-empty array`
       );
     }
     for (let axis = 0; axis < node.length; axis += 1) {
@@ -243,7 +244,7 @@ function assertFiniteMergeNodes(nodes: readonly Point[]): void {
         );
       }
     }
-  });
+  }
 }
 
 export function validateRequiredMergeTolerance(
