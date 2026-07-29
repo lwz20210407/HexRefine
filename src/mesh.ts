@@ -145,6 +145,7 @@ export function mergeCoincidentNodes(mesh: Mesh, tolerance: number): Mesh {
 
 export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): NodeMergeResult {
   validateRequiredMergeTolerance(tolerance);
+  assertFiniteMergeNodes(mesh.nodes);
   assertMergeToleranceBelowFinalEdgeLimit(mesh, tolerance);
   const nodes: Point[] = [];
   const oldToNewArray: number[] = new Array(mesh.nodes.length + 1);
@@ -156,7 +157,11 @@ export function mergeCoincidentNodesWithMap(mesh: Mesh, tolerance: number): Node
   mesh.nodes.forEach((node, oldIndex) => {
     const inputNodeId = oldIndex + 1;
     const exactKey = exactMergeKey(node);
-    const exactIndex = exactNodeIndexByKey.get(exactKey);
+    const exactCandidateIndex = exactNodeIndexByKey.get(exactKey);
+    const exactIndex = exactCandidateIndex !== undefined
+      && pointEquals(nodes[exactCandidateIndex]!, node, 0)
+      ? exactCandidateIndex
+      : undefined;
     const existingIndex = exactIndex ?? findCoincidentNodeIndex(
       node,
       nodes,
@@ -220,6 +225,25 @@ export function validateMergeTolerance(tolerance: unknown): asserts tolerance is
     return;
   }
   validateRequiredMergeTolerance(tolerance);
+}
+
+function assertFiniteMergeNodes(nodes: readonly Point[]): void {
+  nodes.forEach((node, index) => {
+    const nodeId = index + 1;
+    if (!Array.isArray(node) || node.length === 0) {
+      throw new TypeError(
+        `mesh node id ${nodeId} must have a non-empty coordinate array`
+      );
+    }
+    for (let axis = 0; axis < node.length; axis += 1) {
+      const coordinate = node[axis];
+      if (coordinate === undefined || !Number.isFinite(coordinate)) {
+        throw new RangeError(
+          `mesh node id ${nodeId} axis ${axis} coordinate must be finite`
+        );
+      }
+    }
+  });
 }
 
 export function validateRequiredMergeTolerance(
@@ -299,9 +323,10 @@ function addNodeToMergeBucket(
 }
 
 function exactMergeKey(node: Point): string {
-  return node.length <= 2
-    ? `${node[0] ?? 0}:${node[1] ?? 0}`
-    : `${node[0] ?? 0}:${node[1] ?? 0}:${node[2] ?? 0}`;
+  const coordinates = node.map((coordinate) =>
+    Object.is(coordinate, -0) ? 0 : coordinate
+  );
+  return `${node.length}|${coordinates.join(":")}`;
 }
 
 export function minElementEdgeLength(mesh: ReadonlyMesh): number {

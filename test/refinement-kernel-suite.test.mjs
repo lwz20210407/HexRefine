@@ -5963,6 +5963,19 @@ test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", (
     [selectedElementId]
   );
   assert.deepEqual(
+    hexPlan.replacements.map(({ elementId, role, templateCode }) => ({
+      elementId,
+      role,
+      templateCode
+    })),
+    [{
+      elementId: selectedElementId,
+      role: "selected",
+      templateCode: 8
+    }]
+  );
+  assert.equal(hexPlan.replacements[0].refinement.elements.length, 8);
+  assert.deepEqual(
     defaultPlan.replacements.map((replacement) => replacement.elementId),
     [selectedElementId]
   );
@@ -5970,7 +5983,6 @@ test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", (
     sortedPlan.replacements.map((replacement) => replacement.elementId),
     [selectedElementId, selectedElementId + 1]
   );
-  assert.deepEqual(hexPlan.twoToOne, defaultPlan.twoToOne);
   assert.deepEqual(
     buildDefaultRefinementReplacements(mesh, selected, {
       hexRefinementRatio: 2,
@@ -5978,16 +5990,19 @@ test("Hex 2:1 direct flat plan without transitions deduplicates selected ids", (
     }),
     defaultPlan.replacements
   );
-  assert.deepEqual(preview.twoToOne, {
-    status: "direct",
-    topologyClass: "mapped",
-    originalSelectedCellIds: [selectedElementId],
-    effectiveSelectedCellIds: [selectedElementId],
-    actions: [],
-    affectedComponentCellIds: [selectedElementId],
-    preservedFarFieldCellCount: mesh.elements.length - 1
-  });
-  assert.deepEqual(result.twoToOne, preview.twoToOne);
+  assert.equal(hexPlan.twoToOne, undefined);
+  assert.equal(defaultPlan.twoToOne, undefined);
+  assert.equal(preview.twoToOne, undefined);
+  assert.equal(result.twoToOne, undefined);
+  assert.equal(
+    result.cellData.filter((cell) =>
+      cell.parentElementId === selectedElementId
+      && cell.role === "selected"
+      && cell.templateCode === 8
+    ).length,
+    8
+  );
+  assert.equal(checkNoHangingNodes(result.mesh).ok, false);
 });
 
 test("Hex 2:1 normalized trusted paths match public and classified entries", () => {
@@ -6580,6 +6595,81 @@ test("session explicit-tolerance merging preserves point dimensions", () => {
   assert.deepEqual(mesh, snapshot);
   assert.deepEqual(session, before);
 });
+
+test("exact node merging keeps coincident 3D and 4D Q1 nodes distinct", () => {
+  const mesh = {
+    kind: "Q1",
+    nodes: [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 0],
+      [0, 1, 0],
+      [0, 0, 0, 7],
+      [1, 0, 0, 7],
+      [1, 1, 0, 7],
+      [0, 1, 0, 7]
+    ],
+    elements: [
+      [1, 2, 3, 4],
+      [5, 6, 7, 8]
+    ]
+  };
+  const snapshot = structuredClone(mesh);
+
+  const merged = mergeCoincidentNodesWithMap(mesh, 0);
+
+  assert.equal(merged.mesh.nodes.length, 8);
+  assert.deepEqual(merged.mesh.elements, mesh.elements);
+  assert.deepEqual(mesh, snapshot);
+});
+
+test("node merging rejects empty unreferenced coordinate arrays", () => {
+  const mesh = {
+    kind: "Q1",
+    nodes: [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+      []
+    ],
+    elements: [[1, 2, 3, 4]]
+  };
+  const snapshot = structuredClone(mesh);
+  const error = captureError(() => mergeCoincidentNodesWithMap(mesh, 0));
+
+  assert.equal(error instanceof Error, true);
+  assert.match(error.message, /node id 5/i);
+  assert.match(error.message, /non-empty coordinate array/i);
+  assert.deepEqual(mesh, snapshot);
+});
+
+for (const [label, coordinate] of [
+  ["NaN", Number.NaN],
+  ["Infinity", Number.POSITIVE_INFINITY],
+  ["-Infinity", Number.NEGATIVE_INFINITY]
+]) {
+  test(`node merging rejects unreferenced ${label} coordinates before merge inspection`, () => {
+    const mesh = {
+      kind: "Q1",
+      nodes: [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+        [coordinate, 2]
+      ],
+      elements: [[1, 2, 3, 4]]
+    };
+    const snapshot = structuredClone(mesh);
+    const error = captureError(() => mergeCoincidentNodesWithMap(mesh, 0));
+
+    assert.equal(error instanceof Error, true);
+    assert.match(error.message, /node id 5/i);
+    assert.match(error.message, /axis 0/i);
+    assert.deepEqual(mesh, snapshot);
+  });
+}
 
 test("final conformance failures use structured conformance diagnostics", () => {
   const options = {

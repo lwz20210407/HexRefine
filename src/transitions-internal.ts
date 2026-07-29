@@ -4,8 +4,7 @@ import { alignHexEdgeToVertical, alignHexFaceToBottom, sharedNodes } from "./top
 import { refineHexTo13Hex, refineHexTo27Hex, refineHexTo5Hex, refineHexTo8Hex } from "./templates.js";
 import { planTwoToOneHexRefinement } from "./two-to-one-planner.js";
 import {
-  type TwoToOneCapabilityReport,
-  type TwoToOneTopologyClass
+  type TwoToOneCapabilityReport
 } from "./two-to-one-capability.js";
 import {
   normalizeTwoToOneSelection,
@@ -56,10 +55,7 @@ function buildHexClassifiedPlanFromNormalizedSelection(
         8
       )
     );
-    return {
-      replacements,
-      twoToOne: buildDirectReport(mesh, selected, replacements, "mapped")
-    };
+    return { replacements };
   }
   const planned = planTwoToOneHexRefinement(mesh, selected, {
     ...options,
@@ -90,26 +86,6 @@ export function buildThreeToOneHexClassifiedReplacements(
     replacements.push(...hexForcedSupportTransitionReplacements(mesh, selected, options.transitionSupportElementIds ?? [], replacements, mergeTolerance));
   }
   return replacements;
-}
-
-function buildDirectReport(
-  mesh: Mesh,
-  selected: NormalizedTwoToOneSelection,
-  replacements: readonly ClassifiedHexReplacement[],
-  topologyClass: TwoToOneTopologyClass
-): TwoToOneCapabilityReport<number> {
-  const affectedElementIds = uniqueSorted(
-    replacements.map((replacement) => replacement.elementId)
-  );
-  return {
-    status: "direct",
-    topologyClass,
-    originalSelectedCellIds: [...selected],
-    effectiveSelectedCellIds: [...selected],
-    actions: [],
-    affectedComponentCellIds: affectedElementIds,
-    preservedFarFieldCellCount: mesh.elements.length - affectedElementIds.length
-  };
 }
 
 export function hexFaceTransitionReplacements(
