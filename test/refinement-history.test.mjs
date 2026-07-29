@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import test from "node:test";
+import ts from "typescript";
 
 import {
+  buildRefinementHistoryClosure,
+  buildRefinementHistoryIndex,
   cloneRefinementSessionCommandRecipe,
-  freezeRefinementSessionCommandRecipe
+  freezeRefinementSessionCommandRecipe,
+  RefinementHistoryClosureError
 } from "../dist/index.js";
 
 function sampleGeometry(originalCellId, offset = 0) {
@@ -50,6 +55,77 @@ function sampleRecipe() {
       rebuildExistingTransitions: true,
       mergeTolerance: 1e-9
     }
+  };
+}
+
+function command(
+  id,
+  hiddenCellIds,
+  createdCellIds,
+  {
+    recipe = true,
+    reactivatedCellIds = []
+  } = {}
+) {
+  return {
+    id,
+    kind: "refine",
+    hiddenCellIds,
+    createdCellIds,
+    ...(reactivatedCellIds.length === 0
+      ? {}
+      : { reactivatedCellIds }),
+    createdNodeIds: [],
+    ...(recipe
+      ? {
+          recipe: {
+            version: 1,
+            selectedCellIds: hiddenCellIds,
+            selectedCellGeometry: hiddenCellIds.map((cellId) =>
+              sampleGeometry(cellId)
+            ),
+            transitionSupportCellIds: [],
+            transitionSupportCellGeometry: [],
+            options: {
+              includeTransitions: true,
+              hexRefinementRatio: 2,
+              hexTwoToOneSelectionMode: "local",
+              hexTwoToOneCompensation: {
+                mode: "local-topology",
+                maxAddedParentLayers: 1,
+                maxAddedParentCount: 32
+              },
+              rebuildExistingTransitions: true
+            }
+          }
+        }
+      : {})
+  };
+}
+
+function sampleHistory() {
+  const commands = [
+    command("cmd-1", ["e1"], ["e1/1", "e1/2"]),
+    command("cmd-2", ["e1/1"], ["e1/1/1"]),
+    command("cmd-3", ["e9"], ["e9/1"])
+  ];
+  const knownCellIds = [
+    "e1",
+    "e1/1",
+    "e1/2",
+    "e1/1/1",
+    "e9",
+    "e9/1"
+  ];
+  return {
+    commands,
+    knownCellIds,
+    componentCellIds: new Set([
+      "e1",
+      "e1/1",
+      "e1/2",
+      "e1/1/1"
+    ])
   };
 }
 
@@ -214,5 +290,336 @@ test("recipe cloning rejects empty geometry and point coordinate arrays", () => 
       message:
         "geometry for cell e2 point 1 must contain at least one coordinate"
     }
+  );
+});
+
+test("history index records stable creator and unique consumer provenance", () => {
+  const { commands, knownCellIds } = sampleHistory();
+  commands[1].reactivatedCellIds = ["e1/1"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+
+  assert.deepEqual(
+    index.commands.map((entry) => entry.id),
+    ["cmd-1", "cmd-2", "cmd-3"]
+  );
+  assert.equal(index.commandById.get("cmd-2"), index.commands[1]);
+  assert.equal(index.creatorCommandIdByCellId.get("e1/1"), "cmd-1");
+  assert.deepEqual(
+    index.consumerCommandIdsByCellId.get("e1/1"),
+    ["cmd-2"]
+  );
+  assert.equal(index.commandOrdinalById.get("cmd-3"), 2);
+});
+
+test("history closure reaches the minimum dependent fixed point", () => {
+  const { commands, knownCellIds, componentCellIds } = sampleHistory();
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["e1/1"],
+    componentCellIds
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["cmd-1"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["cmd-2"]);
+  assert.deepEqual(
+    closure.affectedInputCellIds,
+    ["e1", "e1/1"]
+  );
+  assert.deepEqual(closure.preservedCommandIds, ["cmd-3"]);
+  assert.deepEqual(closure.boundaryCellIds, ["e1"]);
+});
+
+test("history closure output is independent of seed order", () => {
+  const { commands, knownCellIds, componentCellIds } = sampleHistory();
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const forward = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["e1/1", "e1/2"],
+    componentCellIds
+  });
+  const reverse = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["e1/2", "e1/1"],
+    componentCellIds
+  });
+
+  assert.deepEqual(reverse, forward);
+});
+
+test("history index rejects duplicate command ids before other provenance", () => {
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      command("cmd-1", ["e1"], ["e1/1"]),
+      command("cmd-1", ["e2"], ["e2/1"])
+    ], ["e1", "e1/1", "e2", "e2/1"]),
+    { message: "duplicate refinement command id cmd-1" }
+  );
+});
+
+test("history index rejects a cell with multiple creators", () => {
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      command("cmd-1", ["e1"], ["shared"]),
+      command("cmd-2", ["e2"], ["shared"])
+    ], ["e1", "e2", "shared"]),
+    {
+      message:
+        "cell shared has multiple creators: cmd-1, cmd-2"
+    }
+  );
+});
+
+test("history index rejects missing hidden and reactivated references", () => {
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      command("cmd-hidden", ["missing-hidden"], ["e1/1"])
+    ], ["e1/1"]),
+    {
+      message:
+        "command cmd-hidden references missing cell missing-hidden"
+    }
+  );
+
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      command("cmd-reactivated", ["e1"], ["e1/1"], {
+        reactivatedCellIds: ["missing-reactivated"]
+      })
+    ], ["e1", "e1/1"]),
+    {
+      message:
+        "command cmd-reactivated references missing cell missing-reactivated"
+    }
+  );
+});
+
+test("history closure reports a missing seed cell deterministically", () => {
+  const { commands, knownCellIds, componentCellIds } = sampleHistory();
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+
+  assert.throws(
+    () => buildRefinementHistoryClosure(index, {
+      seedCellIds: ["missing-seed", "missing-seed"],
+      componentCellIds
+    }),
+    (error) => {
+      assert.equal(error instanceof RefinementHistoryClosureError, true);
+      assert.equal(error.name, "RefinementHistoryClosureError");
+      assert.equal(
+        error.message,
+        "history closure references missing seed cells"
+      );
+      assert.deepEqual(error.commandIds, []);
+      assert.deepEqual(error.cellIds, ["missing-seed"]);
+      assert.equal(Object.isFrozen(error.commandIds), true);
+      assert.equal(Object.isFrozen(error.cellIds), true);
+      return true;
+    }
+  );
+});
+
+test("history closure rejects a command that crosses the component", () => {
+  const commands = [
+    command("cmd-crossing", ["e1"], ["e1/1", "e9/1"]),
+    command("cmd-local", ["e1/1"], ["e1/1/1"])
+  ];
+  const index = buildRefinementHistoryIndex(commands, [
+    "e1",
+    "e1/1",
+    "e1/1/1",
+    "e9/1"
+  ]);
+
+  assert.throws(
+    () => buildRefinementHistoryClosure(index, {
+      seedCellIds: ["e1/1"],
+      componentCellIds: new Set(["e1", "e1/1", "e1/1/1"])
+    }),
+    (error) => {
+      assert.equal(error instanceof RefinementHistoryClosureError, true);
+      assert.equal(
+        error.message,
+        "history closure crosses the component boundary"
+      );
+      assert.deepEqual(error.commandIds, ["cmd-crossing"]);
+      assert.deepEqual(error.cellIds, ["e9/1"]);
+      return true;
+    }
+  );
+});
+
+test("history closure rejects every included command without a recipe", () => {
+  const commands = [
+    command("cmd-1", ["e1"], ["e1/1"]),
+    command("cmd-2", ["e1/1"], ["e1/1/1"], { recipe: false })
+  ];
+  const index = buildRefinementHistoryIndex(commands, [
+    "e1",
+    "e1/1",
+    "e1/1/1"
+  ]);
+
+  assert.throws(
+    () => buildRefinementHistoryClosure(index, {
+      seedCellIds: ["e1/1"],
+      componentCellIds: new Set(["e1", "e1/1", "e1/1/1"])
+    }),
+    (error) => {
+      assert.equal(error instanceof RefinementHistoryClosureError, true);
+      assert.equal(
+        error.message,
+        "history closure includes commands without replay recipes"
+      );
+      assert.deepEqual(error.commandIds, ["cmd-2"]);
+      assert.deepEqual(error.cellIds, []);
+      return true;
+    }
+  );
+});
+
+test("history index snapshots command and consumer arrays", () => {
+  const source = command(
+    "cmd-shared",
+    ["e1", "e2"],
+    ["e1/1", "e2/1"]
+  );
+  const sourceCommands = [source];
+  const index = buildRefinementHistoryIndex(sourceCommands, [
+    "e1",
+    "e2",
+    "e1/1",
+    "e2/1"
+  ]);
+  const indexed = index.commandById.get("cmd-shared");
+  assert.ok(indexed);
+  const e1Consumers = index.consumerCommandIdsByCellId.get("e1");
+  const e2Consumers = index.consumerCommandIdsByCellId.get("e2");
+
+  assert.notStrictEqual(index.commands, sourceCommands);
+  assert.notStrictEqual(indexed, source);
+  assert.notStrictEqual(indexed.hiddenCellIds, source.hiddenCellIds);
+  assert.notStrictEqual(indexed.createdCellIds, source.createdCellIds);
+  assert.notStrictEqual(
+    indexed.recipe.selectedCellIds,
+    source.recipe.selectedCellIds
+  );
+  assert.notStrictEqual(e1Consumers, e2Consumers);
+  assert.equal(Object.isFrozen(index.commands), true);
+  assert.equal(Object.isFrozen(indexed), true);
+  assert.equal(Object.isFrozen(indexed.hiddenCellIds), true);
+  assert.equal(Object.isFrozen(indexed.createdCellIds), true);
+  assert.equal(Object.isFrozen(e1Consumers), true);
+  assert.equal(Object.isFrozen(e2Consumers), true);
+
+  source.hiddenCellIds.push("mutated-hidden");
+  source.createdCellIds.push("mutated-created");
+  source.recipe.selectedCellIds.push("mutated-selected");
+  sourceCommands.push(command("mutated-command", [], []));
+
+  assert.equal(index.commands.length, 1);
+  assert.deepEqual(indexed.hiddenCellIds, ["e1", "e2"]);
+  assert.deepEqual(indexed.createdCellIds, ["e1/1", "e2/1"]);
+  assert.deepEqual(indexed.recipe.selectedCellIds, ["e1", "e2"]);
+  assert.deepEqual(e1Consumers, ["cmd-shared"]);
+  assert.deepEqual(e2Consumers, ["cmd-shared"]);
+});
+
+test("history index exposes read-only map facades at runtime", () => {
+  const { commands, knownCellIds } = sampleHistory();
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+
+  for (const map of [
+    index.commandById,
+    index.creatorCommandIdByCellId,
+    index.consumerCommandIdsByCellId,
+    index.commandOrdinalById
+  ]) {
+    assert.equal(map.set, undefined);
+    assert.equal(map.delete, undefined);
+    assert.equal(map.clear, undefined);
+    assert.equal(Object.isFrozen(map), true);
+    assert.throws(
+      () => Map.prototype.set.call(map, "mutated", "value"),
+      TypeError
+    );
+    map.forEach((_value, _key, callbackMap) => {
+      assert.equal(callbackMap, map);
+      assert.equal(callbackMap.set, undefined);
+    });
+  }
+});
+
+test("history index maps are read-only in the public TypeScript API", () => {
+  const virtualFileName = resolve(
+    "test",
+    "__refinement-history-api-typecheck.ts"
+  );
+  const source = `
+    import { buildRefinementHistoryIndex } from "../dist/index.js";
+    const index = buildRefinementHistoryIndex([], []);
+    type Assert<T extends true> = T;
+    type IsReadonlyMap<T> =
+      T extends ReadonlyMap<unknown, unknown> ? true : false;
+    type HasNoMapMutators<T> =
+      Extract<"set" | "delete" | "clear", keyof T> extends never
+        ? true
+        : false;
+    type CommandMap = Assert<IsReadonlyMap<typeof index.commandById>>;
+    type CreatorMap = Assert<
+      IsReadonlyMap<typeof index.creatorCommandIdByCellId>
+    >;
+    type ConsumerMap = Assert<
+      IsReadonlyMap<typeof index.consumerCommandIdsByCellId>
+    >;
+    type OrdinalMap = Assert<
+      IsReadonlyMap<typeof index.commandOrdinalById>
+    >;
+    type CommandMapMutators = Assert<
+      HasNoMapMutators<typeof index.commandById>
+    >;
+    type CreatorMapMutators = Assert<
+      HasNoMapMutators<typeof index.creatorCommandIdByCellId>
+    >;
+    type ConsumerMapMutators = Assert<
+      HasNoMapMutators<typeof index.consumerCommandIdsByCellId>
+    >;
+    type OrdinalMapMutators = Assert<
+      HasNoMapMutators<typeof index.commandOrdinalById>
+    >;
+  `;
+  const options = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ES2022,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+    noEmit: true,
+    skipLibCheck: true
+  };
+  const host = ts.createCompilerHost(options);
+  const getSourceFile = host.getSourceFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  const readFile = host.readFile.bind(host);
+  const isVirtualFile = (fileName) =>
+    resolve(fileName) === virtualFileName;
+  host.fileExists = (fileName) =>
+    isVirtualFile(fileName) || fileExists(fileName);
+  host.readFile = (fileName) =>
+    isVirtualFile(fileName) ? source : readFile(fileName);
+  host.getSourceFile = (fileName, languageVersion, onError) =>
+    isVirtualFile(fileName)
+      ? ts.createSourceFile(
+          fileName,
+          source,
+          languageVersion,
+          true,
+          ts.ScriptKind.TS
+        )
+      : getSourceFile(fileName, languageVersion, onError);
+  const program = ts.createProgram([virtualFileName], options, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+
+  assert.deepEqual(
+    diagnostics.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+    ),
+    []
   );
 });
