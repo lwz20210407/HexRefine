@@ -842,6 +842,48 @@ test("history index exposes read-only map facades at runtime", () => {
   }
 });
 
+test("history index builds 16k same-cell events without array duplicate scans", () => {
+  const commandCount = 16_000;
+  const commands = Array.from({ length: commandCount }, (_, index) =>
+    index % 2 === 0
+      ? command(`event-${index}`, [], [`cell-${index}`], {
+          reactivatedCellIds: ["shared"]
+        })
+      : command(
+          `event-${index}`,
+          ["shared"],
+          [`cell-${index}`]
+        )
+  );
+  const knownCellIds = [
+    "shared",
+    ...Array.from(
+      { length: commandCount },
+      (_, index) => `cell-${index}`
+    )
+  ];
+  const originalIncludes = Array.prototype.includes;
+  let includesCallCount = 0;
+  let index;
+  Array.prototype.includes = function (...args) {
+    includesCallCount += 1;
+    return Reflect.apply(originalIncludes, this, args);
+  };
+  try {
+    index = buildRefinementHistoryIndex(commands, knownCellIds);
+  } finally {
+    Array.prototype.includes = originalIncludes;
+  }
+
+  const consumers =
+    index.consumerCommandIdsByCellId.get("shared");
+  assert.equal(includesCallCount, 0);
+  assert.equal(consumers.length, commandCount);
+  assert.equal(new Set(consumers).size, commandCount);
+  assert.equal(consumers[0], "event-0");
+  assert.equal(consumers.at(-1), `event-${commandCount - 1}`);
+});
+
 test("history closure completes a 10k active dependency chain", () => {
   const commandCount = 10_000;
   const commands = Array.from({ length: commandCount }, (_, index) =>

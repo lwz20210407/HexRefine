@@ -218,7 +218,8 @@ export function buildRefinementHistoryIndex(
   const commandSnapshots = commands.map(snapshotHistoryCommand);
   const commandById = new Map<string, RefinementSessionCommand>();
   const creatorCommandIdByCellId = new Map<CellId, string>();
-  const consumerCommandIdsByCellId = new Map<CellId, string[]>();
+  const consumerCommandIdsByCellId =
+    new Map<CellId, Set<string>>();
   const commandOrdinalById = new Map<string, number>();
 
   for (const [ordinal, command] of commandSnapshots.entries()) {
@@ -524,19 +525,17 @@ function readonlyMap<K, V>(
   return new ReadonlyMapFacade(values);
 }
 
-function appendStableUnique(
-  map: Map<CellId, string[]>,
-  cellId: CellId,
+function appendStableUnique<K>(
+  map: Map<K, Set<string>>,
+  key: K,
   commandId: string
 ): void {
-  const commandIds = map.get(cellId);
+  let commandIds = map.get(key);
   if (commandIds === undefined) {
-    map.set(cellId, [commandId]);
-    return;
+    commandIds = new Set<string>();
+    map.set(key, commandIds);
   }
-  if (!commandIds.includes(commandId)) {
-    commandIds.push(commandId);
-  }
+  commandIds.add(commandId);
 }
 
 function buildHistoryStateDependencies(
@@ -545,9 +544,9 @@ function buildHistoryStateDependencies(
   const currentActiveProducerCommandIdByCellId =
     new Map<CellId, string>();
   const activePredecessorCommandIdsByCommandId =
-    new Map<string, string[]>();
+    new Map<string, Set<string>>();
   const consumerCommandIdsByProducerCommandId =
-    new Map<string, string[]>();
+    new Map<string, Set<string>>();
 
   for (const command of commands) {
     for (const cellId of stableUnique(command.hiddenCellIds)) {
@@ -600,25 +599,18 @@ function buildHistoryStateDependencies(
 }
 
 function appendCommandDependency(
-  map: Map<string, string[]>,
+  map: Map<string, Set<string>>,
   commandId: string,
   dependencyCommandId: string
 ): void {
   if (commandId === dependencyCommandId) {
     return;
   }
-  const commandIds = map.get(commandId);
-  if (commandIds === undefined) {
-    map.set(commandId, [dependencyCommandId]);
-    return;
-  }
-  if (!commandIds.includes(dependencyCommandId)) {
-    commandIds.push(dependencyCommandId);
-  }
+  appendStableUnique(map, commandId, dependencyCommandId);
 }
 
 function freezeCommandDependencyMap(
-  map: ReadonlyMap<string, readonly string[]>
+  map: ReadonlyMap<string, ReadonlySet<string>>
 ): ReadonlyMap<string, readonly string[]> {
   return readonlyMap(new Map(
     [...map].map(([commandId, dependencyCommandIds]) => [
@@ -630,7 +622,8 @@ function freezeCommandDependencyMap(
 
 function assertHistoryCommandOrder(
   creatorCommandIdByCellId: ReadonlyMap<CellId, string>,
-  consumerCommandIdsByCellId: ReadonlyMap<CellId, readonly string[]>,
+  consumerCommandIdsByCellId:
+    ReadonlyMap<CellId, ReadonlySet<string>>,
   commandOrdinalById: ReadonlyMap<string, number>
 ): void {
   for (
