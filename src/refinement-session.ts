@@ -1596,7 +1596,7 @@ export function refineSessionPatch(
 type ResolvedRefinementSessionPatchOptions = RefinementSessionPatchOptions & {
   activeBuild: ActiveMeshBuildResult;
   mergeTolerance: number;
-  normalizedTwoToOneCompensation: Readonly<NormalizedTwoToOneCompensation>;
+  normalizedTwoToOneCompensation?: Readonly<NormalizedTwoToOneCompensation>;
 };
 
 function resolveSessionPatchOptions(
@@ -1604,7 +1604,12 @@ function resolveSessionPatchOptions(
   diagnosticCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): ResolvedRefinementSessionPatchOptions {
-  const optionsSnapshot: RefinementSessionPatchOptions = { ...options };
+  const optionDescriptors = Object.getOwnPropertyDescriptors(options);
+  const compensationDescriptor = optionDescriptors.hexTwoToOneCompensation;
+  delete optionDescriptors.hexTwoToOneCompensation;
+  const optionsSnapshot: RefinementSessionPatchOptions = {
+    ...Object.defineProperties({}, optionDescriptors)
+  };
   assertValidSessionFaceTolerance(optionsSnapshot.mergeTolerance);
   let activeBuild = optionsSnapshot.activeBuild;
   if (activeBuild !== undefined) {
@@ -1641,7 +1646,7 @@ function resolveSessionPatchOptions(
       );
     }
   } else {
-    const activeCellIds = sortedActiveLeafIds(session);
+    const activeCellIds = sortedActiveLeafIdsSnapshot(session);
     const buildOptions: BuildActiveMeshOptions = {
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
@@ -1694,18 +1699,43 @@ function resolveSessionPatchOptions(
     geometryResolution.minimumElementEdgeLength,
     session.activeLeafIds.size > 0
   );
-  const normalizedTwoToOneCompensation = Object.freeze(
-    normalizeTwoToOneCompensation(
-      new Set(diagnosticCellIds).size,
-      optionsSnapshot
-    )
-  );
+  const supportsLocalTwoToOneTransitions =
+    session.kind === "H1"
+    && optionsSnapshot.hexRefinementRatio === 2
+    && optionsSnapshot.hexTwoToOneSelectionMode === "local"
+    && (optionsSnapshot.includeTransitions ?? true);
+  let normalizedTwoToOneCompensation:
+    | Readonly<NormalizedTwoToOneCompensation>
+    | undefined;
+  if (supportsLocalTwoToOneTransitions) {
+    if (compensationDescriptor !== undefined) {
+      Object.defineProperty(
+        optionsSnapshot,
+        "hexTwoToOneCompensation",
+        {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: options.hexTwoToOneCompensation
+        }
+      );
+    }
+    normalizedTwoToOneCompensation = Object.freeze(
+      normalizeTwoToOneCompensation(
+        new Set(diagnosticCellIds).size,
+        optionsSnapshot
+      )
+    );
+    optionsSnapshot.hexTwoToOneCompensation =
+      normalizedTwoToOneCompensation;
+  }
   return {
     ...optionsSnapshot,
-    hexTwoToOneCompensation: normalizedTwoToOneCompensation,
     activeBuild,
     mergeTolerance,
-    normalizedTwoToOneCompensation
+    ...(normalizedTwoToOneCompensation === undefined
+      ? {}
+      : { normalizedTwoToOneCompensation })
   };
 }
 
@@ -1807,7 +1837,7 @@ function resolveExistingTransitionShellRebuild(
 ): SessionFaceResolution | undefined {
   const compensation = options.normalizedTwoToOneCompensation;
   if (
-    compensation.mode !== "local-topology"
+    compensation?.mode !== "local-topology"
     || options.hexRefinementRatio !== 2
     || options.hexTwoToOneSelectionMode !== "local"
     || !(error instanceof Error)
@@ -1829,7 +1859,7 @@ function resolveExistingTransitionShellRebuild(
   }
   const faceResolution = resolveSessionFaceResolution(
     session,
-    sortedActiveLeafIds(session),
+    sortedActiveLeafIdsSnapshot(session),
     validation.cellIds,
     options
   );
@@ -1882,6 +1912,11 @@ function refineSessionPatchWithRebuiltTransitionShell(
   readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
 } {
   const compensation = options.normalizedTwoToOneCompensation;
+  if (compensation === undefined) {
+    throw new Error(
+      "transition-shell rebuilding requires a normalized compensation snapshot"
+    );
+  }
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
@@ -1929,7 +1964,13 @@ function refineSessionPatchWithRebuiltTransitionShell(
     throw historyConflict(
       `automatic transition-shell rebuilding requires an untouched supporting layer: ${nonLeafSupportCellIds.join(", ")}`,
       nonLeafSupportCellIds,
-      [supportCommand.id]
+      [
+        supportCommand.id,
+        ...historyCommandIdsForHiddenCells(
+          working,
+          nonLeafSupportCellIds
+        )
+      ]
     );
   }
 
@@ -2824,6 +2865,18 @@ function findSingleSupportCommand(
   return [...commands][0]!;
 }
 
+function historyCommandIdsForHiddenCells(
+  session: RefinementSession,
+  cellIds: readonly CellId[]
+): string[] {
+  const conflictingCellIds = new Set(cellIds);
+  return session.undoStack
+    .filter((command) => command.hiddenCellIds.some(
+      (cellId) => conflictingCellIds.has(cellId)
+    ))
+    .map((command) => command.id);
+}
+
 function refinementCellGeometryKey(
   session: RefinementSession,
   cell: RefinementSessionCell
@@ -3548,7 +3601,7 @@ function buildSameLevelRefinementPlanningMesh(
   level: number,
   options: RefinementSessionPatchOptions
 ): ActiveMeshBuildResult {
-  const activeIds = sortedActiveLeafIds(session).filter((cellId) => {
+  const activeIds = sortedActiveLeafIdsSnapshot(session).filter((cellId) => {
     const cell = session.cells.get(cellId);
     return cell?.level === level && isRefinableSessionCell(cell);
   });
@@ -3579,7 +3632,7 @@ function collectRefinementPatchActiveCellIds(
     }
   }
 
-  return sortedActiveLeafIds(session).filter((cellId) => haloCellIds.has(cellId));
+  return sortedActiveLeafIdsSnapshot(session).filter((cellId) => haloCellIds.has(cellId));
 }
 
 export function validateRefinementSessionSelection(
@@ -3799,10 +3852,19 @@ function removeActiveLeafCellId(session: RefinementSession, cellId: CellId): voi
 function sortedActiveLeafIds(session: RefinementSession): readonly CellId[] {
   const mutable = mutableRefinementSession(session);
   if (session.sortedActiveLeafIdsDirty) {
-    mutable.sortedActiveLeafIds = [...session.activeLeafIds].sort((a, b) => cellOrdinal(session, a) - cellOrdinal(session, b));
+    mutable.sortedActiveLeafIds = sortedActiveLeafIdsSnapshot(session);
     mutable.sortedActiveLeafIdsDirty = false;
   }
   return mutable.sortedActiveLeafIds;
+}
+
+function sortedActiveLeafIdsSnapshot(
+  session: RefinementSession
+): CellId[] {
+  return [...session.activeLeafIds].sort(
+    (first, second) =>
+      cellOrdinal(session, first) - cellOrdinal(session, second)
+  );
 }
 
 function nextCellOrdinal(session: RefinementSession): number {
