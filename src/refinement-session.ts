@@ -3293,7 +3293,7 @@ function createRefinementSessionCommandRecipe(
         options.hexTwoToOneSelectionMode ?? "section",
       hexTwoToOneCompensation: normalizedCompensation,
       rebuildExistingTransitions:
-        normalizedCompensation.mode === "local-topology",
+        normalizedCompensation.mode !== "none",
       ...(options.mergeTolerance === undefined
         ? {}
         : { mergeTolerance: options.mergeTolerance })

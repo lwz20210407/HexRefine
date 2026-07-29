@@ -1940,6 +1940,15 @@ for (const compatibilityCase of [
           assert.ok(result.plan.length > 0);
         } else {
           assert.ok(result.createdCellIds.length > 0);
+          assert.ok(result.recipe);
+          const replaySession = compatibilityCase.createSession();
+          const replayed = refineSessionPatch(
+            replaySession,
+            [...result.recipe.selectedCellIds],
+            result.recipe.options
+          );
+          assert.deepEqual(replayed, result);
+          assert.equal(modeReads, 0);
         }
       });
     }
@@ -7654,6 +7663,121 @@ test("refinement command recipe snapshots immutable replay inputs across history
   const redone = redoRefinementSession(session);
   assert.deepEqual(redone.recipe, command.recipe);
   assertFrozenRecipe(redone.recipe);
+});
+
+test("selection compensation command recipe replays through the public session API", () => {
+  const sourceSession = createRefinementSession(
+    createHexUnitCubeMesh(2, 2, 5)
+  );
+  const selectedCellIds = ["e5", "e6", "e7", "e8"];
+  const compensationReads = {
+    mode: 0,
+    maxAddedParentLayers: 0,
+    maxAddedParentCount: 0
+  };
+  const compensation = {};
+  Object.defineProperties(compensation, {
+    mode: {
+      enumerable: true,
+      get() {
+        compensationReads.mode += 1;
+        return "selection";
+      }
+    },
+    maxAddedParentLayers: {
+      enumerable: true,
+      get() {
+        compensationReads.maxAddedParentLayers += 1;
+        return 1;
+      }
+    },
+    maxAddedParentCount: {
+      enumerable: true,
+      get() {
+        compensationReads.maxAddedParentCount += 1;
+        return 32;
+      }
+    }
+  });
+  const sourceCommand = refineSessionPatch(
+    sourceSession,
+    selectedCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: compensation
+    }
+  );
+
+  assert.equal(sourceCommand.twoToOne.status, "compensated");
+  assert.deepEqual(sourceCommand.recipe.selectedCellIds, selectedCellIds);
+  assert.deepEqual(compensationReads, {
+    mode: 1,
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 1
+  });
+
+  const replaySession = createRefinementSession(
+    createHexUnitCubeMesh(2, 2, 5)
+  );
+  const replayCommand = refineSessionPatch(
+    replaySession,
+    [...sourceCommand.recipe.selectedCellIds],
+    sourceCommand.recipe.options
+  );
+
+  assert.equal(
+    sourceCommand.recipe.options.rebuildExistingTransitions,
+    true
+  );
+  assert.equal(replayCommand.twoToOne.status, "compensated");
+  assert.deepEqual(replayCommand, sourceCommand);
+  assert.deepEqual(
+    buildActiveMeshWithMap(replaySession).mesh,
+    buildActiveMeshWithMap(sourceSession).mesh
+  );
+  assert.deepEqual(compensationReads, {
+    mode: 1,
+    maxAddedParentLayers: 1,
+    maxAddedParentCount: 1
+  });
+});
+
+test("command recipes directly replay all normalized compensation modes", () => {
+  for (const mode of ["local-topology", "selection", "none"]) {
+    const sourceSession = createRefinementSession(
+      createHexUnitCubeMesh(1, 1, 1)
+    );
+    const sourceCommand = refineSessionPatch(sourceSession, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: { mode }
+    });
+
+    assert.equal(
+      sourceCommand.recipe.options.rebuildExistingTransitions,
+      mode !== "none",
+      mode
+    );
+
+    const replaySession = createRefinementSession(
+      createHexUnitCubeMesh(1, 1, 1)
+    );
+    const replayCommand = refineSessionPatch(
+      replaySession,
+      [...sourceCommand.recipe.selectedCellIds],
+      sourceCommand.recipe.options
+    );
+
+    assert.deepEqual(replayCommand, sourceCommand, mode);
+    assert.deepEqual(
+      buildActiveMeshWithMap(replaySession).mesh,
+      buildActiveMeshWithMap(sourceSession).mesh,
+      mode
+    );
+  }
 });
 
 test("generic session refinement factories do not attach replay recipes", () => {
