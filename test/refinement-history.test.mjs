@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import test from "node:test";
 import ts from "typescript";
@@ -686,6 +687,199 @@ test("history index rejects missing hidden and reactivated references", () => {
   );
 });
 
+test("history index snapshots each command field getter exactly once", () => {
+  const readCounts = new Map();
+  const changingGetter = (name, firstValue, laterValue) => ({
+    enumerable: true,
+    get() {
+      const count = (readCounts.get(name) ?? 0) + 1;
+      readCounts.set(name, count);
+      return count === 1 ? firstValue : laterValue;
+    }
+  });
+  const source = {};
+  Object.defineProperties(source, {
+    id: changingGetter("id", "cmd-once", ""),
+    kind: changingGetter("kind", "refine", "changed"),
+    hiddenCellIds: changingGetter(
+      "hiddenCellIds",
+      ["root"],
+      ["missing-hidden"]
+    ),
+    createdCellIds: changingGetter(
+      "createdCellIds",
+      ["created"],
+      ["missing-created"]
+    ),
+    activeCreatedCellIds: changingGetter(
+      "activeCreatedCellIds",
+      ["created"],
+      ["missing-active"]
+    ),
+    reactivatedCellIds: changingGetter(
+      "reactivatedCellIds",
+      [],
+      ["missing-reactivated"]
+    ),
+    createdNodeIds: changingGetter(
+      "createdNodeIds",
+      [],
+      ["changed-node"]
+    ),
+    quality: changingGetter(
+      "quality",
+      { marker: "first" },
+      { marker: "later" }
+    ),
+    twoToOne: changingGetter(
+      "twoToOne",
+      { marker: "first" },
+      { marker: "later" }
+    ),
+    recipe: changingGetter(
+      "recipe",
+      sampleRecipe(),
+      sampleRecipe()
+    )
+  });
+
+  const index = buildRefinementHistoryIndex(
+    [source],
+    ["root", "created"]
+  );
+  const snapshot = index.commands[0];
+
+  assert.equal(snapshot.id, "cmd-once");
+  assert.deepEqual(snapshot.hiddenCellIds, ["root"]);
+  assert.deepEqual(snapshot.createdCellIds, ["created"]);
+  assert.deepEqual(snapshot.activeCreatedCellIds, ["created"]);
+  assert.equal(snapshot.quality.marker, "first");
+  assert.equal(snapshot.twoToOne.marker, "first");
+  assert.deepEqual(
+    Object.fromEntries(readCounts),
+    {
+      id: 1,
+      kind: 1,
+      hiddenCellIds: 1,
+      createdCellIds: 1,
+      activeCreatedCellIds: 1,
+      reactivatedCellIds: 1,
+      createdNodeIds: 1,
+      quality: 1,
+      twoToOne: 1,
+      recipe: 1
+    }
+  );
+});
+
+test("history index rejects sparse top-level and command cell arrays", () => {
+  const sparseArray = () => new Array(1);
+  assert.throws(
+    () => buildRefinementHistoryIndex(sparseArray(), []),
+    { message: "commands must be dense: missing index 0" }
+  );
+  assert.throws(
+    () => buildRefinementHistoryIndex([], sparseArray()),
+    { message: "knownCellIds must be dense: missing index 0" }
+  );
+
+  for (const field of [
+    "hiddenCellIds",
+    "createdCellIds",
+    "reactivatedCellIds",
+    "activeCreatedCellIds"
+  ]) {
+    const source = {
+      ...command("cmd-sparse", [], [], { recipe: false }),
+      [field]: sparseArray()
+    };
+    assert.throws(
+      () => buildRefinementHistoryIndex([source], []),
+      {
+        message:
+          `command cmd-sparse ${field} must be dense: missing index 0`
+      }
+    );
+  }
+});
+
+test("history index rejects invalid command and cell ids", () => {
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      {
+        ...command("", [], [], { recipe: false })
+      }
+    ], []),
+    {
+      message:
+        "command at index 0 id must be a nonempty string"
+    }
+  );
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      {
+        ...command(7, [], [], { recipe: false })
+      }
+    ], []),
+    {
+      message:
+        "command at index 0 id must be a nonempty string"
+    }
+  );
+  assert.throws(
+    () => buildRefinementHistoryIndex([], [""]),
+    {
+      message:
+        "knownCellIds[0] must be a nonempty string"
+    }
+  );
+
+  for (const field of [
+    "hiddenCellIds",
+    "createdCellIds",
+    "reactivatedCellIds",
+    "activeCreatedCellIds"
+  ]) {
+    const source = {
+      ...command("cmd-invalid", [], [], { recipe: false }),
+      [field]: [42]
+    };
+    assert.throws(
+      () => buildRefinementHistoryIndex([source], []),
+      {
+        message:
+          `command cmd-invalid ${field}[0] must be a nonempty string`
+      }
+    );
+  }
+});
+
+test("history index validates active created cells against known creations", () => {
+  const source = {
+    ...command("cmd-active", [], ["created"], { recipe: false }),
+    activeCreatedCellIds: ["missing-active"]
+  };
+  assert.throws(
+    () => buildRefinementHistoryIndex([source], ["created"]),
+    {
+      message:
+        "command cmd-active references missing active created cell missing-active"
+    }
+  );
+
+  source.activeCreatedCellIds = ["known-not-created"];
+  assert.throws(
+    () => buildRefinementHistoryIndex(
+      [source],
+      ["created", "known-not-created"]
+    ),
+    {
+      message:
+        "command cmd-active active created cell known-not-created is not listed in createdCellIds"
+    }
+  );
+});
+
 test("history closure reports a missing seed cell deterministically", () => {
   const { commands, knownCellIds, componentCellIds } = sampleHistory();
   const index = buildRefinementHistoryIndex(commands, knownCellIds);
@@ -842,46 +1036,123 @@ test("history index exposes read-only map facades at runtime", () => {
   }
 });
 
-test("history index builds 16k same-cell events without array duplicate scans", () => {
-  const commandCount = 16_000;
-  const commands = Array.from({ length: commandCount }, (_, index) =>
-    index % 2 === 0
-      ? command(`event-${index}`, [], [`cell-${index}`], {
-          reactivatedCellIds: ["shared"]
-        })
-      : command(
-          `event-${index}`,
-          ["shared"],
-          [`cell-${index}`]
-        )
+test("history closure is isolated from read-only facade prototype changes", () => {
+  const { commands, knownCellIds, componentCellIds } = sampleHistory();
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const prototype = Object.getPrototypeOf(index.commandById);
+  const originalGet = Object.getOwnPropertyDescriptor(
+    prototype,
+    "get"
   );
-  const knownCellIds = [
-    "shared",
-    ...Array.from(
-      { length: commandCount },
-      (_, index) => `cell-${index}`
-    )
-  ];
-  const originalIncludes = Array.prototype.includes;
-  let includesCallCount = 0;
-  let index;
-  Array.prototype.includes = function (...args) {
-    includesCallCount += 1;
-    return Reflect.apply(originalIncludes, this, args);
-  };
-  try {
-    index = buildRefinementHistoryIndex(commands, knownCellIds);
-  } finally {
-    Array.prototype.includes = originalIncludes;
-  }
+  assert.ok(originalGet);
 
-  const consumers =
-    index.consumerCommandIdsByCellId.get("shared");
-  assert.equal(includesCallCount, 0);
-  assert.equal(consumers.length, commandCount);
-  assert.equal(new Set(consumers).size, commandCount);
-  assert.equal(consumers[0], "event-0");
-  assert.equal(consumers.at(-1), `event-${commandCount - 1}`);
+  try {
+    const replaced = Reflect.set(
+      prototype,
+      "get",
+      () => {
+        throw new Error("poisoned public facade");
+      }
+    );
+    assert.equal(replaced, false);
+    assert.equal(Object.isFrozen(prototype), true);
+
+    const closure = buildRefinementHistoryClosure(index, {
+      seedCellIds: ["e1/1"],
+      componentCellIds
+    });
+    assert.deepEqual(closure.supportCommandIds, ["cmd-1"]);
+    assert.deepEqual(closure.downstreamCommandIds, ["cmd-2"]);
+    assert.deepEqual(
+      [...index.commandById].map(([commandId]) => commandId),
+      ["cmd-1", "cmd-2", "cmd-3"]
+    );
+  } finally {
+    if (!Object.isFrozen(prototype)) {
+      Object.defineProperty(prototype, "get", originalGet);
+    }
+  }
+});
+
+test("history index builds 20k hidden fanout without fanout-sized sorts", () => {
+  const childScript = `
+    import assert from "node:assert/strict";
+    import {
+      buildRefinementHistoryIndex
+    } from "./dist/index.js";
+
+    const fanout = 20_000;
+    const inputCellIds = Array.from(
+      { length: fanout },
+      (_, index) => \`input-\${index}\`
+    );
+    const commands = [
+      {
+        id: "producer",
+        kind: "refine",
+        hiddenCellIds: ["root"],
+        createdCellIds: inputCellIds,
+        createdNodeIds: []
+      },
+      ...inputCellIds.map((cellId, index) => ({
+        id: \`consumer-\${index}\`,
+        kind: "refine",
+        hiddenCellIds: [cellId],
+        createdCellIds: [\`output-\${index}\`],
+        createdNodeIds: []
+      }))
+    ];
+    const knownCellIds = [
+      "root",
+      ...inputCellIds,
+      ...Array.from(
+        { length: fanout },
+        (_, index) => \`output-\${index}\`
+      )
+    ];
+    const originalSort = Array.prototype.sort;
+    Array.prototype.sort = function (...args) {
+      if (this.length >= fanout) {
+        throw new Error(
+          \`unexpected fanout-sized sort: \${this.length}\`
+        );
+      }
+      return Reflect.apply(originalSort, this, args);
+    };
+    try {
+      const index = buildRefinementHistoryIndex(
+        commands,
+        knownCellIds
+      );
+      assert.equal(index.commands.length, fanout + 1);
+      assert.deepEqual(
+        index.consumerCommandIdsByCellId.get("input-0"),
+        ["consumer-0"]
+      );
+      assert.deepEqual(
+        index.consumerCommandIdsByCellId.get(
+          \`input-\${fanout - 1}\`
+        ),
+        [\`consumer-\${fanout - 1}\`]
+      );
+    } finally {
+      Array.prototype.sort = originalSort;
+    }
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", childScript],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    [result.stdout, result.stderr].filter(Boolean).join("\n")
+  );
 });
 
 test("history closure completes a 10k active dependency chain", () => {

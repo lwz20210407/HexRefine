@@ -176,10 +176,7 @@ class ReadonlyMapFacade<K, V> implements ReadonlyMap<K, V> {
   }
 }
 
-const knownCellIdsByHistoryIndex = new WeakMap<
-  RefinementHistoryIndex,
-  ReadonlySet<CellId>
->();
+Object.freeze(ReadonlyMapFacade.prototype);
 
 interface RefinementHistoryStateDependencies {
   readonly activePredecessorCommandIdsByCommandId:
@@ -188,24 +185,51 @@ interface RefinementHistoryStateDependencies {
     ReadonlyMap<string, readonly string[]>;
 }
 
-const stateDependenciesByHistoryIndex = new WeakMap<
+interface RefinementHistoryPrivateIndex {
+  readonly commands: readonly RefinementSessionCommand[];
+  readonly commandById:
+    Map<string, RefinementSessionCommand>;
+  readonly creatorCommandIdByCellId: Map<CellId, string>;
+  readonly consumerCommandIdsByCellId:
+    Map<CellId, readonly string[]>;
+  readonly commandOrdinalById: Map<string, number>;
+  readonly stateDependencies: RefinementHistoryStateDependencies;
+  readonly knownCellIds: Set<CellId>;
+}
+
+const privateIndexByHistoryIndex = new WeakMap<
   RefinementHistoryIndex,
-  RefinementHistoryStateDependencies
+  RefinementHistoryPrivateIndex
 >();
 
 export function buildRefinementHistoryIndex(
   commands: readonly RefinementSessionCommand[],
   knownCellIds: readonly CellId[]
 ): RefinementHistoryIndex {
-  const knownCells = new Set(knownCellIds);
+  assertDenseArray(commands, "commands");
+  assertDenseArray(knownCellIds, "knownCellIds");
+
+  const knownCellSnapshots = snapshotCellIdArray(
+    knownCellIds,
+    "knownCellIds"
+  );
+  const commandSnapshots: RefinementSessionCommand[] = [];
+  for (let index = 0; index < commands.length; index += 1) {
+    commandSnapshots.push(snapshotHistoryCommand(
+      commands[index],
+      index
+    ));
+  }
+
+  const knownCells = new Set(knownCellSnapshots);
   const duplicateCheck = new Set<string>();
-  for (const command of commands) {
+  for (const command of commandSnapshots) {
     if (duplicateCheck.has(command.id)) {
       throw new Error(`duplicate refinement command id ${command.id}`);
     }
     duplicateCheck.add(command.id);
   }
-  for (const command of commands) {
+  for (const command of commandSnapshots) {
     for (const cellId of command.createdCellIds) {
       if (!knownCells.has(cellId)) {
         throw new Error(
@@ -213,9 +237,21 @@ export function buildRefinementHistoryIndex(
         );
       }
     }
+    const createdCellIds = new Set(command.createdCellIds);
+    for (const cellId of command.activeCreatedCellIds ?? []) {
+      if (!knownCells.has(cellId)) {
+        throw new Error(
+          `command ${command.id} references missing active created cell ${cellId}`
+        );
+      }
+      if (!createdCellIds.has(cellId)) {
+        throw new Error(
+          `command ${command.id} active created cell ${cellId} is not listed in createdCellIds`
+        );
+      }
+    }
   }
 
-  const commandSnapshots = commands.map(snapshotHistoryCommand);
   const commandById = new Map<string, RefinementSessionCommand>();
   const creatorCommandIdByCellId = new Map<CellId, string>();
   const consumerCommandIdsByCellId =
@@ -265,8 +301,9 @@ export function buildRefinementHistoryIndex(
     frozenConsumers.set(cellId, Object.freeze([...commandIds]));
   }
 
+  const publicCommands = Object.freeze([...commandSnapshots]);
   const index: RefinementHistoryIndex = Object.freeze({
-    commands: Object.freeze(commandSnapshots),
+    commands: publicCommands,
     commandById: readonlyMap(commandById),
     creatorCommandIdByCellId: readonlyMap(
       creatorCommandIdByCellId
@@ -274,8 +311,17 @@ export function buildRefinementHistoryIndex(
     consumerCommandIdsByCellId: readonlyMap(frozenConsumers),
     commandOrdinalById: readonlyMap(commandOrdinalById)
   });
-  knownCellIdsByHistoryIndex.set(index, new Set(knownCells));
-  stateDependenciesByHistoryIndex.set(index, stateDependencies);
+  privateIndexByHistoryIndex.set(index, Object.freeze({
+    commands: Object.freeze([...commandSnapshots]),
+    commandById: new Map(commandById),
+    creatorCommandIdByCellId:
+      new Map(creatorCommandIdByCellId),
+    consumerCommandIdsByCellId:
+      cloneFrozenStringArrayMap(frozenConsumers),
+    commandOrdinalById: new Map(commandOrdinalById),
+    stateDependencies,
+    knownCellIds: new Set(knownCells)
+  }));
   return index;
 }
 
@@ -283,19 +329,13 @@ export function buildRefinementHistoryClosure(
   index: RefinementHistoryIndex,
   input: BuildHistoryClosureInput
 ): RefinementHistoryClosure {
-  const knownCellIds = knownCellIdsByHistoryIndex.get(index);
-  if (knownCellIds === undefined) {
+  const privateIndex = privateIndexByHistoryIndex.get(index);
+  if (privateIndex === undefined) {
     throw new Error(
       "refinement history index was not built by buildRefinementHistoryIndex"
     );
   }
-  const stateDependencies =
-    stateDependenciesByHistoryIndex.get(index);
-  if (stateDependencies === undefined) {
-    throw new Error(
-      "refinement history index has no state dependency graph"
-    );
-  }
+  const { knownCellIds, stateDependencies } = privateIndex;
 
   const seedCellIds = stableUnique(input.seedCellIds);
   const missingSeedCellIds = seedCellIds.filter(
@@ -325,11 +365,11 @@ export function buildRefinementHistoryClosure(
   };
   for (const cellId of seedCellIds) {
     includeCommandId(
-      index.creatorCommandIdByCellId.get(cellId)
+      privateIndex.creatorCommandIdByCellId.get(cellId)
     );
     for (
       const commandId of
-        index.consumerCommandIdsByCellId.get(cellId) ?? []
+        privateIndex.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
       includeCommandId(commandId);
     }
@@ -364,10 +404,9 @@ export function buildRefinementHistoryClosure(
     }
   }
 
-  const includedCommands = sortedCommandIds(
-    index,
-    includedCommandIds
-  ).map((commandId) => requiredHistoryCommand(index, commandId));
+  const includedCommands = privateIndex.commands.filter(
+    (command) => includedCommandIds.has(command.id)
+  );
   const componentCellIds = new Set(input.componentCellIds);
   const crossingCommandIds: string[] = [];
   const crossingCellIds: CellId[] = [];
@@ -413,12 +452,12 @@ export function buildRefinementHistoryClosure(
   const downstreamCommandIds = includedCommands
     .filter((command) => !supportCommandIdSet.has(command.id))
     .map((command) => command.id);
-  const preservedCommandIds = index.commands
+  const preservedCommandIds = privateIndex.commands
     .filter((command) => !includedCommandIds.has(command.id))
     .map((command) => command.id);
   const boundaryCellIds = affectedInputCellIds.filter((cellId) => {
     const creatorCommandId =
-      index.creatorCommandIdByCellId.get(cellId);
+      privateIndex.creatorCommandIdByCellId.get(cellId);
     return creatorCommandId === undefined
       || !includedCommandIds.has(creatorCommandId);
   });
@@ -465,42 +504,151 @@ function cloneRefinementCellGeometrySnapshot(
 }
 
 function snapshotHistoryCommand(
-  command: RefinementSessionCommand
+  command: RefinementSessionCommand | undefined,
+  index: number
 ): RefinementSessionCommand {
+  if (command === null || typeof command !== "object") {
+    throw new Error(`command at index ${index} must be an object`);
+  }
+  const source = command as unknown as Record<string, unknown>;
+  const rawId = source.id;
+  const kind = source.kind;
+  const hiddenCellIds = source.hiddenCellIds;
+  const createdCellIds = source.createdCellIds;
+  const activeCreatedCellIds = source.activeCreatedCellIds;
+  const reactivatedCellIds = source.reactivatedCellIds;
+  const createdNodeIds = source.createdNodeIds;
+  const quality = source.quality;
+  const twoToOne = source.twoToOne;
+  const recipe = source.recipe;
+
+  const id = requireNonemptyString(
+    rawId,
+    `command at index ${index} id`
+  );
+  const hiddenCellSnapshots = snapshotCellIdArray(
+    hiddenCellIds,
+    `command ${id} hiddenCellIds`
+  );
+  const createdCellSnapshots = snapshotCellIdArray(
+    createdCellIds,
+    `command ${id} createdCellIds`
+  );
+  const activeCreatedCellSnapshots =
+    activeCreatedCellIds === undefined
+      ? undefined
+      : snapshotCellIdArray(
+          activeCreatedCellIds,
+          `command ${id} activeCreatedCellIds`
+        );
+  const reactivatedCellSnapshots =
+    reactivatedCellIds === undefined
+      ? undefined
+      : snapshotCellIdArray(
+          reactivatedCellIds,
+          `command ${id} reactivatedCellIds`
+        );
+  const createdNodeSnapshots = snapshotDenseArray<unknown>(
+    createdNodeIds,
+    `command ${id} createdNodeIds`
+  );
+
   return Object.freeze({
-    id: command.id,
-    kind: command.kind,
-    hiddenCellIds: Object.freeze([...command.hiddenCellIds]),
-    createdCellIds: Object.freeze([...command.createdCellIds]),
-    ...(command.activeCreatedCellIds === undefined
+    id,
+    kind: kind as RefinementSessionCommand["kind"],
+    hiddenCellIds: Object.freeze(hiddenCellSnapshots),
+    createdCellIds: Object.freeze(createdCellSnapshots),
+    ...(activeCreatedCellSnapshots === undefined
       ? {}
       : {
-          activeCreatedCellIds: Object.freeze([
-            ...command.activeCreatedCellIds
-          ])
+          activeCreatedCellIds:
+            Object.freeze(activeCreatedCellSnapshots)
         }),
-    ...(command.reactivatedCellIds === undefined
+    ...(reactivatedCellSnapshots === undefined
       ? {}
       : {
-          reactivatedCellIds: Object.freeze([
-            ...command.reactivatedCellIds
-          ])
+          reactivatedCellIds:
+            Object.freeze(reactivatedCellSnapshots)
         }),
-    createdNodeIds: Object.freeze([...command.createdNodeIds]),
-    ...(command.quality === undefined
-      ? {}
-      : { quality: cloneAndFreezeHistoryValue(command.quality) }),
-    ...(command.twoToOne === undefined
+    createdNodeIds: Object.freeze(
+      createdNodeSnapshots as number[]
+    ),
+    ...(quality === undefined
       ? {}
       : {
-          twoToOne: cloneAndFreezeHistoryValue(command.twoToOne)
+          quality: cloneAndFreezeHistoryValue(
+            quality
+          ) as NonNullable<
+            RefinementSessionCommand["quality"]
+          >
         }),
-    ...(command.recipe === undefined
+    ...(twoToOne === undefined
       ? {}
       : {
-          recipe: freezeRefinementSessionCommandRecipe(command.recipe)
+          twoToOne: cloneAndFreezeHistoryValue(
+            twoToOne
+          ) as NonNullable<
+            RefinementSessionCommand["twoToOne"]
+          >
+        }),
+    ...(recipe === undefined
+      ? {}
+      : {
+          recipe: freezeRefinementSessionCommandRecipe(
+            recipe as RefinementSessionCommandRecipeV1
+          )
         })
   });
+}
+
+function assertDenseArray(
+  value: unknown,
+  label: string
+): asserts value is readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new Error(
+        `${label} must be dense: missing index ${index}`
+      );
+    }
+  }
+}
+
+function snapshotDenseArray<T>(
+  value: unknown,
+  label: string
+): T[] {
+  assertDenseArray(value, label);
+  const snapshot: T[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    snapshot.push(value[index] as T);
+  }
+  return snapshot;
+}
+
+function snapshotCellIdArray(
+  value: unknown,
+  label: string
+): CellId[] {
+  return snapshotDenseArray<unknown>(value, label).map(
+    (cellId, index) => requireNonemptyString(
+      cellId,
+      `${label}[${index}]`
+    )
+  );
+}
+
+function requireNonemptyString(
+  value: unknown,
+  label: string
+): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be a nonempty string`);
+  }
+  return value;
 }
 
 function cloneAndFreezeHistoryValue<T>(value: T): T {
@@ -523,6 +671,16 @@ function readonlyMap<K, V>(
   values: ReadonlyMap<K, V>
 ): ReadonlyMap<K, V> {
   return new ReadonlyMapFacade(values);
+}
+
+function cloneFrozenStringArrayMap<K>(
+  values: ReadonlyMap<K, readonly string[]>
+): Map<K, readonly string[]> {
+  const snapshot = new Map<K, readonly string[]>();
+  for (const [key, commandIds] of values) {
+    snapshot.set(key, Object.freeze([...commandIds]));
+  }
+  return snapshot;
 }
 
 function appendStableUnique<K>(
@@ -549,7 +707,10 @@ function buildHistoryStateDependencies(
     new Map<string, Set<string>>();
 
   for (const command of commands) {
-    for (const cellId of stableUnique(command.hiddenCellIds)) {
+    for (
+      const cellId of
+        uniqueInInputOrder(command.hiddenCellIds)
+    ) {
       // A hide depends on and consumes the cell's current active version.
       const producerCommandId =
         currentActiveProducerCommandIdByCellId.get(cellId);
@@ -569,7 +730,7 @@ function buildHistoryStateDependencies(
     }
     for (
       const cellId of
-        stableUnique(command.reactivatedCellIds ?? [])
+        uniqueInInputOrder(command.reactivatedCellIds ?? [])
     ) {
       // Reactivation starts a new seed-visible active version; it does
       // not depend on the cell's prior identity creator.
@@ -578,7 +739,10 @@ function buildHistoryStateDependencies(
         command.id
       );
     }
-    for (const cellId of stableUnique(command.createdCellIds)) {
+    for (
+      const cellId of
+        uniqueInInputOrder(command.createdCellIds)
+    ) {
       currentActiveProducerCommandIdByCellId.set(
         cellId,
         command.id
@@ -611,13 +775,15 @@ function appendCommandDependency(
 
 function freezeCommandDependencyMap(
   map: ReadonlyMap<string, ReadonlySet<string>>
-): ReadonlyMap<string, readonly string[]> {
-  return readonlyMap(new Map(
-    [...map].map(([commandId, dependencyCommandIds]) => [
+): Map<string, readonly string[]> {
+  const snapshot = new Map<string, readonly string[]>();
+  for (const [commandId, dependencyCommandIds] of map) {
+    snapshot.set(
       commandId,
       Object.freeze([...dependencyCommandIds])
-    ])
-  ));
+    );
+  }
+  return snapshot;
 }
 
 function assertHistoryCommandOrder(
@@ -668,7 +834,7 @@ function requiredCommandOrdinal(
 function commandInputCellIds(
   command: RefinementSessionCommand
 ): CellId[] {
-  return stableUnique([
+  return uniqueInInputOrder([
     ...command.hiddenCellIds,
     ...(command.reactivatedCellIds ?? [])
   ]);
@@ -677,36 +843,13 @@ function commandInputCellIds(
 function affectedCommandCellIds(
   command: RefinementSessionCommand
 ): CellId[] {
-  return stableUnique([
+  return uniqueInInputOrder([
     ...command.hiddenCellIds,
     ...(command.reactivatedCellIds ?? []),
     ...command.createdCellIds,
     ...(command.recipe?.selectedCellIds ?? []),
     ...(command.recipe?.transitionSupportCellIds ?? [])
   ]);
-}
-
-function sortedCommandIds(
-  index: RefinementHistoryIndex,
-  commandIds: Iterable<string>
-): string[] {
-  return [...commandIds].sort((left, right) =>
-    requiredCommandOrdinal(index.commandOrdinalById, left)
-      - requiredCommandOrdinal(index.commandOrdinalById, right)
-  );
-}
-
-function requiredHistoryCommand(
-  index: RefinementHistoryIndex,
-  commandId: string
-): RefinementSessionCommand {
-  const command = index.commandById.get(commandId);
-  if (command === undefined) {
-    throw new Error(
-      `refinement history index references missing command ${commandId}`
-    );
-  }
-  return command;
 }
 
 function commandHasIncludedPredecessor(
@@ -721,6 +864,10 @@ function commandHasIncludedPredecessor(
   ).some((predecessorCommandId) =>
     includedCommandIds.has(predecessorCommandId)
   );
+}
+
+function uniqueInInputOrder<T>(values: Iterable<T>): T[] {
+  return [...new Set(values)];
 }
 
 function stableUnique<T extends string>(values: Iterable<T>): T[] {
