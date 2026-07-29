@@ -1483,6 +1483,100 @@ test("cell geometry remapping accepts finite 4D cells and treats dimension and e
   assert.equal(index.uniqueMatch(reordered), undefined);
 });
 
+test("cell geometry validation computes affine rank across every finite 4D coordinate", () => {
+  const q1 = {
+    originalCellId: "q1-xw",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0, 0, 0],
+      [1e200, 0, 0, 0],
+      [1e200, 0, 0, 1e-200],
+      [0, 0, 0, 1e-200]
+    ]
+  };
+  const h1 = {
+    originalCellId: "h1-xyw",
+    kind: "H1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0, 0, 0],
+      [1e200, 0, 0, 0],
+      [1e200, 1e-200, 0, 0],
+      [0, 1e-200, 0, 0],
+      [0, 0, 0, 1],
+      [1e200, 0, 0, 1],
+      [1e200, 1e-200, 0, 1],
+      [0, 1e-200, 0, 1]
+    ]
+  };
+  const index = new RefinementCellGeometryIndex(0);
+  index.add("q1-xw", q1);
+  index.add("h1-xyw", h1);
+
+  assert.equal(
+    index.uniqueMatch({
+      ...q1,
+      originalCellId: "old-q1",
+      points: [...q1.points].reverse()
+    }),
+    "q1-xw"
+  );
+  assert.equal(
+    index.uniqueMatch({
+      ...h1,
+      originalCellId: "old-h1",
+      points: [...h1.points].reverse()
+    }),
+    "h1-xyw"
+  );
+});
+
+test("cell geometry validation rejects truly low-rank 4D corner sets", () => {
+  const lowRankQ1 = {
+    originalCellId: "low-rank-q1",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0, 0, 0],
+      [1, 0, 0, 2],
+      [2, 0, 0, 4],
+      [3, 0, 0, 6]
+    ]
+  };
+  const lowRankH1 = {
+    originalCellId: "low-rank-h1",
+    kind: "H1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0, 0, 0],
+      [1, 0, 0, 1],
+      [1, 1, 0, 2],
+      [0, 1, 0, 1],
+      [2, 0, 0, 2],
+      [2, 1, 0, 3],
+      [3, 0, 0, 3],
+      [3, 1, 0, 4]
+    ]
+  };
+
+  for (const geometry of [lowRankQ1, lowRankH1]) {
+    assert.throws(
+      () => new RefinementCellGeometryIndex(0).add(
+        geometry.originalCellId,
+        geometry
+      ),
+      (error) =>
+        error instanceof RefinementCellGeometryMatchError
+        && /collapsed/.test(error.message)
+    );
+  }
+});
+
 test("cell geometry index validates tolerance and ids and snapshots candidates on add", () => {
   for (const tolerance of [
     -1,
@@ -1652,4 +1746,105 @@ test("cell geometry tolerance matching avoids squared-distance overflow and unde
     z
   ]);
   assert.equal(underflowIndex.uniqueMatch(underflowQuery), undefined);
+});
+
+test("cell geometry matching finds an augmenting path when query-order greedy would fail", () => {
+  const candidate = {
+    originalCellId: "candidate",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0],
+      [1.5, 0],
+      [0, 10]
+    ]
+  };
+  const query = {
+    ...candidate,
+    originalCellId: "old",
+    points: [
+      [0.75, 0],
+      [0, 0],
+      [0, 10.1]
+    ]
+  };
+  const index = new RefinementCellGeometryIndex(1);
+  index.add("candidate", candidate);
+
+  assert.equal(index.uniqueMatch(query), "candidate");
+});
+
+test("cell geometry matching rejects Hall-deficient corner graphs from 9 through 20 points", () => {
+  const childScript = `
+    import assert from "node:assert/strict";
+    import {
+      RefinementCellGeometryIndex
+    } from "./dist/index.js";
+
+    const cases = Array.from({ length: 12 }, (_, offset) => {
+      const pointCount = offset + 9;
+      const candidate = {
+        originalCellId: \`candidate-\${pointCount}\`,
+        kind: "Q1",
+        level: 0,
+        role: "base",
+        points: [
+          ...Array.from(
+            { length: pointCount - 2 },
+            (_, index) => [index * 0.001, 0]
+          ),
+          [10, 0],
+          [10, 2]
+        ]
+      };
+      const query = {
+        ...candidate,
+        originalCellId: \`old-\${pointCount}\`,
+        points: [
+          ...Array.from(
+            { length: pointCount - 1 },
+            (_, index) => [(index + 0.25) * 0.001, 0]
+          ),
+          [10, 0.1]
+        ]
+      };
+      const index = new RefinementCellGeometryIndex(1);
+      index.add(candidate.originalCellId, candidate);
+      return { index, query };
+    });
+
+    const originalSetAdd = Set.prototype.add;
+    let setAddCount = 0;
+    Set.prototype.add = function (value) {
+      setAddCount += 1;
+      if (setAddCount > 1000) {
+        throw new Error(
+          "matching exceeded the deterministic polynomial work guard"
+        );
+      }
+      return Reflect.apply(originalSetAdd, this, [value]);
+    };
+    try {
+      for (const { index, query } of cases) {
+        assert.equal(index.uniqueMatch(query), undefined);
+      }
+    } finally {
+      Set.prototype.add = originalSetAdd;
+    }
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", childScript],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    [result.stdout, result.stderr].filter(Boolean).join("\n")
+  );
 });

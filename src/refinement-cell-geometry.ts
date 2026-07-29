@@ -313,7 +313,7 @@ function assertNotCollapsed(
   }
 
   const requiredRank = kind === "Q1" ? 2 : 3;
-  if (affineRankInPhysicalCoordinates(points) < requiredRank) {
+  if (affineRank(points) < requiredRank) {
     throw geometryError(
       cellId,
       `${kind} geometry is collapsed`
@@ -321,16 +321,16 @@ function assertNotCollapsed(
   }
 }
 
-function affineRankInPhysicalCoordinates(
+function affineRank(
   points: readonly (readonly number[])[]
 ): number {
-  const physicalDimension = Math.min(3, points[0]!.length);
-  if (physicalDimension === 0 || points.length < 2) {
+  const dimension = points[0]!.length;
+  if (dimension === 0 || points.length < 2) {
     return 0;
   }
 
   const coordinateScales = Array.from(
-    { length: physicalDimension },
+    { length: dimension },
     (_, coordinateIndex) => Math.max(
       ...points.map((point) => Math.abs(point[coordinateIndex]!))
     )
@@ -338,7 +338,7 @@ function affineRankInPhysicalCoordinates(
   const normalized = points
     .map((point) =>
       Array.from(
-        { length: physicalDimension },
+        { length: dimension },
         (_, index) => coordinateScales[index] === 0
           ? 0
           : point[index]! / coordinateScales[index]!
@@ -351,7 +351,7 @@ function affineRankInPhysicalCoordinates(
   );
   for (
     let coordinateIndex = 0;
-    coordinateIndex < physicalDimension;
+    coordinateIndex < dimension;
     coordinateIndex += 1
   ) {
     const span = Math.max(
@@ -365,13 +365,13 @@ function affineRankInPhysicalCoordinates(
     }
   }
   const threshold = Number.EPSILON
-    * Math.max(points.length, physicalDimension)
+    * Math.max(points.length, dimension)
     * 16;
   let rank = 0;
 
   for (
     let column = 0;
-    column < physicalDimension && rank < rows.length;
+    column < dimension && rank < rows.length;
     column += 1
   ) {
     let pivotRow = rank;
@@ -393,7 +393,7 @@ function affineRankInPhysicalCoordinates(
       const factor = rowValues[column]! / rows[rank]![column]!;
       for (
         let innerColumn = column;
-        innerColumn < physicalDimension;
+        innerColumn < dimension;
         innerColumn += 1
       ) {
         rowValues[innerColumn] = rowValues[innerColumn]!
@@ -461,33 +461,60 @@ function hasCompletePointMatching(
   candidatesByQueryPoint: readonly (readonly number[])[],
   candidateCount: number
 ): boolean {
-  const order = candidatesByQueryPoint
+  if (candidatesByQueryPoint.length !== candidateCount) {
+    return false;
+  }
+  const sortedCandidatesByQueryPoint = candidatesByQueryPoint.map(
+    (candidates) => [...candidates].sort((a, b) => a - b)
+  );
+  const queryOrder = sortedCandidatesByQueryPoint
     .map((candidates, queryIndex) => ({
       queryIndex,
-      candidates: [...candidates].sort((a, b) => a - b)
+      candidateCount: candidates.length
     }))
     .sort((first, second) =>
-      first.candidates.length - second.candidates.length
+      first.candidateCount - second.candidateCount
       || first.queryIndex - second.queryIndex
     );
-  const used = new Set<number>();
-  const visit = (depth: number): boolean => {
-    if (depth === order.length) {
-      return used.size === candidateCount;
-    }
-    for (const candidateIndex of order[depth]!.candidates) {
-      if (used.has(candidateIndex)) {
+  const matchedQueryByCandidate = Array.from(
+    { length: candidateCount },
+    () => -1
+  );
+  const tryAugment = (
+    queryIndex: number,
+    visitedCandidates: boolean[]
+  ): boolean => {
+    for (
+      const candidateIndex of
+        sortedCandidatesByQueryPoint[queryIndex]!
+    ) {
+      if (visitedCandidates[candidateIndex]) {
         continue;
       }
-      used.add(candidateIndex);
-      if (visit(depth + 1)) {
+      visitedCandidates[candidateIndex] = true;
+      const matchedQuery = matchedQueryByCandidate[candidateIndex]!;
+      if (
+        matchedQuery === -1
+        || tryAugment(matchedQuery, visitedCandidates)
+      ) {
+        matchedQueryByCandidate[candidateIndex] = queryIndex;
         return true;
       }
-      used.delete(candidateIndex);
     }
     return false;
   };
-  return visit(0);
+
+  let matchingSize = 0;
+  for (const { queryIndex } of queryOrder) {
+    const visitedCandidates = Array.from(
+      { length: candidateCount },
+      () => false
+    );
+    if (tryAugment(queryIndex, visitedCandidates)) {
+      matchingSize += 1;
+    }
+  }
+  return matchingSize === candidatesByQueryPoint.length;
 }
 
 function geometryMetadataKey(
