@@ -184,8 +184,6 @@ const knownCellIdsByHistoryIndex = new WeakMap<
 interface RefinementHistoryStateDependencies {
   readonly activePredecessorCommandIdsByCommandId:
     ReadonlyMap<string, readonly string[]>;
-  readonly identityPredecessorCommandIdsByCommandId:
-    ReadonlyMap<string, readonly string[]>;
   readonly consumerCommandIdsByProducerCommandId:
     ReadonlyMap<string, readonly string[]>;
 }
@@ -310,241 +308,58 @@ export function buildRefinementHistoryClosure(
     );
   }
 
-  type CommandInclusionReason =
-    | "seed"
-    | "active-predecessor"
-    | "identity"
-    | "state-consumer";
-  type CommandTraversalContext =
-    | {
-      readonly kind: "independent";
-      readonly originCommandId: string;
-    }
-    | {
-      readonly kind: "identity-restoration";
-      readonly originCommandId: string;
-    };
-  interface CommandWorkItem {
-    readonly commandId: string;
-    readonly reason: CommandInclusionReason;
-    readonly context: CommandTraversalContext;
-    readonly originCommandId: string;
-    readonly producerCommandId?: string;
-  }
-  interface CommandContextState {
-    readonly commandId: string;
-    readonly context: CommandTraversalContext;
-    readonly reasons: Set<CommandInclusionReason>;
-    readonly originCommandIds: Set<string>;
-    readonly producerCommandIds: Set<string>;
-  }
   const includedCommandIds = new Set<string>();
-  const identityCommandIds = new Set<string>();
-  const contextStatesByCommandId =
-    new Map<string, Map<string, CommandContextState>>();
-  const commandWorklist: CommandWorkItem[] = [];
-  const activeProducerWorklist: CommandWorkItem[] = [];
-  const queuedCommandContextStates =
-    new Set<CommandContextState>();
-  const processedCommandContextStates =
-    new Set<CommandContextState>();
-  const queuedActiveProducerContextStates =
-    new Set<CommandContextState>();
-  const expandedActiveProducerContextStates =
-    new Set<CommandContextState>();
-  const contextClassKey = (
-    context: CommandTraversalContext
-  ): string => context.kind === "independent"
-    ? "independent"
-    : `identity-restoration:${context.originCommandId}`;
-  const commandContextState = (
-    item: CommandWorkItem
-  ): CommandContextState => {
-    let contextStates =
-      contextStatesByCommandId.get(item.commandId);
-    if (contextStates === undefined) {
-      contextStates = new Map<string, CommandContextState>();
-      contextStatesByCommandId.set(item.commandId, contextStates);
-    }
-    const contextKey = contextClassKey(item.context);
-    let state = contextStates.get(contextKey);
-    if (state === undefined) {
-      state = {
-        commandId: item.commandId,
-        context: item.context,
-        reasons: new Set<CommandInclusionReason>(),
-        originCommandIds: new Set<string>(),
-        producerCommandIds: new Set<string>()
-      };
-      contextStates.set(contextKey, state);
-    }
-    return state;
-  };
-  const scheduleActiveProducer = (
-    item: CommandWorkItem,
-    state: CommandContextState
+  const commandWorklist: string[] = [];
+  const includeCommandId = (
+    commandId: string | undefined
   ): void => {
     if (
-      expandedActiveProducerContextStates.has(state)
-      || queuedActiveProducerContextStates.has(state)
+      commandId === undefined
+      || includedCommandIds.has(commandId)
     ) {
       return;
     }
-    queuedActiveProducerContextStates.add(state);
-    activeProducerWorklist.push(item);
-  };
-  const includeCommand = (
-    item: CommandWorkItem
-  ): void => {
-    includedCommandIds.add(item.commandId);
-    if (item.reason === "identity") {
-      identityCommandIds.add(item.commandId);
-    }
-    const state = commandContextState(item);
-    const addedReason = !state.reasons.has(item.reason);
-    state.reasons.add(item.reason);
-    state.originCommandIds.add(item.originCommandId);
-    if (item.producerCommandId !== undefined) {
-      state.producerCommandIds.add(item.producerCommandId);
-    }
-    if (
-      !processedCommandContextStates.has(state)
-      && !queuedCommandContextStates.has(state)
-    ) {
-      queuedCommandContextStates.add(state);
-      commandWorklist.push(item);
-    }
-    if (item.reason !== "identity" && addedReason) {
-      scheduleActiveProducer(item, state);
-    }
+    includedCommandIds.add(commandId);
+    commandWorklist.push(commandId);
   };
   for (const cellId of seedCellIds) {
-    const creatorCommandId =
-      index.creatorCommandIdByCellId.get(cellId);
-    if (creatorCommandId !== undefined) {
-      includeCommand({
-        commandId: creatorCommandId,
-        reason: "seed",
-        context: {
-          kind: "independent",
-          originCommandId: creatorCommandId
-        },
-        originCommandId: creatorCommandId
-      });
-    }
+    includeCommandId(
+      index.creatorCommandIdByCellId.get(cellId)
+    );
     for (
       const commandId of
         index.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
-      includeCommand({
-        commandId,
-        reason: "seed",
-        context: {
-          kind: "independent",
-          originCommandId: commandId
-        },
-        originCommandId: commandId
-      });
+      includeCommandId(commandId);
     }
   }
 
-  let commandWorklistIndex = 0;
-  let activeProducerWorklistIndex = 0;
-  while (
-    commandWorklistIndex < commandWorklist.length
-    || activeProducerWorklistIndex
-      < activeProducerWorklist.length
+  for (
+    let worklistIndex = 0;
+    worklistIndex < commandWorklist.length;
+    worklistIndex += 1
   ) {
-    while (commandWorklistIndex < commandWorklist.length) {
-      const item = commandWorklist[commandWorklistIndex];
-      commandWorklistIndex += 1;
-      if (item === undefined) {
-        throw new Error(
-          `history closure command worklist is sparse at ${commandWorklistIndex - 1}`
-        );
-      }
-      const state = commandContextState(item);
-      queuedCommandContextStates.delete(state);
-      if (processedCommandContextStates.has(state)) {
-        continue;
-      }
-      processedCommandContextStates.add(state);
-      const { commandId } = item;
-      for (
-        const predecessorCommandId of
-          stateDependencies.activePredecessorCommandIdsByCommandId.get(
-            commandId
-          ) ?? []
-      ) {
-        includeCommand({
-          commandId: predecessorCommandId,
-          reason: "active-predecessor",
-          context: state.context,
-          originCommandId: item.originCommandId
-        });
-      }
-      for (
-        const identityPredecessorCommandId of
-          stateDependencies.identityPredecessorCommandIdsByCommandId.get(
-            commandId
-          ) ?? []
-      ) {
-        includeCommand({
-          commandId: identityPredecessorCommandId,
-          reason: "identity",
-          context: {
-            kind: "identity-restoration",
-            originCommandId: identityPredecessorCommandId
-          },
-          originCommandId: identityPredecessorCommandId
-        });
-      }
-    }
-
-    if (
-      activeProducerWorklistIndex
-      >= activeProducerWorklist.length
-    ) {
-      continue;
-    }
-    const item =
-      activeProducerWorklist[activeProducerWorklistIndex];
-    activeProducerWorklistIndex += 1;
-    if (item === undefined) {
+    const commandId = commandWorklist[worklistIndex];
+    if (commandId === undefined) {
       throw new Error(
-        `history closure active worklist is sparse at ${activeProducerWorklistIndex - 1}`
+        `history closure worklist is sparse at ${worklistIndex}`
       );
     }
-    const state = commandContextState(item);
-    queuedActiveProducerContextStates.delete(state);
-    const { commandId } = state;
-    const canExpandActiveProducer =
-      state.context.kind === "independent"
-      || state.reasons.has("active-predecessor")
-      || (
-        state.reasons.has("state-consumer")
-        && !identityCommandIds.has(commandId)
-      );
-    if (
-      expandedActiveProducerContextStates.has(state)
-      || !canExpandActiveProducer
+    for (
+      const predecessorCommandId of
+        stateDependencies.activePredecessorCommandIdsByCommandId.get(
+          commandId
+        ) ?? []
     ) {
-      continue;
+      includeCommandId(predecessorCommandId);
     }
-    expandedActiveProducerContextStates.add(state);
     for (
       const consumerCommandId of
         stateDependencies.consumerCommandIdsByProducerCommandId.get(
           commandId
         ) ?? []
     ) {
-      includeCommand({
-        commandId: consumerCommandId,
-        reason: "state-consumer",
-        context: state.context,
-        originCommandId: item.originCommandId,
-        producerCommandId: commandId
-      });
+      includeCommandId(consumerCommandId);
     }
   }
 
@@ -727,18 +542,16 @@ function appendStableUnique(
 function buildHistoryStateDependencies(
   commands: readonly RefinementSessionCommand[]
 ): RefinementHistoryStateDependencies {
-  const identityCreatorCommandIdByCellId = new Map<CellId, string>();
   const currentActiveProducerCommandIdByCellId =
     new Map<CellId, string>();
   const activePredecessorCommandIdsByCommandId =
-    new Map<string, string[]>();
-  const identityPredecessorCommandIdsByCommandId =
     new Map<string, string[]>();
   const consumerCommandIdsByProducerCommandId =
     new Map<string, string[]>();
 
   for (const command of commands) {
     for (const cellId of stableUnique(command.hiddenCellIds)) {
+      // A hide depends on and consumes the cell's current active version.
       const producerCommandId =
         currentActiveProducerCommandIdByCellId.get(cellId);
       if (producerCommandId !== undefined) {
@@ -759,22 +572,14 @@ function buildHistoryStateDependencies(
       const cellId of
         stableUnique(command.reactivatedCellIds ?? [])
     ) {
-      const identityCreatorCommandId =
-        identityCreatorCommandIdByCellId.get(cellId);
-      if (identityCreatorCommandId !== undefined) {
-        appendCommandDependency(
-          identityPredecessorCommandIdsByCommandId,
-          command.id,
-          identityCreatorCommandId
-        );
-      }
+      // Reactivation starts a new seed-visible active version; it does
+      // not depend on the cell's prior identity creator.
       currentActiveProducerCommandIdByCellId.set(
         cellId,
         command.id
       );
     }
     for (const cellId of stableUnique(command.createdCellIds)) {
-      identityCreatorCommandIdByCellId.set(cellId, command.id);
       currentActiveProducerCommandIdByCellId.set(
         cellId,
         command.id
@@ -786,10 +591,6 @@ function buildHistoryStateDependencies(
     activePredecessorCommandIdsByCommandId:
       freezeCommandDependencyMap(
         activePredecessorCommandIdsByCommandId
-      ),
-    identityPredecessorCommandIdsByCommandId:
-      freezeCommandDependencyMap(
-        identityPredecessorCommandIdsByCommandId
       ),
     consumerCommandIdsByProducerCommandId:
       freezeCommandDependencyMap(
@@ -920,18 +721,11 @@ function commandHasIncludedPredecessor(
   commandId: string,
   includedCommandIds: ReadonlySet<string>
 ): boolean {
-  return [
-    ...(
-      stateDependencies.activePredecessorCommandIdsByCommandId.get(
-        commandId
-      ) ?? []
-    ),
-    ...(
-      stateDependencies.identityPredecessorCommandIdsByCommandId.get(
-        commandId
-      ) ?? []
-    )
-  ].some((predecessorCommandId) =>
+  return (
+    stateDependencies.activePredecessorCommandIdsByCommandId.get(
+      commandId
+    ) ?? []
+  ).some((predecessorCommandId) =>
     includedCommandIds.has(predecessorCommandId)
   );
 }
