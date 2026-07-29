@@ -122,6 +122,7 @@ export interface TwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId = numbe
     faceNodeIds: number[];
   }>;
   attemptedActions: TwoToOneCompensationAction<TId>[];
+  historyCommandIds?: string[];
   suggestion?: {
     kind: "expand-selection" | "reduce-level" | "remesh-source";
     axis?: 0 | 1 | 2;
@@ -264,6 +265,7 @@ function cloneTwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId>(
     };
   });
   const suggestion = diagnostic.suggestion;
+  const historyCommandIds = diagnostic.historyCommandIds;
   const clonedSuggestion = suggestion === undefined
     ? undefined
     : {
@@ -275,12 +277,31 @@ function cloneTwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId>(
           : { parentCellIds: [...suggestion.parentCellIds] })
       };
 
-  return {
+  const cloned: TwoToOnePlanningDiagnostic<TId> = {
     conflictingCellIds: [...diagnostic.conflictingCellIds],
     conflictingInterfaces,
     attemptedActions,
     ...(clonedSuggestion === undefined ? {} : { suggestion: clonedSuggestion })
   };
+  if (historyCommandIds !== undefined) {
+    const clonedHistoryCommandIds = [...new Set(historyCommandIds)].sort();
+    // Existing diagnostic freezing is shallow; freeze this nested snapshot
+    // lazily once its owning diagnostic has been frozen.
+    Object.defineProperty(cloned, "historyCommandIds", {
+      configurable: true,
+      enumerable: true,
+      get(): string[] {
+        if (
+          Object.isFrozen(cloned)
+          && !Object.isFrozen(clonedHistoryCommandIds)
+        ) {
+          Object.freeze(clonedHistoryCommandIds);
+        }
+        return clonedHistoryCommandIds;
+      }
+    });
+  }
+  return cloned;
 }
 
 function isTwoToOneCompensationMode(value: unknown): value is TwoToOneCompensationMode {

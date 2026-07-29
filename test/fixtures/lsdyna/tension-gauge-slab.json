@@ -450,5 +450,6 @@
   "expectedInputElementCount": 1320,
   "expectedOutputNodeCount": 7689,
   "expectedOutputElementCount": 7040,
+  "maximumRelativeVolumeError": 1e-12,
   "minimumScaledJacobian": 0.25
 }

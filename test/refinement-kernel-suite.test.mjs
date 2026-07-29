@@ -108,6 +108,7 @@ const {
 
 function mutatePlanningDiagnostic(diagnostic) {
   diagnostic.conflictingCellIds.push(99);
+  diagnostic.historyCommandIds?.push("cmd-mutated");
   diagnostic.conflictingInterfaces[0].firstCellId = 99;
   diagnostic.conflictingInterfaces[0].secondCellId = 98;
   diagnostic.conflictingInterfaces[0].faceNodeIds.push(99);
@@ -148,6 +149,13 @@ function assertFrozenPlanningDiagnostic(error) {
   assert.equal(Object.isFrozen(error.diagnostic.conflictingCellIds), true);
   assert.equal(Object.isFrozen(error.diagnostic.conflictingInterfaces), true);
   assert.equal(Object.isFrozen(error.diagnostic.attemptedActions), true);
+  if (error.diagnostic.historyCommandIds !== undefined) {
+    assert.equal(Object.isFrozen(error.diagnostic.historyCommandIds), true);
+    assert.throws(
+      () => error.diagnostic.historyCommandIds.push("cmd-mutated"),
+      TypeError
+    );
+  }
   assert.equal(Object.isFrozen(error.diagnostic.suggestion), true);
   assert.throws(
     () => error.diagnostic.conflictingCellIds.push("mutated"),
@@ -1860,6 +1868,7 @@ test("Hex 2:1 structured planning errors retain machine-readable diagnostics", (
     conflictingCellIds: [11, 12],
     conflictingInterfaces: [],
     attemptedActions: [],
+    historyCommandIds: ["cmd-12", "cmd-2", "cmd-12"],
     suggestion: {
       kind: "expand-selection",
       axis: 1,
@@ -1875,7 +1884,10 @@ test("Hex 2:1 structured planning errors retain machine-readable diagnostics", (
 
   assert.equal(error.name, "TwoToOnePlanningError");
   assert.equal(error.code, "TWO_TO_ONE_UNSUPPORTED_PARITY");
-  assert.deepEqual(error.diagnostic, diagnostic);
+  assert.deepEqual(error.diagnostic, {
+    ...diagnostic,
+    historyCommandIds: ["cmd-12", "cmd-2"]
+  });
   assert.equal(error.diagnostic.suggestion.axis, 1);
   assert.equal(error instanceof Error, true);
   assert.equal(error instanceof TwoToOnePlanningError, true);
@@ -1884,7 +1896,10 @@ test("Hex 2:1 structured planning errors retain machine-readable diagnostics", (
     name: "TwoToOnePlanningError",
     message: "odd periodic transition field",
     code: "TWO_TO_ONE_UNSUPPORTED_PARITY",
-    diagnostic
+    diagnostic: {
+      ...diagnostic,
+      historyCommandIds: ["cmd-12", "cmd-2"]
+    }
   };
   assert.deepEqual(JSON.parse(JSON.stringify(error)), expectedDto);
 
@@ -1908,6 +1923,7 @@ test("Hex 2:1 structured planning errors isolate nested diagnostic snapshots", (
       replacedTransitionCellIds: [14],
       templateId: "selection-shell"
     }],
+    historyCommandIds: ["cmd-9", "cmd-3", "cmd-9"],
     suggestion: {
       kind: "expand-selection",
       axis: 1,
@@ -1915,7 +1931,10 @@ test("Hex 2:1 structured planning errors isolate nested diagnostic snapshots", (
       parentCellIds: [15]
     }
   };
-  const expectedDiagnostic = structuredClone(diagnostic);
+  const expectedDiagnostic = {
+    ...structuredClone(diagnostic),
+    historyCommandIds: ["cmd-3", "cmd-9"]
+  };
   const error = new TwoToOnePlanningError(
     "TWO_TO_ONE_COMPENSATION_LIMIT",
     "compensation budget exhausted",
@@ -1955,6 +1974,7 @@ test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () =
         replacedTransitionCellIds: [14],
         templateId: "selection-shell"
       }],
+      historyCommandIds: ["cmd-8", "cmd-1", "cmd-8"],
       suggestion: {
         kind: "expand-selection",
         axis: 1,
@@ -9516,6 +9536,301 @@ test("Hex 2:1 transition-shell rebuilding rejects a requested tolerance that ove
   assert.deepEqual(session, before);
 });
 
+for (const limitCase of [
+  { maxAddedParentLayers: 0, maxAddedParentCount: 32 },
+  { maxAddedParentLayers: 1, maxAddedParentCount: 0 }
+]) {
+  test(`Hex 2:1 transition-shell rebuilding obeys compensation bounds ${JSON.stringify(limitCase)}`, () => {
+    const {
+      session,
+      firstRefined,
+      candidate
+    } = createTransitionShellRegressionFixture();
+    const before = structuredClone(session);
+    const options = {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: {
+        mode: "local-topology",
+        ...limitCase
+      },
+      activeBuild: firstRefined
+    };
+
+    for (const operation of [
+      () => previewSessionPatch(session, [candidate], options),
+      () => refineSessionPatch(session, [candidate], options)
+    ]) {
+      const error = captureError(operation);
+      assert.equal(error instanceof TwoToOnePlanningError, true);
+      assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+      assert.equal(
+        error.diagnostic.attemptedActions[0]?.kind,
+        "transition-shell-rebuild"
+      );
+      assert.deepEqual(session, before);
+    }
+  });
+}
+
+test("Hex 2:1 transition-shell rebuilding reports an untraceable support cell as a history conflict", () => {
+  const {
+    session,
+    firstRefined,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.find((command) =>
+    command.createdCellIds.includes(candidate)
+  );
+  assert.ok(supportCommand);
+  replaceSessionCommand(session, supportCommand, {
+    createdCellIds: supportCommand.createdCellIds.filter(
+      (cellId) => cellId !== candidate
+    )
+  });
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions(firstRefined);
+
+  for (const operation of [
+    () => previewSessionPatch(session, [candidate], options),
+    () => refineSessionPatch(session, [candidate], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assertFrozenPlanningDiagnostic(error);
+    assert.match(
+      error.message,
+      /cannot trace cell .* to a refinement command/
+    );
+    assert.deepEqual(error.diagnostic.conflictingCellIds, [candidate]);
+    assert.deepEqual(error.diagnostic.historyCommandIds, []);
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 transition-shell rebuilding reports mixed support commands as a history conflict", () => {
+  const {
+    session,
+    firstRefined
+  } = createTransitionShellRegressionFixture();
+  const selectedCellIds = activeBoundaryCoreCellIds(session).slice(0, 2);
+  assert.equal(selectedCellIds.length, 2);
+  const supportCommand = session.undoStack.find((command) =>
+    selectedCellIds.every((cellId) => command.createdCellIds.includes(cellId))
+  );
+  assert.ok(supportCommand);
+  const splitCellId = selectedCellIds[1];
+  const syntheticCommandId = "cmd-99";
+  replaceSessionCommand(session, supportCommand, {
+    createdCellIds: supportCommand.createdCellIds.filter(
+      (cellId) => cellId !== splitCellId
+    )
+  });
+  session.undoStack.push(Object.freeze({
+    ...supportCommand,
+    id: syntheticCommandId,
+    hiddenCellIds: Object.freeze([]),
+    createdCellIds: Object.freeze([splitCellId]),
+    createdNodeIds: Object.freeze([])
+  }));
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions(firstRefined);
+
+  for (const operation of [
+    () => previewSessionPatch(session, selectedCellIds, options),
+    () => refineSessionPatch(session, selectedCellIds, options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.match(
+      error.message,
+      /requires cells from one supporting refinement command/
+    );
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id, syntheticCommandId].sort()
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 transition-shell rebuilding reports a modified support layer as a history conflict", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.find((command) =>
+    command.createdCellIds.includes(candidate)
+  );
+  assert.ok(supportCommand);
+  const modifiedCellId = supportCommand.createdCellIds.find((cellId) => {
+    const cell = session.cells.get(cellId);
+    return cellId !== candidate
+      && cell?.level === 1
+      && session.activeLeafIds.has(cellId);
+  });
+  assert.ok(modifiedCellId);
+  const modifiedCell = session.cells.get(modifiedCellId);
+  modifiedCell.active = false;
+  modifiedCell.hidden = true;
+  session.activeLeafIds.delete(modifiedCellId);
+  session.sortedActiveLeafIdsDirty = true;
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions(active);
+
+  for (const operation of [
+    () => previewSessionPatch(session, [candidate], options),
+    () => refineSessionPatch(session, [candidate], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.match(error.message, /requires an untouched supporting layer/);
+    assert.deepEqual(
+      error.diagnostic.conflictingCellIds,
+      [modifiedCellId]
+    );
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 transition-shell rebuilding reports unauthorized support completion as a history conflict", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.find((command) =>
+    command.createdCellIds.includes(candidate)
+  );
+  assert.ok(supportCommand);
+  for (const cellId of session.activeLeafIds) {
+    const cell = session.cells.get(cellId);
+    if (cell?.level === 0) {
+      cell.parentId = "synthetic-history-root";
+    }
+  }
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions();
+
+  for (const operation of [
+    () => previewSessionPatch(session, [candidate], options),
+    () => refineSessionPatch(session, [candidate], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.match(error.message, /cross the authorized support component/);
+    assert.deepEqual(error.diagnostic.conflictingCellIds, ["e58"]);
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 transition-shell rebuilding reports crossed command provenance as a history conflict", () => {
+  const {
+    session,
+    candidate
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.find((command) =>
+    command.createdCellIds.includes(candidate)
+  );
+  assert.ok(supportCommand);
+  const provenanceCellId = "e2";
+  const provenanceCell = session.cells.get(provenanceCellId);
+  assert.ok(provenanceCell);
+  provenanceCell.parentId = "synthetic-history-root";
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions();
+
+  for (const operation of [
+    () => previewSessionPatch(session, [candidate], options),
+    () => refineSessionPatch(session, [candidate], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.match(error.message, /cross refinement-command provenance/);
+    assert.deepEqual(
+      error.diagnostic.conflictingCellIds,
+      [provenanceCellId]
+    );
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 transition-shell rebuilding preserves unknown planner errors by identity", () => {
+  for (const operation of ["preview", "refine"]) {
+    const {
+      session,
+      firstRefined,
+      candidate
+    } = createTransitionShellRegressionFixture();
+    const supportCommandIndex = session.undoStack.findIndex((command) =>
+      command.createdCellIds.includes(candidate)
+    );
+    assert.notEqual(supportCommandIndex, -1);
+    const supportCommand = session.undoStack[supportCommandIndex];
+    const before = structuredClone(session);
+    const invariant = new Error("planner invariant probe");
+    session.undoStack[supportCommandIndex] = new Proxy(supportCommand, {
+      get(target, property, receiver) {
+        if (property === "createdCellIds") {
+          throw invariant;
+        }
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    const options = transitionShellRegressionOptions(firstRefined);
+    const invoke = operation === "preview"
+      ? () => previewSessionPatch(session, [candidate], options)
+      : () => refineSessionPatch(session, [candidate], options);
+
+    const error = captureError(invoke);
+
+    session.undoStack[supportCommandIndex] = supportCommand;
+    assert.equal(error, invariant);
+    assert.deepEqual(session, before);
+  }
+});
+
 test("Hex 2:1 local refinement can reject rebuilding an existing transition shell", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
@@ -10320,7 +10635,7 @@ function testFaceCoordinateKey(session, cell, face) {
     .join("|");
 }
 
-function firstActiveBoundaryCoreCell(session) {
+function activeBoundaryCoreCellIds(session, level = 1) {
   const transitionFaceKeys = new Set([...session.activeLeafIds]
     .map((cellId) => session.cells.get(cellId))
     .filter((cell) => cell && String(cell.role).includes("transition"))
@@ -10330,7 +10645,7 @@ function firstActiveBoundaryCoreCell(session) {
   return [...session.activeLeafIds]
     .map((cellId) => {
       const cell = session.cells.get(cellId);
-      if (cell?.level !== 1 || cell.role !== "selected") {
+      if (cell?.level !== level || cell.role !== "selected") {
         return undefined;
       }
       const transitionFaceCount = H1_TEST_FACES.filter((face) =>
@@ -10349,7 +10664,12 @@ function firstActiveBoundaryCoreCell(session) {
       return { cellId, centerTotal };
     })
     .filter(Boolean)
-    .sort((a, b) => a.centerTotal - b.centerTotal)[0].cellId;
+    .sort((a, b) => a.centerTotal - b.centerTotal)
+    .map(({ cellId }) => cellId);
+}
+
+function firstActiveBoundaryCoreCell(session, level = 1) {
+  return activeBoundaryCoreCellIds(session, level)[0];
 }
 
 function duplicateOneNearCoincidentNeighborFace(
@@ -10431,6 +10751,33 @@ function createTransitionShellRegressionFixture() {
     firstRefined,
     candidate: firstActiveBoundaryCoreCell(session)
   };
+}
+
+function transitionShellRegressionOptions(activeBuild) {
+  return {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    ...(activeBuild === undefined ? {} : { activeBuild })
+  };
+}
+
+function replaceSessionCommand(session, command, replacements) {
+  const index = session.undoStack.indexOf(command);
+  assert.notEqual(index, -1);
+  session.undoStack[index] = Object.freeze({
+    ...command,
+    ...replacements,
+    hiddenCellIds: Object.freeze([
+      ...(replacements.hiddenCellIds ?? command.hiddenCellIds)
+    ]),
+    createdCellIds: Object.freeze([
+      ...(replacements.createdCellIds ?? command.createdCellIds)
+    ]),
+    createdNodeIds: Object.freeze([
+      ...(replacements.createdNodeIds ?? command.createdNodeIds)
+    ])
+  });
 }
 
 function addAmbiguousSupportFaceCell(

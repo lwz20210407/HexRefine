@@ -514,6 +514,11 @@ for (const name of [
       result.mesh.elements.length,
       manifest.expectedOutputElementCount
     );
+    assert.equal(result.quality.ok, true);
+    assert.ok(
+      result.quality.relativeVolumeError
+        <= manifest.maximumRelativeVolumeError
+    );
     assert.equal(checkNoHangingNodes(result.mesh, 1e-8).ok, true);
     assert.ok(
       result.quality.childMinimumOrientedScaledJacobian

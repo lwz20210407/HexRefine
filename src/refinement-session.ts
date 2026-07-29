@@ -37,8 +37,10 @@ import {
   DirectTwoToOnePlanningError,
   normalizeTwoToOneCompensation,
   TwoToOnePlanningError,
+  type NormalizedTwoToOneCompensation,
   type ReadonlyTwoToOneCapabilityReport,
   type TwoToOneCapabilityReport,
+  type TwoToOneCompensationAction,
   type TwoToOneCompensationCarrier,
   type TwoToOneCompensationOptions
 } from "./two-to-one-capability.js";
@@ -1872,6 +1874,10 @@ function refineSessionPatchWithRebuiltTransitionShell(
 ): RefinementSessionCommand & {
   readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
 } {
+  const compensation = normalizeTwoToOneCompensation(
+    new Set(cellIds).size,
+    options
+  );
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
@@ -1916,8 +1922,10 @@ function refineSessionPatchWithRebuiltTransitionShell(
     return !cell.active || cell.hidden || !working.activeLeafIds.has(cellId);
   });
   if (nonLeafSupportCellIds.length > 0) {
-    throw new Error(
-      `automatic transition-shell rebuilding requires an untouched supporting layer: ${nonLeafSupportCellIds.join(", ")}`
+    throw historyConflict(
+      `automatic transition-shell rebuilding requires an untouched supporting layer: ${nonLeafSupportCellIds.join(", ")}`,
+      nonLeafSupportCellIds,
+      [supportCommand.id]
     );
   }
 
@@ -1944,6 +1952,28 @@ function refineSessionPatchWithRebuiltTransitionShell(
     ...previousCoreParentIds,
     ...collidingTransitionParentIds
   ])].sort(compareCellIds);
+  const previousCoreParentIdSet = new Set(previousCoreParentIds);
+  const addedParentCellIds = rebuiltCoreParentIds
+    .filter((cellId) => !previousCoreParentIdSet.has(cellId));
+  const attemptedAction: TwoToOneCompensationAction<CellId> = {
+    kind: "transition-shell-rebuild",
+    reason: "the nested core reached an existing 2:1 transition component",
+    addedParentCellIds,
+    replacedTransitionCellIds: [...collidingTransitionParentIds]
+  };
+  if (
+    addedParentCellIds.length > 0
+    && (
+      compensation.maxAddedParentLayers < 1
+      || addedParentCellIds.length > compensation.maxAddedParentCount
+    )
+  ) {
+    throw compensationLimitError(
+      validation.cellIds,
+      attemptedAction,
+      compensation
+    );
+  }
 
   for (const cellId of supportLayerCellIds) {
     const cell = requiredCell(working, cellId);
@@ -1975,6 +2005,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
     working,
     rebuiltCoreParentIds,
     authorizedCompletionParentIds,
+    [supportCommand.id],
     retryOptions
   );
   validateRebuiltSupportPlanOwnership(
@@ -2032,19 +2063,12 @@ function refineSessionPatchWithRebuiltTransitionShell(
     { length: working.nodes.length - originalNodeCount },
     (_, index) => originalNodeCount + index + 1
   );
-  const previousCoreParentIdSet = new Set(previousCoreParentIds);
   const twoToOne: TwoToOneCapabilityReport<CellId> = {
     status: "compensated",
     topologyClass: "mixed-level",
     originalSelectedCellIds: [...validation.cellIds].sort(compareCellIds),
     effectiveSelectedCellIds: [...remappedCellIds].sort(compareCellIds),
-    actions: [{
-      kind: "transition-shell-rebuild",
-      reason: "the nested core reached an existing 2:1 transition component",
-      addedParentCellIds: rebuiltCoreParentIds
-        .filter((cellId) => !previousCoreParentIdSet.has(cellId)),
-      replacedTransitionCellIds: [...collidingTransitionParentIds]
-    }],
+    actions: [attemptedAction],
     affectedComponentCellIds: [...new Set([
       ...hiddenCellIds,
       ...activeCreatedCellIds,
@@ -2076,6 +2100,7 @@ function buildCompletedRebuiltSupportPlan(
   session: RefinementSession,
   initialCoreParentIds: readonly CellId[],
   authorizedCompletionParentIds: ReadonlySet<CellId>,
+  historyCommandIds: readonly string[],
   options: RefinementSessionPatchOptions
 ): RefinementSessionPatchPlan {
   const selectedCellIds = [...initialCoreParentIds].sort(compareCellIds);
@@ -2104,6 +2129,7 @@ function buildCompletedRebuiltSupportPlan(
     selectedCellIds,
     validation.level,
     authorizedCompletionParentIds,
+    historyCommandIds,
     options
   );
   return buildRefinementSessionPatchPlan(session, completedCellIds, options);
@@ -2114,6 +2140,7 @@ function completeLogicalSupportParentBlock(
   parentIds: readonly CellId[],
   level: number,
   authorizedCellIds: ReadonlySet<CellId>,
+  historyCommandIds: readonly string[],
   options: RefinementSessionPatchOptions
 ): CellId[] {
   const active = level > 0
@@ -2156,8 +2183,10 @@ function completeLogicalSupportParentBlock(
           throw new Error(`logical support parent ${cellId} is not an active refinable level-${level} cell`);
         }
         if (!authorizedCellIds.has(cellId)) {
-          throw new Error(
-            `logical support completion would cross the authorized support component at ${cellId}`
+          throw historyConflict(
+            `logical support completion would cross the authorized support component at ${cellId}`,
+            [cellId],
+            historyCommandIds
           );
         }
         completedParentIds.push(cellId);
@@ -2233,8 +2262,10 @@ function validateRebuiltSupportPlanOwnership(
     ) {
       continue;
     }
-    throw new Error(
-      `automatic transition-shell rebuilding would cross refinement-command provenance at ${cellId}`
+    throw historyConflict(
+      `automatic transition-shell rebuilding would cross refinement-command provenance at ${cellId}`,
+      [cellId],
+      [supportCommand.id]
     );
   }
 }
@@ -2660,6 +2691,48 @@ function assertSessionFaceGeometryResolution(
   }
 }
 
+function historyConflict(
+  message: string,
+  conflictingCellIds: readonly CellId[],
+  historyCommandIds: readonly string[] = []
+): TwoToOnePlanningError<CellId> {
+  return new TwoToOnePlanningError(
+    "TWO_TO_ONE_HISTORY_CONFLICT",
+    message,
+    {
+      conflictingCellIds: stableCellIds(conflictingCellIds),
+      conflictingInterfaces: [],
+      attemptedActions: [],
+      historyCommandIds: [...new Set(historyCommandIds)].sort(),
+      suggestion: {
+        kind: "reduce-level"
+      }
+    }
+  );
+}
+
+function compensationLimitError(
+  selectedCellIds: readonly CellId[],
+  action: TwoToOneCompensationAction<CellId>,
+  compensation: NormalizedTwoToOneCompensation
+): TwoToOnePlanningError<CellId> {
+  return new TwoToOnePlanningError(
+    "TWO_TO_ONE_COMPENSATION_LIMIT",
+    `transition-shell compensation exceeds parent limits `
+      + `(layers ${compensation.maxAddedParentLayers}, `
+      + `parents ${compensation.maxAddedParentCount})`,
+    {
+      conflictingCellIds: stableCellIds(selectedCellIds),
+      conflictingInterfaces: [],
+      attemptedActions: [action],
+      suggestion: {
+        kind: "expand-selection",
+        parentCellIds: [...action.addedParentCellIds]
+      }
+    }
+  );
+}
+
 function sessionFaceResolutionError(
   cellIds: readonly CellId[],
   message: string
@@ -2730,12 +2803,19 @@ function findSingleSupportCommand(
       .reverse()
       .find((candidate) => candidate.createdCellIds.includes(cellId));
     if (!command) {
-      throw new Error(`automatic transition-shell rebuilding cannot trace cell ${cellId} to a refinement command`);
+      throw historyConflict(
+        `automatic transition-shell rebuilding cannot trace cell ${cellId} to a refinement command`,
+        [cellId]
+      );
     }
     commands.add(command);
   }
   if (commands.size !== 1) {
-    throw new Error("automatic transition-shell rebuilding requires cells from one supporting refinement command");
+    throw historyConflict(
+      "automatic transition-shell rebuilding requires cells from one supporting refinement command",
+      cellIds,
+      [...commands].map((command) => command.id)
+    );
   }
   return [...commands][0]!;
 }
@@ -3258,6 +3338,7 @@ function mapNumericDiagnosticToCellIds(
     }));
   const diagnostic = error.diagnostic;
   const conflictingCellIds = mapIds(diagnostic.conflictingCellIds);
+  const historyCommandIds = diagnostic.historyCommandIds;
   const suggestion = diagnostic.suggestion;
   return new TwoToOnePlanningError(
     error.code,
@@ -3294,6 +3375,12 @@ function mapNumericDiagnosticToCellIds(
           ? {}
           : { templateId: action.templateId })
       })),
+      ...(historyCommandIds === undefined
+        ? {}
+        : {
+            historyCommandIds:
+              [...new Set(historyCommandIds)].sort()
+          }),
       ...(suggestion === undefined
         ? {}
         : {
@@ -3341,6 +3428,7 @@ function cloneCellIdPlanningError(
 ): TwoToOnePlanningError<CellId> {
   const diagnostic = error.diagnostic;
   const conflictingCellIds = stableCellIds(diagnostic.conflictingCellIds);
+  const historyCommandIds = diagnostic.historyCommandIds;
   const suggestion = diagnostic.suggestion;
   return new TwoToOnePlanningError(
     error.code,
@@ -3367,6 +3455,12 @@ function cloneCellIdPlanningError(
           ? {}
           : { templateId: action.templateId })
       })),
+      ...(historyCommandIds === undefined
+        ? {}
+        : {
+            historyCommandIds:
+              [...new Set(historyCommandIds)].sort()
+          }),
       ...(suggestion === undefined
         ? {}
         : {

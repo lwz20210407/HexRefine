@@ -7,6 +7,8 @@ import {
   refineByElementIdsWithReport
 } from "../dist/index.js";
 
+const maximumRelativeVolumeError = 1e-12;
+
 const fixtures = [
   {
     name: "tension-gauge-slab",
@@ -74,7 +76,12 @@ for (const fixture of fixtures) {
   );
   if (
     !result.quality?.ok
-    || result.quality.childMinimumOrientedScaledJacobian
+    || result.quality.relativeVolumeError > maximumRelativeVolumeError
+  ) {
+    throw new Error(`${fixture.name} failed volume conservation`);
+  }
+  if (
+    result.quality.childMinimumOrientedScaledJacobian
       < fixture.minimumScaledJacobian
     || !checkNoHangingNodes(result.mesh, 1e-8).ok
     || result.twoToOne?.status !== fixture.expectedStatus
@@ -91,6 +98,7 @@ for (const fixture of fixtures) {
     expectedInputElementCount: fixture.mesh.elements.length,
     expectedOutputNodeCount: result.mesh.nodes.length,
     expectedOutputElementCount: result.mesh.elements.length,
+    maximumRelativeVolumeError,
     minimumScaledJacobian: fixture.minimumScaledJacobian
   };
   writeFileSync(
