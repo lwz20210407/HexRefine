@@ -6259,6 +6259,68 @@ test("unchecked Hex planning internals are absent from the root runtime API", ()
   }
 });
 
+test("refinement session public facade preserves the legacy API and hides history transactions", async () => {
+  const publicRefinementSession = await import(
+    "../dist/refinement-session-public.js"
+  );
+  const legacyRuntimeExports = [
+    "activeBuildCellIdByElementId",
+    "activeBuildElementIdByCellId",
+    "activeBuildHasSessionNodeIds",
+    "activeBuildSessionNodeIdsByNodeId",
+    "buildActiveMesh",
+    "buildActiveMeshWithMap",
+    "buildRefinementSessionExport",
+    "checkRefinementSessionCommandConformance",
+    "cloneRefinementSessionCommand",
+    "createRefinementSession",
+    "isRefinableSessionCell",
+    "previewSessionPatch",
+    "redoRefinementSession",
+    "refineSessionCell",
+    "refineSessionCells",
+    "refineSessionPatch",
+    "remapSessionSetsToActiveMesh",
+    "undoRefinementSession",
+    "validateActiveBuildCellsForSession",
+    "validateActiveBuildForSession",
+    "validateRefinementSessionSelection"
+  ];
+
+  assert.deepEqual(
+    Object.keys(publicRefinementSession).sort(),
+    legacyRuntimeExports
+  );
+  assert.deepEqual(
+    Object.keys(api.refinementSession).sort(),
+    legacyRuntimeExports
+  );
+  for (const exportName of legacyRuntimeExports) {
+    assert.equal(Object.hasOwn(api, exportName), true, exportName);
+    assert.strictEqual(api[exportName], publicRefinementSession[exportName]);
+    assert.strictEqual(
+      api.refinementSession[exportName],
+      publicRefinementSession[exportName]
+    );
+  }
+
+  assert.equal(
+    Object.hasOwn(api, "planRefinementSessionHistoryTransaction"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(
+      api.refinementSession,
+      "planRefinementSessionHistoryTransaction"
+    ),
+    false
+  );
+  assert.equal(
+    typeof planRefinementSessionHistoryTransaction,
+    "function"
+  );
+});
+
 test("flat build preview refine and Hex entries reject invalid explicit merge tolerances", () => {
   const mesh = createHexUnitCubeMesh(1, 1, 1);
   mesh.data = {

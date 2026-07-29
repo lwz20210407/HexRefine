@@ -1,6 +1,6 @@
 export * as meshSelection from "./mesh-selection.js";
 export * as refinementOps from "./refinement-ops.js";
-export * as refinementSession from "./refinement-session.js";
+export * as refinementSession from "./refinement-session-public.js";
 export * as refinementHistory from "./refinement-history.js";
 export * as refinementCellGeometry from "./refinement-cell-geometry.js";
 export * as refinementPlanner from "./refinement-planner.js";
@@ -33,7 +33,7 @@ export * from "./q1-operations.js";
 export * from "./refinement-ops.js";
 export * from "./refinement-history.js";
 export * from "./refinement-cell-geometry.js";
-export * from "./refinement-session.js";
+export * from "./refinement-session-public.js";
 export * from "./session-selection-prep.js";
 export * from "./command-script.js";
 export * from "./export.js";
