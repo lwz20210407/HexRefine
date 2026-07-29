@@ -344,6 +344,66 @@ test("history closure output is independent of seed order", () => {
   assert.deepEqual(reverse, forward);
 });
 
+test("history closure replays consumers of reactivated state versions", () => {
+  const commands = [
+    command("s1", ["a"], ["x"]),
+    command("s2", ["x"], ["y"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("s3", ["a"], ["z"])
+  ];
+  const knownCellIds = ["a", "x", "y", "z"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["y"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["s1"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["s2", "s3"]);
+  assert.deepEqual(closure.preservedCommandIds, []);
+});
+
+test("history closure classifies later seed consumers as downstream", () => {
+  const commands = [
+    command("s1", ["a"], ["x"]),
+    command("s2", ["x"], ["y"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("s3", ["a"], ["z"])
+  ];
+  const knownCellIds = ["a", "x", "y", "z"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["a"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["s1"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["s2", "s3"]);
+  assert.deepEqual(closure.preservedCommandIds, []);
+});
+
+test("history closure does not cross unrelated state versions", () => {
+  const commands = [
+    command("u1", ["a"], ["p"]),
+    command("u2", [], ["y"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("u3", ["a"], ["z"])
+  ];
+  const knownCellIds = ["a", "p", "y", "z"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["y"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["u2"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["u3"]);
+  assert.deepEqual(closure.preservedCommandIds, ["u1"]);
+});
+
 test("history index rejects duplicate command ids before other provenance", () => {
   assert.throws(
     () => buildRefinementHistoryIndex([
@@ -363,6 +423,18 @@ test("history index rejects a cell with multiple creators", () => {
     {
       message:
         "cell shared has multiple creators: cmd-1, cmd-2"
+    }
+  );
+});
+
+test("history index rejects created cells outside the known universe", () => {
+  assert.throws(
+    () => buildRefinementHistoryIndex([
+      command("cmd-missing-created", ["e1"], ["missing-created"])
+    ], ["e1"]),
+    {
+      message:
+        "command cmd-missing-created creates missing cell missing-created"
     }
   );
 });
@@ -545,6 +617,44 @@ test("history index exposes read-only map facades at runtime", () => {
       assert.equal(callbackMap.set, undefined);
     });
   }
+});
+
+test("history closure completes a deep dependency chain", () => {
+  const commandCount = 1_200;
+  const commands = Array.from({ length: commandCount }, (_, index) =>
+    command(
+      `chain-${index}`,
+      [index === 0 ? "root" : `cell-${index - 1}`],
+      [`cell-${index}`]
+    )
+  );
+  const knownCellIds = [
+    "root",
+    ...Array.from(
+      { length: commandCount },
+      (_, index) => `cell-${index}`
+    )
+  ];
+  const historyIndex = buildRefinementHistoryIndex(
+    commands,
+    knownCellIds
+  );
+  const closure = buildRefinementHistoryClosure(historyIndex, {
+    seedCellIds: [`cell-${commandCount - 1}`],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["chain-0"]);
+  assert.equal(
+    closure.downstreamCommandIds.length,
+    commandCount - 1
+  );
+  assert.equal(closure.downstreamCommandIds[0], "chain-1");
+  assert.equal(
+    closure.downstreamCommandIds.at(-1),
+    `chain-${commandCount - 1}`
+  );
+  assert.deepEqual(closure.preservedCommandIds, []);
 });
 
 test("history index maps are read-only in the public TypeScript API", () => {

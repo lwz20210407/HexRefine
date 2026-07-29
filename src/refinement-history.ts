@@ -181,6 +181,18 @@ const knownCellIdsByHistoryIndex = new WeakMap<
   ReadonlySet<CellId>
 >();
 
+interface RefinementHistoryStateDependencies {
+  readonly predecessorCommandIdsByCommandId:
+    ReadonlyMap<string, readonly string[]>;
+  readonly consumerCommandIdsByProducerCommandId:
+    ReadonlyMap<string, readonly string[]>;
+}
+
+const stateDependenciesByHistoryIndex = new WeakMap<
+  RefinementHistoryIndex,
+  RefinementHistoryStateDependencies
+>();
+
 export function buildRefinementHistoryIndex(
   commands: readonly RefinementSessionCommand[],
   knownCellIds: readonly CellId[]
@@ -192,6 +204,15 @@ export function buildRefinementHistoryIndex(
       throw new Error(`duplicate refinement command id ${command.id}`);
     }
     duplicateCheck.add(command.id);
+  }
+  for (const command of commands) {
+    for (const cellId of command.createdCellIds) {
+      if (!knownCells.has(cellId)) {
+        throw new Error(
+          `command ${command.id} creates missing cell ${cellId}`
+        );
+      }
+    }
   }
 
   const commandSnapshots = commands.map(snapshotHistoryCommand);
@@ -234,6 +255,9 @@ export function buildRefinementHistoryIndex(
     consumerCommandIdsByCellId,
     commandOrdinalById
   );
+  const stateDependencies = buildHistoryStateDependencies(
+    commandSnapshots
+  );
 
   const frozenConsumers = new Map<CellId, readonly string[]>();
   for (const [cellId, commandIds] of consumerCommandIdsByCellId) {
@@ -250,6 +274,7 @@ export function buildRefinementHistoryIndex(
     commandOrdinalById: readonlyMap(commandOrdinalById)
   });
   knownCellIdsByHistoryIndex.set(index, new Set(knownCells));
+  stateDependenciesByHistoryIndex.set(index, stateDependencies);
   return index;
 }
 
@@ -261,6 +286,13 @@ export function buildRefinementHistoryClosure(
   if (knownCellIds === undefined) {
     throw new Error(
       "refinement history index was not built by buildRefinementHistoryIndex"
+    );
+  }
+  const stateDependencies =
+    stateDependenciesByHistoryIndex.get(index);
+  if (stateDependencies === undefined) {
+    throw new Error(
+      "refinement history index has no state dependency graph"
     );
   }
 
@@ -277,43 +309,54 @@ export function buildRefinementHistoryClosure(
   }
 
   const includedCommandIds = new Set<string>();
+  const worklist: string[] = [];
+  const enqueueCommandId = (commandId: string | undefined): void => {
+    if (
+      commandId !== undefined
+      && !includedCommandIds.has(commandId)
+    ) {
+      includedCommandIds.add(commandId);
+      worklist.push(commandId);
+    }
+  };
   for (const cellId of seedCellIds) {
-    addCommandId(
-      includedCommandIds,
+    enqueueCommandId(
       index.creatorCommandIdByCellId.get(cellId)
     );
     for (
       const commandId of
         index.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
-      includedCommandIds.add(commandId);
+      enqueueCommandId(commandId);
     }
   }
 
-  let changed = true;
-  while (changed) {
-    changed = false;
+  for (
+    let worklistIndex = 0;
+    worklistIndex < worklist.length;
+    worklistIndex += 1
+  ) {
+    const commandId = worklist[worklistIndex];
+    if (commandId === undefined) {
+      throw new Error(
+        `history closure worklist is sparse at ${worklistIndex}`
+      );
+    }
     for (
-      const commandId of sortedCommandIds(index, includedCommandIds)
+      const predecessorCommandId of
+        stateDependencies.predecessorCommandIdsByCommandId.get(
+          commandId
+        ) ?? []
     ) {
-      const command = requiredHistoryCommand(index, commandId);
-      for (const cellId of commandInputCellIds(command)) {
-        changed = addCommandId(
-          includedCommandIds,
-          index.creatorCommandIdByCellId.get(cellId)
-        ) || changed;
-      }
-      for (const cellId of command.createdCellIds) {
-        for (
-          const consumerCommandId of
-            index.consumerCommandIdsByCellId.get(cellId) ?? []
-        ) {
-          changed = addCommandId(
-            includedCommandIds,
-            consumerCommandId
-          ) || changed;
-        }
-      }
+      enqueueCommandId(predecessorCommandId);
+    }
+    for (
+      const consumerCommandId of
+        stateDependencies.consumerCommandIdsByProducerCommandId.get(
+          commandId
+        ) ?? []
+    ) {
+      enqueueCommandId(consumerCommandId);
     }
   }
 
@@ -356,9 +399,9 @@ export function buildRefinementHistoryClosure(
     includedCommands.flatMap(commandInputCellIds)
   );
   const supportCommandIds = includedCommands
-    .filter((command) => !commandHasIncludedCreator(
-      index,
-      command,
+    .filter((command) => !commandHasIncludedPredecessor(
+      stateDependencies,
+      command.id,
       includedCommandIds
     ))
     .map((command) => command.id);
@@ -493,6 +536,75 @@ function appendStableUnique(
   }
 }
 
+function buildHistoryStateDependencies(
+  commands: readonly RefinementSessionCommand[]
+): RefinementHistoryStateDependencies {
+  const currentProducerCommandIdByCellId = new Map<CellId, string>();
+  const predecessorCommandIdsByCommandId =
+    new Map<string, string[]>();
+  const consumerCommandIdsByProducerCommandId =
+    new Map<string, string[]>();
+
+  for (const command of commands) {
+    for (const cellId of commandInputCellIds(command)) {
+      const producerCommandId =
+        currentProducerCommandIdByCellId.get(cellId);
+      if (producerCommandId === undefined) {
+        continue;
+      }
+      appendCommandDependency(
+        predecessorCommandIdsByCommandId,
+        command.id,
+        producerCommandId
+      );
+      appendCommandDependency(
+        consumerCommandIdsByProducerCommandId,
+        producerCommandId,
+        command.id
+      );
+    }
+    for (const cellId of stateProducedCellIds(command)) {
+      currentProducerCommandIdByCellId.set(cellId, command.id);
+    }
+  }
+
+  return Object.freeze({
+    predecessorCommandIdsByCommandId: freezeCommandDependencyMap(
+      predecessorCommandIdsByCommandId
+    ),
+    consumerCommandIdsByProducerCommandId:
+      freezeCommandDependencyMap(
+        consumerCommandIdsByProducerCommandId
+      )
+  });
+}
+
+function appendCommandDependency(
+  map: Map<string, string[]>,
+  commandId: string,
+  dependencyCommandId: string
+): void {
+  const commandIds = map.get(commandId);
+  if (commandIds === undefined) {
+    map.set(commandId, [dependencyCommandId]);
+    return;
+  }
+  if (!commandIds.includes(dependencyCommandId)) {
+    commandIds.push(dependencyCommandId);
+  }
+}
+
+function freezeCommandDependencyMap(
+  map: ReadonlyMap<string, readonly string[]>
+): ReadonlyMap<string, readonly string[]> {
+  return readonlyMap(new Map(
+    [...map].map(([commandId, dependencyCommandIds]) => [
+      commandId,
+      Object.freeze([...dependencyCommandIds])
+    ])
+  ));
+}
+
 function assertHistoryCommandOrder(
   creatorCommandIdByCellId: ReadonlyMap<CellId, string>,
   consumerCommandIdsByCellId: ReadonlyMap<CellId, readonly string[]>,
@@ -546,6 +658,15 @@ function commandInputCellIds(
   ]);
 }
 
+function stateProducedCellIds(
+  command: RefinementSessionCommand
+): CellId[] {
+  return stableUnique([
+    ...command.createdCellIds,
+    ...(command.reactivatedCellIds ?? [])
+  ]);
+}
+
 function affectedCommandCellIds(
   command: RefinementSessionCommand
 ): CellId[] {
@@ -556,17 +677,6 @@ function affectedCommandCellIds(
     ...(command.recipe?.selectedCellIds ?? []),
     ...(command.recipe?.transitionSupportCellIds ?? [])
   ]);
-}
-
-function addCommandId(
-  commandIds: Set<string>,
-  commandId: string | undefined
-): boolean {
-  if (commandId === undefined || commandIds.has(commandId)) {
-    return false;
-  }
-  commandIds.add(commandId);
-  return true;
 }
 
 function sortedCommandIds(
@@ -592,17 +702,18 @@ function requiredHistoryCommand(
   return command;
 }
 
-function commandHasIncludedCreator(
-  index: RefinementHistoryIndex,
-  command: RefinementSessionCommand,
+function commandHasIncludedPredecessor(
+  stateDependencies: RefinementHistoryStateDependencies,
+  commandId: string,
   includedCommandIds: ReadonlySet<string>
 ): boolean {
-  return commandInputCellIds(command).some((cellId) => {
-    const creatorCommandId =
-      index.creatorCommandIdByCellId.get(cellId);
-    return creatorCommandId !== undefined
-      && includedCommandIds.has(creatorCommandId);
-  });
+  return (
+    stateDependencies.predecessorCommandIdsByCommandId.get(
+      commandId
+    ) ?? []
+  ).some((predecessorCommandId) =>
+    includedCommandIds.has(predecessorCommandId)
+  );
 }
 
 function stableUnique<T extends string>(values: Iterable<T>): T[] {
