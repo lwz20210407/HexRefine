@@ -281,26 +281,13 @@ function cloneTwoToOnePlanningDiagnostic<TId extends TwoToOneEntityId>(
     conflictingCellIds: [...diagnostic.conflictingCellIds],
     conflictingInterfaces,
     attemptedActions,
+    ...(historyCommandIds === undefined
+      ? {}
+      : {
+          historyCommandIds: [...new Set(historyCommandIds)].sort()
+        }),
     ...(clonedSuggestion === undefined ? {} : { suggestion: clonedSuggestion })
   };
-  if (historyCommandIds !== undefined) {
-    const clonedHistoryCommandIds = [...new Set(historyCommandIds)].sort();
-    // Existing diagnostic freezing is shallow; freeze this nested snapshot
-    // lazily once its owning diagnostic has been frozen.
-    Object.defineProperty(cloned, "historyCommandIds", {
-      configurable: true,
-      enumerable: true,
-      get(): string[] {
-        if (
-          Object.isFrozen(cloned)
-          && !Object.isFrozen(clonedHistoryCommandIds)
-        ) {
-          Object.freeze(clonedHistoryCommandIds);
-        }
-        return clonedHistoryCommandIds;
-      }
-    });
-  }
   return cloned;
 }
 

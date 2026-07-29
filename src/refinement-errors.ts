@@ -264,6 +264,9 @@ export function freezeTwoToOnePlanningErrorDiagnostic<
     }
     Object.freeze(suggestion);
   }
+  if (diagnostic.historyCommandIds !== undefined) {
+    Object.freeze(diagnostic.historyCommandIds);
+  }
   Object.freeze(diagnostic.conflictingCellIds);
   Object.freeze(diagnostic.conflictingInterfaces);
   Object.freeze(diagnostic.attemptedActions);
@@ -305,6 +308,13 @@ function cloneNumericPlanningError(
           ? {}
           : { templateId: action.templateId })
       })),
+      ...(diagnostic.historyCommandIds === undefined
+        ? {}
+        : {
+            historyCommandIds: [
+              ...new Set(diagnostic.historyCommandIds)
+            ].sort()
+          }),
       ...(suggestion === undefined
         ? {}
         : {

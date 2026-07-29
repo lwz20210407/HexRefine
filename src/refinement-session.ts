@@ -1596,6 +1596,7 @@ export function refineSessionPatch(
 type ResolvedRefinementSessionPatchOptions = RefinementSessionPatchOptions & {
   activeBuild: ActiveMeshBuildResult;
   mergeTolerance: number;
+  normalizedTwoToOneCompensation: Readonly<NormalizedTwoToOneCompensation>;
 };
 
 function resolveSessionPatchOptions(
@@ -1603,8 +1604,9 @@ function resolveSessionPatchOptions(
   diagnosticCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): ResolvedRefinementSessionPatchOptions {
-  assertValidSessionFaceTolerance(options.mergeTolerance);
-  let activeBuild = options.activeBuild;
+  const optionsSnapshot: RefinementSessionPatchOptions = { ...options };
+  assertValidSessionFaceTolerance(optionsSnapshot.mergeTolerance);
+  let activeBuild = optionsSnapshot.activeBuild;
   if (activeBuild !== undefined) {
     if (
       activeBuild.mergeTolerance !== undefined
@@ -1625,17 +1627,17 @@ function resolveSessionPatchOptions(
     );
     const recordedTolerance = activeBuild.mergeTolerance;
     if (
-      options.mergeTolerance !== undefined
+      optionsSnapshot.mergeTolerance !== undefined
       && (
         recordedTolerance === undefined
-        || options.mergeTolerance !== recordedTolerance
+        || optionsSnapshot.mergeTolerance !== recordedTolerance
       )
     ) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
         recordedTolerance === undefined
           ? "external activeBuild does not record a merge tolerance, so requested planning consistency cannot be proven"
-          : `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${options.mergeTolerance}`
+          : `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${optionsSnapshot.mergeTolerance}`
       );
     }
   } else {
@@ -1644,9 +1646,9 @@ function resolveSessionPatchOptions(
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
       includeSessionNodeIdsByNodeId: false,
-      ...(options.mergeTolerance === undefined
+      ...(optionsSnapshot.mergeTolerance === undefined
         ? {}
-        : { mergeTolerance: options.mergeTolerance })
+        : { mergeTolerance: optionsSnapshot.mergeTolerance })
     };
     try {
       activeBuild = buildActiveMeshForCellIdsWithMap(
@@ -1692,10 +1694,18 @@ function resolveSessionPatchOptions(
     geometryResolution.minimumElementEdgeLength,
     session.activeLeafIds.size > 0
   );
+  const normalizedTwoToOneCompensation = Object.freeze(
+    normalizeTwoToOneCompensation(
+      new Set(diagnosticCellIds).size,
+      optionsSnapshot
+    )
+  );
   return {
-    ...options,
+    ...optionsSnapshot,
+    hexTwoToOneCompensation: normalizedTwoToOneCompensation,
     activeBuild,
-    mergeTolerance
+    mergeTolerance,
+    normalizedTwoToOneCompensation
   };
 }
 
@@ -1792,13 +1802,10 @@ interface SessionFaceResolution {
 function resolveExistingTransitionShellRebuild(
   session: RefinementSession,
   cellIds: readonly CellId[],
-  options: RefinementSessionPatchOptions,
+  options: ResolvedRefinementSessionPatchOptions,
   error: unknown
 ): SessionFaceResolution | undefined {
-  const compensation = normalizeTwoToOneCompensation(
-    new Set(cellIds).size,
-    options
-  );
+  const compensation = options.normalizedTwoToOneCompensation;
   if (
     compensation.mode !== "local-topology"
     || options.hexRefinementRatio !== 2
@@ -1869,22 +1876,19 @@ function selectionTouchesActiveTransitionCell(
 function refineSessionPatchWithRebuiltTransitionShell(
   session: RefinementSession,
   cellIds: readonly CellId[],
-  options: RefinementSessionPatchOptions,
+  options: ResolvedRefinementSessionPatchOptions,
   faceResolution: SessionFaceResolution
 ): RefinementSessionCommand & {
   readonly twoToOne: ReadonlyTwoToOneCapabilityReport<CellId>;
 } {
-  const compensation = normalizeTwoToOneCompensation(
-    new Set(cellIds).size,
-    options
-  );
+  const compensation = options.normalizedTwoToOneCompensation;
   const working = cloneRefinementSession(session);
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
     throw new Error(validation.errors.join("; ") || "transition-shell rebuilding requires a refined selection");
   }
   const faceTolerance = faceResolution.tolerance;
-  const resolvedOptions: RefinementSessionPatchOptions =
+  const resolvedOptions: ResolvedRefinementSessionPatchOptions =
     faceResolution.mergeTolerance === undefined
       ? options
       : {
@@ -3020,7 +3024,7 @@ export function previewSessionPatch(
 function previewSessionPatchWithRebuiltTransitionShell(
   session: RefinementSession,
   cellIds: readonly CellId[],
-  options: RefinementSessionPatchOptions,
+  options: ResolvedRefinementSessionPatchOptions,
   sourceActive: ActiveMeshBuildResult,
   faceResolution: SessionFaceResolution
 ): RefinementPreview<CellId> {

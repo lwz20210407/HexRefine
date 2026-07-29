@@ -21,6 +21,7 @@ import { GeometricFaceIndex } from "../dist/geometric-face-index.js";
 import {
   asTwoToOneFlatPlanningError,
   assertHexPatchQualitySummary,
+  freezeTwoToOnePlanningErrorDiagnostic,
   HexPatchQualityError
 } from "../dist/refinement-errors.js";
 import {
@@ -1956,6 +1957,28 @@ test("Hex 2:1 structured planning errors isolate nested diagnostic snapshots", (
   assert.deepEqual(serialized.diagnostic, expectedDiagnostic);
 });
 
+test("Hex 2:1 diagnostic freezing freezes retained history command id arrays", () => {
+  const error = new TwoToOnePlanningError(
+    "TWO_TO_ONE_HISTORY_CONFLICT",
+    "support history conflict",
+    {
+      conflictingCellIds: [11],
+      conflictingInterfaces: [],
+      attemptedActions: [],
+      historyCommandIds: ["cmd-9", "cmd-2", "cmd-9"]
+    }
+  );
+  const retainedHistoryCommandIds = error.diagnostic.historyCommandIds;
+
+  freezeTwoToOnePlanningErrorDiagnostic(error);
+
+  assert.throws(
+    () => retainedHistoryCommandIds.push("cmd-mutated"),
+    TypeError
+  );
+  assert.deepEqual(error.diagnostic.historyCommandIds, ["cmd-2", "cmd-9"]);
+});
+
 test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () => {
   const createInternalError = () => new TwoToOnePlanningError(
     "TWO_TO_ONE_COMPENSATION_LIMIT",
@@ -1974,7 +1997,7 @@ test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () =
         replacedTransitionCellIds: [14],
         templateId: "selection-shell"
       }],
-      historyCommandIds: ["cmd-8", "cmd-1", "cmd-8"],
+      historyCommandIds: ["cmd-9", "cmd-2", "cmd-9"],
       suggestion: {
         kind: "expand-selection",
         axis: 1,
@@ -1985,7 +2008,33 @@ test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () =
   );
   const internalError = createInternalError();
   const mapped = asTwoToOneFlatPlanningError(internalError, [11, 12]);
-  const expected = serializeTwoToOnePlanningError(mapped);
+  const expected = {
+    name: "TwoToOnePlanningError",
+    message: "compensation budget exhausted",
+    code: "TWO_TO_ONE_COMPENSATION_LIMIT",
+    diagnostic: {
+      conflictingCellIds: [11, 12],
+      conflictingInterfaces: [{
+        firstCellId: 11,
+        secondCellId: 12,
+        faceNodeIds: [1, 2, 3, 4]
+      }],
+      attemptedActions: [{
+        kind: "selection-expand",
+        reason: "close transition",
+        addedParentCellIds: [13],
+        replacedTransitionCellIds: [14],
+        templateId: "selection-shell"
+      }],
+      historyCommandIds: ["cmd-2", "cmd-9"],
+      suggestion: {
+        kind: "expand-selection",
+        axis: 1,
+        side: 1,
+        parentCellIds: [15]
+      }
+    }
+  };
 
   assert.equal(Object.isFrozen(mapped.diagnostic), true);
   assert.equal(Object.isFrozen(mapped.diagnostic.conflictingCellIds), true);
@@ -2006,6 +2055,11 @@ test("Hex 2:1 flat mapper freezes nested diagnostics and isolates retries", () =
     Object.isFrozen(mapped.diagnostic.suggestion.parentCellIds),
     true
   );
+  assert.notEqual(
+    mapped.diagnostic.historyCommandIds,
+    internalError.diagnostic.historyCommandIds
+  );
+  assert.deepEqual(mapped.diagnostic.historyCommandIds, ["cmd-2", "cmd-9"]);
   assert.throws(() => mutatePlanningDiagnostic(mapped.diagnostic), TypeError);
 
   mutatePlanningDiagnostic(internalError.diagnostic);
@@ -9536,6 +9590,31 @@ test("Hex 2:1 transition-shell rebuilding rejects a requested tolerance that ove
   assert.deepEqual(session, before);
 });
 
+const expectedTransitionShellRegressionAction = {
+  kind: "transition-shell-rebuild",
+  reason: "the nested core reached an existing 2:1 transition component",
+  addedParentCellIds: [
+    "e66",
+    "e73",
+    "e108",
+    "e114",
+    "e121",
+    "e157",
+    "e163",
+    "e170"
+  ],
+  replacedTransitionCellIds: [
+    "e66",
+    "e73",
+    "e108",
+    "e114",
+    "e121",
+    "e157",
+    "e163",
+    "e170"
+  ]
+};
+
 for (const limitCase of [
   { maxAddedParentLayers: 0, maxAddedParentCount: 32 },
   { maxAddedParentLayers: 1, maxAddedParentCount: 0 }
@@ -9558,21 +9637,92 @@ for (const limitCase of [
       activeBuild: firstRefined
     };
 
-    for (const operation of [
+    const errors = [
       () => previewSessionPatch(session, [candidate], options),
       () => refineSessionPatch(session, [candidate], options)
-    ]) {
+    ].map((operation) => {
       const error = captureError(operation);
       assert.equal(error instanceof TwoToOnePlanningError, true);
       assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
-      assert.equal(
-        error.diagnostic.attemptedActions[0]?.kind,
-        "transition-shell-rebuild"
+      assert.deepEqual(
+        error.diagnostic.attemptedActions,
+        [expectedTransitionShellRegressionAction]
       );
       assert.deepEqual(session, before);
-    }
+      return error;
+    });
+    assert.deepEqual(
+      errors[1].diagnostic.attemptedActions,
+      errors[0].diagnostic.attemptedActions
+    );
   });
 }
+
+test("Hex 2:1 shell fallback snapshots compensation getters once per operation", () => {
+  const diagnostics = [];
+  for (const operation of ["preview", "refine"]) {
+    const {
+      session,
+      firstRefined,
+      candidate
+    } = createTransitionShellRegressionFixture();
+    const before = structuredClone(session);
+    const reads = {
+      mode: 0,
+      maxAddedParentLayers: 0,
+      maxAddedParentCount: 0
+    };
+    const compensation = {};
+    Object.defineProperties(compensation, {
+      mode: {
+        enumerable: true,
+        get() {
+          reads.mode += 1;
+          return reads.mode === 1 ? "local-topology" : "none";
+        }
+      },
+      maxAddedParentLayers: {
+        enumerable: true,
+        get() {
+          reads.maxAddedParentLayers += 1;
+          return reads.maxAddedParentLayers === 1 ? 0 : 1;
+        }
+      },
+      maxAddedParentCount: {
+        enumerable: true,
+        get() {
+          reads.maxAddedParentCount += 1;
+          return reads.maxAddedParentCount === 1 ? 32 : 0;
+        }
+      }
+    });
+    const options = {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      hexTwoToOneCompensation: compensation,
+      activeBuild: firstRefined
+    };
+    const error = captureError(() => operation === "preview"
+      ? previewSessionPatch(session, [candidate], options)
+      : refineSessionPatch(session, [candidate], options));
+
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_COMPENSATION_LIMIT");
+    assert.deepEqual(reads, {
+      mode: 1,
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 1
+    });
+    assert.deepEqual(
+      error.diagnostic.attemptedActions,
+      [expectedTransitionShellRegressionAction]
+    );
+    assert.deepEqual(session, before);
+    diagnostics.push(serializeTwoToOnePlanningError(error).diagnostic);
+  }
+  assert.deepEqual(diagnostics[1], diagnostics[0]);
+});
 
 test("Hex 2:1 transition-shell rebuilding reports an untraceable support cell as a history conflict", () => {
   const {
