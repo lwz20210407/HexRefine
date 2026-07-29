@@ -29,6 +29,14 @@ interface ExactBinary64 {
   readonly exponent: number;
 }
 
+interface CapturedCellGeometry {
+  readonly originalCellId: unknown;
+  readonly kind: unknown;
+  readonly level: unknown;
+  readonly role: unknown;
+  readonly points: unknown;
+}
+
 const binary64View = new DataView(new ArrayBuffer(8));
 
 export class RefinementCellGeometryMatchError extends Error {
@@ -45,7 +53,8 @@ export function snapshotRefinementCellGeometry(
   session: RefinementSession,
   cellId: CellId
 ): RefinementCellGeometrySnapshot {
-  const cell = session.cells.get(cellId);
+  const cells = session.cells;
+  const cell = cells.get(cellId);
   if (cell === undefined) {
     throw new RefinementCellGeometryMatchError(
       `cannot snapshot missing cell ${cellId}`,
@@ -53,12 +62,32 @@ export function snapshotRefinementCellGeometry(
     );
   }
 
-  const points: number[][] = [];
-  for (let index = 0; index < cell.element.length; index += 1) {
-    const nodeId = cell.element[index];
-    const point = nodeId === undefined
-      ? undefined
-      : session.nodes[nodeId - 1];
+  const nodes = session.nodes;
+  const element = cell.element;
+  const kind = cell.kind;
+  const level = cell.level;
+  const role = cell.role;
+  if (!Array.isArray(element)) {
+    throw new RefinementCellGeometryMatchError(
+      `cell ${cellId} element must be an array`,
+      [cellId]
+    );
+  }
+
+  const elementLength = element.length;
+  const points: (readonly number[])[] = [];
+  for (let index = 0; index < elementLength; index += 1) {
+    if (!Object.hasOwn(element, index)) {
+      throw new RefinementCellGeometryMatchError(
+        `cell ${cellId} element must be dense: missing index ${index}`,
+        [cellId]
+      );
+    }
+    const nodeId = element[index];
+    const nodeIndex = nodeId === undefined ? -1 : nodeId - 1;
+    const point = Object.hasOwn(nodes, nodeIndex)
+      ? nodes[nodeIndex]
+      : undefined;
     if (point === undefined) {
       throw new RefinementCellGeometryMatchError(
         `cell ${cellId} references missing node ${String(nodeId)}`,
@@ -71,20 +100,20 @@ export function snapshotRefinementCellGeometry(
         [cellId]
       );
     }
-    points.push([...point]);
+    points.push(point);
   }
 
-  return cloneAndValidateGeometry({
+  return cloneAndValidateCapturedGeometry({
     originalCellId: cellId,
-    kind: cell.kind,
-    level: cell.level,
-    role: cell.role,
+    kind,
+    level,
+    role,
     points
   }, cellId);
 }
 
 export class RefinementCellGeometryIndex {
-  readonly tolerance: number;
+  readonly #tolerance: number;
 
   readonly #candidateByCellId = new Map<CellId, IndexedCellGeometry>();
   readonly #exactBuckets = new Map<string, IndexedCellGeometry[]>();
@@ -96,7 +125,11 @@ export class RefinementCellGeometryIndex {
         "tolerance must be finite and nonnegative"
       );
     }
-    this.tolerance = tolerance;
+    this.#tolerance = tolerance;
+  }
+
+  get tolerance(): number {
+    return this.#tolerance;
   }
 
   add(
@@ -136,10 +169,7 @@ export class RefinementCellGeometryIndex {
   uniqueMatch(
     geometry: RefinementCellGeometrySnapshot
   ): CellId | undefined {
-    const query = cloneAndValidateGeometry(
-      geometry,
-      diagnosticCellId(geometry)
-    );
+    const query = cloneAndValidateGeometry(geometry);
     const metadataKey = geometryMetadataKey(query);
     const original = this.#candidateByCellId.get(
       query.originalCellId
@@ -150,7 +180,7 @@ export class RefinementCellGeometryIndex {
       && pointSetsMatch(
         query.points,
         original.geometry.points,
-        this.tolerance
+        this.#tolerance
       )
     ) {
       return original.cellId;
@@ -177,7 +207,7 @@ export class RefinementCellGeometryIndex {
       pointSetsMatch(
         query.points,
         candidate.geometry.points,
-        this.tolerance
+        this.#tolerance
       )
     );
     return uniqueCandidateId(toleranceMatches);
@@ -201,17 +231,38 @@ function uniqueCandidateId(
 
 function cloneAndValidateGeometry(
   geometry: RefinementCellGeometrySnapshot,
-  cellId: CellId
+  fallbackCellId?: CellId
 ): RefinementCellGeometrySnapshot {
   if (geometry === null || typeof geometry !== "object") {
-    throw geometryError(cellId, "geometry must be an object");
+    throw geometryError(
+      fallbackCellId ?? "",
+      "geometry must be an object"
+    );
   }
 
-  const originalCellId = geometry.originalCellId;
-  const kind = geometry.kind;
-  const level = geometry.level;
-  const role = geometry.role;
-  const sourcePoints = geometry.points;
+  const captured: CapturedCellGeometry = {
+    originalCellId: geometry.originalCellId,
+    kind: geometry.kind,
+    level: geometry.level,
+    role: geometry.role,
+    points: geometry.points
+  };
+  const cellId = fallbackCellId
+    ?? diagnosticCellId(captured.originalCellId);
+  return cloneAndValidateCapturedGeometry(captured, cellId);
+}
+
+function cloneAndValidateCapturedGeometry(
+  geometry: CapturedCellGeometry,
+  cellId: CellId
+): RefinementCellGeometrySnapshot {
+  const {
+    originalCellId,
+    kind,
+    level,
+    role,
+    points: sourcePoints
+  } = geometry;
   if (
     typeof originalCellId !== "string"
     || originalCellId.length === 0
@@ -224,44 +275,72 @@ function cloneAndValidateGeometry(
   if (kind !== "Q1" && kind !== "H1") {
     throw geometryError(cellId, "kind must be Q1 or H1");
   }
-  if (!Number.isInteger(level) || level < 0) {
+  if (
+    typeof level !== "number"
+    || !Number.isInteger(level)
+    || level < 0
+  ) {
     throw geometryError(
       cellId,
       "level must be a nonnegative integer"
     );
   }
-  if (!CELL_ROLES.has(role)) {
+  if (
+    typeof role !== "string"
+    || !CELL_ROLES.has(role as RefinementSessionCellRole)
+  ) {
     throw geometryError(
       cellId,
       "role is not a supported refinement cell role"
     );
   }
-  if (!Array.isArray(sourcePoints) || sourcePoints.length === 0) {
+  if (!Array.isArray(sourcePoints)) {
+    throw geometryError(
+      cellId,
+      "geometry points must be an array"
+    );
+  }
+  const pointCount = sourcePoints.length;
+  if (pointCount === 0) {
     throw geometryError(
       cellId,
       "geometry must contain at least one point"
     );
   }
+  const expectedPointCount = kind === "Q1" ? 4 : 8;
+  if (pointCount !== expectedPointCount) {
+    throw geometryError(
+      cellId,
+      `${kind} geometry must contain exactly ${expectedPointCount} points`
+    );
+  }
 
   const points: number[][] = [];
   let dimension: number | undefined;
-  for (let pointIndex = 0; pointIndex < sourcePoints.length; pointIndex += 1) {
-    if (!(pointIndex in sourcePoints)) {
+  for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
+    if (!Object.hasOwn(sourcePoints, pointIndex)) {
       throw geometryError(
         cellId,
         `points must be dense: missing index ${pointIndex}`
       );
     }
     const sourcePoint = sourcePoints[pointIndex];
-    if (!Array.isArray(sourcePoint) || sourcePoint.length === 0) {
+    if (!Array.isArray(sourcePoint)) {
+      throw geometryError(
+        cellId,
+        `point ${pointIndex + 1} must contain at least one coordinate`
+      );
+    }
+    const pointDimension = sourcePoint.length;
+    if (pointDimension === 0) {
       throw geometryError(
         cellId,
         `point ${pointIndex + 1} must contain at least one coordinate`
       );
     }
     if (dimension === undefined) {
-      dimension = sourcePoint.length;
-    } else if (sourcePoint.length !== dimension) {
+      dimension = pointDimension;
+    } else if (pointDimension !== dimension) {
       throw geometryError(
         cellId,
         "points must have the same dimension"
@@ -271,10 +350,10 @@ function cloneAndValidateGeometry(
     const point: number[] = [];
     for (
       let coordinateIndex = 0;
-      coordinateIndex < sourcePoint.length;
+      coordinateIndex < pointDimension;
       coordinateIndex += 1
     ) {
-      if (!(coordinateIndex in sourcePoint)) {
+      if (!Object.hasOwn(sourcePoint, coordinateIndex)) {
         throw geometryError(
           cellId,
           `point ${pointIndex + 1} coordinates must be dense`
@@ -297,7 +376,7 @@ function cloneAndValidateGeometry(
     originalCellId,
     kind,
     level,
-    role,
+    role: role as RefinementSessionCellRole,
     points
   };
 }
@@ -553,15 +632,18 @@ function pointsWithinTolerance(
     );
   }
 
-  const scaledDeltas: number[] = [];
+  let distance = 0;
   for (let index = 0; index < first.length; index += 1) {
     const delta = Math.abs(first[index]! - second[index]!);
     if (!Number.isFinite(delta) || delta > tolerance) {
       return false;
     }
-    scaledDeltas.push(delta / tolerance);
+    distance = Math.hypot(distance, delta);
+    if (distance > tolerance) {
+      return false;
+    }
   }
-  return Math.hypot(...scaledDeltas) <= 1;
+  return true;
 }
 
 function hasCompletePointMatching(
@@ -587,6 +669,7 @@ function hasCompletePointMatching(
     { length: candidateCount },
     () => -1
   );
+  // Canonical Q1/H1 inputs cap this augmenting-path depth at eight.
   const tryAugment = (
     queryIndex: number,
     visitedCandidates: boolean[]
@@ -684,13 +767,11 @@ function assertCellId(cellId: CellId): void {
 }
 
 function diagnosticCellId(
-  geometry: RefinementCellGeometrySnapshot
+  originalCellId: unknown
 ): CellId {
-  return geometry !== null
-    && typeof geometry === "object"
-    && typeof geometry.originalCellId === "string"
-    && geometry.originalCellId.length > 0
-    ? geometry.originalCellId
+  return typeof originalCellId === "string"
+    && originalCellId.length > 0
+    ? originalCellId
     : "";
 }
 

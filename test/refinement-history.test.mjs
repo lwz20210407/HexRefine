@@ -34,6 +34,72 @@ function sampleGeometry(originalCellId, offset = 0) {
   };
 }
 
+function defineReadOnce(
+  target,
+  key,
+  value,
+  reads,
+  label
+) {
+  const readKey = `${label}.${String(key)}`;
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      reads[readKey] = (reads[readKey] ?? 0) + 1;
+      assert.equal(
+        reads[readKey],
+        1,
+        `${readKey} was read more than once`
+      );
+      return value;
+    }
+  });
+}
+
+function readOnceArray(values, reads, label) {
+  const result = new Array(values.length);
+  values.forEach((value, index) => {
+    defineReadOnce(result, index, value, reads, label);
+  });
+  return result;
+}
+
+function readOnceGeometry(source, reads, label) {
+  const points = readOnceArray(
+    source.points.map((point, pointIndex) =>
+      readOnceArray(
+        point,
+        reads,
+        `${label}.points[${pointIndex}]`
+      )
+    ),
+    reads,
+    `${label}.points`
+  );
+  const result = {};
+  for (const [key, value] of Object.entries({
+    originalCellId: source.originalCellId,
+    kind: source.kind,
+    level: source.level,
+    role: source.role,
+    points
+  })) {
+    defineReadOnce(result, key, value, reads, label);
+  }
+  return result;
+}
+
+function supplyArrayIndexFromPrototype(array, index, value) {
+  delete array[index];
+  const prototype = Object.create(Array.prototype);
+  Object.defineProperty(prototype, index, {
+    configurable: true,
+    value
+  });
+  Object.setPrototypeOf(array, prototype);
+}
+
 function sampleRecipe() {
   return {
     version: 1,
@@ -1281,6 +1347,16 @@ test("cell geometry remapping prefers the compatible original active id", () => 
   assert.equal(index.uniqueMatch(sampleGeometry("e1")), "e1");
 });
 
+test("cell geometry remapping prefers a tolerance-compatible original id over another exact candidate", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  const original = sampleGeometry("e1");
+  original.points[0][0] += 5e-9;
+  index.add("e1", original);
+  index.add("exact", sampleGeometry("exact"));
+
+  assert.equal(index.uniqueMatch(sampleGeometry("e1")), "e1");
+});
+
 test("cell geometry remapping finds one exact corner set without node-id semantics", () => {
   const points = sampleGeometry("source").points;
   const session = {
@@ -1361,16 +1437,18 @@ test("cell geometry remapping requires compatible metadata, point count, dimensi
   index.add("candidate", sampleGeometry("candidate"));
 
   const incompatible = [
-    { ...sampleGeometry("old"), kind: "Q1" },
-    { ...sampleGeometry("old"), level: 1 },
-    { ...sampleGeometry("old"), role: "selected" },
     {
       ...sampleGeometry("old"),
+      kind: "Q1",
       points: [
-        ...sampleGeometry("old").points,
-        [2, 2, 2]
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0]
       ]
     },
+    { ...sampleGeometry("old"), level: 1 },
+    { ...sampleGeometry("old"), role: "selected" },
     {
       ...sampleGeometry("old"),
       points: sampleGeometry("old").points.map((point) => [
@@ -1769,6 +1847,53 @@ test("cell geometry index validates tolerance and ids and snapshots candidates o
   assert.equal(index.uniqueMatch(expected), "candidate");
 });
 
+test("cell geometry index tolerance cannot be reassigned or shadow internal matching behavior", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(index),
+    "tolerance"
+  );
+
+  assert.equal(typeof descriptor?.get, "function");
+  assert.equal(descriptor?.set, undefined);
+  assert.equal(Object.hasOwn(index, "tolerance"), false);
+  assert.throws(() => {
+    index.tolerance = Infinity;
+  }, TypeError);
+  assert.equal(Reflect.set(index, "tolerance", Infinity), false);
+  assert.equal(index.tolerance, 1e-8);
+
+  index.add("candidate", sampleGeometry("candidate"));
+  assert.equal(
+    index.uniqueMatch(sampleGeometry("far", 10)),
+    undefined
+  );
+});
+
+test("cell geometry add and query capture getter-backed inputs exactly once", () => {
+  const reads = {};
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add(
+    "candidate",
+    readOnceGeometry(
+      sampleGeometry("candidate"),
+      reads,
+      "candidate"
+    )
+  );
+
+  assert.equal(
+    index.uniqueMatch(
+      readOnceGeometry(sampleGeometry("old"), reads, "query")
+    ),
+    "candidate"
+  );
+  assert.equal(
+    Object.values(reads).every((count) => count === 1),
+    true
+  );
+});
+
 test("snapshotRefinementCellGeometry returns a deep copy and stable match errors", () => {
   const sourcePoints = sampleGeometry("e1").points.map((point) => [
     ...point
@@ -1866,6 +1991,128 @@ test("snapshotRefinementCellGeometry returns a deep copy and stable match errors
   );
 });
 
+test("snapshotRefinementCellGeometry captures session, cell, element, and point getters once", () => {
+  const reads = {};
+  const source = sampleGeometry("e1");
+  const nodes = readOnceArray(
+    source.points.map((point, pointIndex) =>
+      readOnceArray(
+        point,
+        reads,
+        `nodes[${pointIndex}]`
+      )
+    ),
+    reads,
+    "nodes"
+  );
+  const element = readOnceArray(
+    [1, 2, 3, 4, 5, 6, 7, 8],
+    reads,
+    "element"
+  );
+  const cell = {};
+  for (const [key, value] of Object.entries({
+    element,
+    kind: "H1",
+    level: 2,
+    role: "selected"
+  })) {
+    defineReadOnce(cell, key, value, reads, "cell");
+  }
+  const cells = new Map([["e1", cell]]);
+  const session = {};
+  defineReadOnce(session, "nodes", nodes, reads, "session");
+  defineReadOnce(session, "cells", cells, reads, "session");
+
+  assert.deepEqual(snapshotRefinementCellGeometry(session, "e1"), {
+    originalCellId: "e1",
+    kind: "H1",
+    level: 2,
+    role: "selected",
+    points: source.points
+  });
+  assert.equal(
+    Object.values(reads).every((count) => count === 1),
+    true
+  );
+});
+
+test("cell geometry rejects prototype-supplied point, coordinate, node, and element holes", () => {
+  const inheritedPoint = sampleGeometry("inherited-point");
+  supplyArrayIndexFromPrototype(
+    inheritedPoint.points,
+    0,
+    inheritedPoint.points[0]
+  );
+  assert.throws(
+    () => new RefinementCellGeometryIndex(0).add(
+      "inherited-point",
+      inheritedPoint
+    ),
+    (error) =>
+      error instanceof RefinementCellGeometryMatchError
+      && /points must be dense/.test(error.message)
+  );
+
+  const inheritedCoordinate = sampleGeometry(
+    "inherited-coordinate"
+  );
+  supplyArrayIndexFromPrototype(
+    inheritedCoordinate.points[0],
+    1,
+    inheritedCoordinate.points[0][1]
+  );
+  assert.throws(
+    () => new RefinementCellGeometryIndex(0).add(
+      "inherited-coordinate",
+      inheritedCoordinate
+    ),
+    (error) =>
+      error instanceof RefinementCellGeometryMatchError
+      && /coordinates must be dense/.test(error.message)
+  );
+
+  const inheritedElement = [1, 2, 3, 4, 5, 6, 7, 8];
+  supplyArrayIndexFromPrototype(inheritedElement, 0, 1);
+  assert.throws(
+    () => snapshotRefinementCellGeometry({
+      nodes: sampleGeometry("e1").points,
+      cells: new Map([["e1", {
+        kind: "H1",
+        level: 0,
+        role: "base",
+        element: inheritedElement
+      }]])
+    }, "e1"),
+    (error) =>
+      error instanceof RefinementCellGeometryMatchError
+      && error.cellIds.join(",") === "e1"
+      && /element must be dense/.test(error.message)
+  );
+
+  const inheritedNodes = sampleGeometry("e1").points;
+  supplyArrayIndexFromPrototype(
+    inheritedNodes,
+    0,
+    inheritedNodes[0]
+  );
+  assert.throws(
+    () => snapshotRefinementCellGeometry({
+      nodes: inheritedNodes,
+      cells: new Map([["e1", {
+        kind: "H1",
+        level: 0,
+        role: "base",
+        element: [1, 2, 3, 4, 5, 6, 7, 8]
+      }]])
+    }, "e1"),
+    (error) =>
+      error instanceof RefinementCellGeometryMatchError
+      && error.cellIds.join(",") === "e1"
+      && /references missing node 1/.test(error.message)
+  );
+});
+
 test("cell geometry tolerance matching avoids squared-distance overflow and underflow", () => {
   const scaleGeometry = (cellId, scale) => ({
     ...sampleGeometry(cellId),
@@ -1902,6 +2149,38 @@ test("cell geometry tolerance matching avoids squared-distance overflow and unde
   assert.equal(underflowIndex.uniqueMatch(underflowQuery), undefined);
 });
 
+test("cell geometry tolerance matching supports 125k-dimensional Q1 points without argument spreading", () => {
+  const dimension = 125_000;
+  const point = (x, y) => {
+    const coordinates = Array.from(
+      { length: dimension },
+      () => 0
+    );
+    coordinates[0] = x;
+    coordinates[1] = y;
+    return coordinates;
+  };
+  const candidate = {
+    originalCellId: "candidate",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      point(0, 0),
+      point(1, 0),
+      point(1, 1),
+      point(0, 1)
+    ]
+  };
+  const query = structuredClone(candidate);
+  query.originalCellId = "old";
+  query.points[0][dimension - 1] = 5e-9;
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("candidate", candidate);
+
+  assert.equal(index.uniqueMatch(query), "candidate");
+});
+
 test("cell geometry matching finds an augmenting path when query-order greedy would fail", () => {
   const candidate = {
     originalCellId: "candidate",
@@ -1911,7 +2190,8 @@ test("cell geometry matching finds an augmenting path when query-order greedy wo
     points: [
       [0, 0],
       [1.5, 0],
-      [0, 10]
+      [0, 10],
+      [20, 20]
     ]
   };
   const query = {
@@ -1920,7 +2200,8 @@ test("cell geometry matching finds an augmenting path when query-order greedy wo
     points: [
       [0.75, 0],
       [0, 0],
-      [0, 10.1]
+      [0, 10.1],
+      [20, 20]
     ]
   };
   const index = new RefinementCellGeometryIndex(1);
@@ -1929,76 +2210,52 @@ test("cell geometry matching finds an augmenting path when query-order greedy wo
   assert.equal(index.uniqueMatch(query), "candidate");
 });
 
-test("cell geometry matching rejects Hall-deficient corner graphs from 9 through 20 points", () => {
-  const childScript = `
-    import assert from "node:assert/strict";
-    import {
-      RefinementCellGeometryIndex
-    } from "./dist/index.js";
-
-    const cases = Array.from({ length: 12 }, (_, offset) => {
-      const pointCount = offset + 9;
-      const candidate = {
-        originalCellId: \`candidate-\${pointCount}\`,
-        kind: "Q1",
-        level: 0,
-        role: "base",
-        points: [
-          ...Array.from(
-            { length: pointCount - 2 },
-            (_, index) => [index * 0.001, 0]
-          ),
-          [10, 0],
-          [10, 2]
-        ]
-      };
-      const query = {
-        ...candidate,
-        originalCellId: \`old-\${pointCount}\`,
-        points: [
-          ...Array.from(
-            { length: pointCount - 1 },
-            (_, index) => [(index + 0.25) * 0.001, 0]
-          ),
-          [10, 0.1]
-        ]
-      };
-      const index = new RefinementCellGeometryIndex(1);
-      index.add(candidate.originalCellId, candidate);
-      return { index, query };
-    });
-
-    const originalSetAdd = Set.prototype.add;
-    let setAddCount = 0;
-    Set.prototype.add = function (value) {
-      setAddCount += 1;
-      if (setAddCount > 1000) {
-        throw new Error(
-          "matching exceeded the deterministic polynomial work guard"
-        );
-      }
-      return Reflect.apply(originalSetAdd, this, [value]);
-    };
-    try {
-      for (const { index, query } of cases) {
-        assert.equal(index.uniqueMatch(query), undefined);
-      }
-    } finally {
-      Set.prototype.add = originalSetAdd;
-    }
-  `;
-  const result = spawnSync(
-    process.execPath,
-    ["--input-type=module", "--eval", childScript],
+test("cell geometry validation rejects Q1 and H1 point counts before matching", () => {
+  const invalid = [
     {
-      cwd: process.cwd(),
-      encoding: "utf8"
+      ...sampleGeometry("q1-three"),
+      kind: "Q1",
+      points: [
+        [0, 0],
+        [1, 0],
+        [0, 1]
+      ]
+    },
+    {
+      ...sampleGeometry("q1-nine"),
+      kind: "Q1",
+      points: Array.from(
+        { length: 9 },
+        (_, index) => [index, index * index]
+      )
+    },
+    {
+      ...sampleGeometry("q1-nine-thousand"),
+      kind: "Q1",
+      points: Array.from(
+        { length: 9_000 },
+        (_, index) => [index, index * index]
+      )
+    },
+    {
+      ...sampleGeometry("h1-nine"),
+      points: [
+        ...sampleGeometry("h1-nine").points,
+        [2, 2, 2]
+      ]
     }
-  );
+  ];
 
-  assert.equal(
-    result.status,
-    0,
-    [result.stdout, result.stderr].filter(Boolean).join("\n")
-  );
+  for (const geometry of invalid) {
+    assert.throws(
+      () => new RefinementCellGeometryIndex(1).add(
+        geometry.originalCellId,
+        geometry
+      ),
+      (error) =>
+        error instanceof RefinementCellGeometryMatchError
+        && error.cellIds.join(",") === geometry.originalCellId
+        && /must contain exactly (4|8) points/.test(error.message)
+    );
+  }
 });
