@@ -310,82 +310,163 @@ export function buildRefinementHistoryClosure(
     );
   }
 
+  type CommandInclusionReason =
+    | "seed"
+    | "active-predecessor"
+    | "identity"
+    | "state-consumer";
   const includedCommandIds = new Set<string>();
-  const expandedActiveProducerCommandIds = new Set<string>();
-  const worklist: Array<{
+  const inclusionReasonsByCommandId =
+    new Map<string, Set<CommandInclusionReason>>();
+  const commandWorklist: Array<{
     readonly commandId: string;
-    readonly kind: "command" | "active-producer";
+    readonly initialReason: CommandInclusionReason;
   }> = [];
+  const activeProducerWorklist: Array<{
+    readonly commandId: string;
+    readonly triggeringReason: Exclude<
+      CommandInclusionReason,
+      "identity"
+    >;
+  }> = [];
+  const queuedActiveProducerCommandIds = new Set<string>();
+  const expandedActiveProducerCommandIds = new Set<string>();
+  const scheduleActiveProducer = (
+    commandId: string,
+    triggeringReason: Exclude<
+      CommandInclusionReason,
+      "identity"
+    >
+  ): void => {
+    if (
+      expandedActiveProducerCommandIds.has(commandId)
+      || queuedActiveProducerCommandIds.has(commandId)
+    ) {
+      return;
+    }
+    queuedActiveProducerCommandIds.add(commandId);
+    activeProducerWorklist.push({
+      commandId,
+      triggeringReason
+    });
+  };
   const includeCommandId = (
     commandId: string | undefined,
-    expandActiveProducer: boolean
+    reason: CommandInclusionReason
   ): void => {
     if (commandId === undefined) {
       return;
     }
-    if (!includedCommandIds.has(commandId)) {
+    let reasons = inclusionReasonsByCommandId.get(commandId);
+    if (reasons === undefined) {
+      reasons = new Set<CommandInclusionReason>();
+      inclusionReasonsByCommandId.set(commandId, reasons);
       includedCommandIds.add(commandId);
-      worklist.push({ commandId, kind: "command" });
+      commandWorklist.push({
+        commandId,
+        initialReason: reason
+      });
     }
-    if (
-      expandActiveProducer
-      && !expandedActiveProducerCommandIds.has(commandId)
-    ) {
-      expandedActiveProducerCommandIds.add(commandId);
-      worklist.push({ commandId, kind: "active-producer" });
+    if (reasons.has(reason)) {
+      return;
+    }
+    reasons.add(reason);
+    if (reason !== "identity") {
+      scheduleActiveProducer(commandId, reason);
     }
   };
   for (const cellId of seedCellIds) {
     includeCommandId(
       index.creatorCommandIdByCellId.get(cellId),
-      true
+      "seed"
     );
     for (
       const commandId of
         index.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
-      includeCommandId(commandId, true);
+      includeCommandId(commandId, "seed");
     }
   }
 
-  for (
-    let worklistIndex = 0;
-    worklistIndex < worklist.length;
-    worklistIndex += 1
+  let commandWorklistIndex = 0;
+  let activeProducerWorklistIndex = 0;
+  while (
+    commandWorklistIndex < commandWorklist.length
+    || activeProducerWorklistIndex
+      < activeProducerWorklist.length
   ) {
-    const item = worklist[worklistIndex];
-    if (item === undefined) {
-      throw new Error(
-        `history closure worklist is sparse at ${worklistIndex}`
-      );
-    }
-    const { commandId } = item;
-    if (item.kind === "active-producer") {
+    while (commandWorklistIndex < commandWorklist.length) {
+      const item = commandWorklist[commandWorklistIndex];
+      commandWorklistIndex += 1;
+      if (item === undefined) {
+        throw new Error(
+          `history closure command worklist is sparse at ${commandWorklistIndex - 1}`
+        );
+      }
+      const { commandId } = item;
       for (
-        const consumerCommandId of
-          stateDependencies.consumerCommandIdsByProducerCommandId.get(
+        const predecessorCommandId of
+          stateDependencies.activePredecessorCommandIdsByCommandId.get(
             commandId
           ) ?? []
       ) {
-        includeCommandId(consumerCommandId, true);
+        includeCommandId(
+          predecessorCommandId,
+          "active-predecessor"
+        );
       }
+      for (
+        const identityPredecessorCommandId of
+          stateDependencies.identityPredecessorCommandIdsByCommandId.get(
+            commandId
+          ) ?? []
+      ) {
+        includeCommandId(
+          identityPredecessorCommandId,
+          "identity"
+        );
+      }
+    }
+
+    const item =
+      activeProducerWorklist[activeProducerWorklistIndex];
+    activeProducerWorklistIndex += 1;
+    if (item === undefined) {
+      throw new Error(
+        `history closure active worklist is sparse at ${activeProducerWorklistIndex - 1}`
+      );
+    }
+    const { commandId } = item;
+    queuedActiveProducerCommandIds.delete(commandId);
+    const reasons = inclusionReasonsByCommandId.get(commandId);
+    if (reasons === undefined) {
+      throw new Error(
+        `history closure has no inclusion reason for ${commandId}`
+      );
+    }
+    const hasIndependentActiveReason =
+      reasons.has("seed")
+      || reasons.has("active-predecessor");
+    const hasUnblockedStateConsumerReason =
+      reasons.has("state-consumer")
+      && !reasons.has("identity");
+    if (
+      expandedActiveProducerCommandIds.has(commandId)
+      || (
+        !hasIndependentActiveReason
+        && !hasUnblockedStateConsumerReason
+      )
+    ) {
       continue;
     }
+    expandedActiveProducerCommandIds.add(commandId);
     for (
-      const predecessorCommandId of
-        stateDependencies.activePredecessorCommandIdsByCommandId.get(
+      const consumerCommandId of
+        stateDependencies.consumerCommandIdsByProducerCommandId.get(
           commandId
         ) ?? []
     ) {
-      includeCommandId(predecessorCommandId, true);
-    }
-    for (
-      const identityPredecessorCommandId of
-        stateDependencies.identityPredecessorCommandIdsByCommandId.get(
-          commandId
-        ) ?? []
-    ) {
-      includeCommandId(identityPredecessorCommandId, false);
+      includeCommandId(consumerCommandId, "state-consumer");
     }
   }
 

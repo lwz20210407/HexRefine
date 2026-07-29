@@ -493,6 +493,157 @@ test("reactivated state retains identity creator without old active consumers", 
   assert.deepEqual(closure.preservedCommandIds, ["c2"]);
 });
 
+test("identity restoration backedges do not activate the creator output", () => {
+  const commands = [
+    command("p0", ["root"], ["x"]),
+    command("c1", ["x"], ["a"]),
+    command("c2", ["a"], ["old"]),
+    command("c3", [], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("c4", ["a"], ["q"]),
+    command("far", ["far-root"], ["far-cell"])
+  ];
+  const knownCellIds = [
+    "root",
+    "x",
+    "a",
+    "old",
+    "w",
+    "q",
+    "far-root",
+    "far-cell"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["w"],
+    componentCellIds: new Set([
+      "root",
+      "x",
+      "a",
+      "old",
+      "w",
+      "q"
+    ])
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["p0"]);
+  assert.deepEqual(
+    closure.downstreamCommandIds,
+    ["c1", "c3", "c4"]
+  );
+  assert.deepEqual(closure.preservedCommandIds, ["c2", "far"]);
+});
+
+test("identity restoration preserves a deeper active predecessor chain", () => {
+  const commands = [
+    command("p-2", ["root"], ["u"]),
+    command("p-1", ["u"], ["x"]),
+    command("creator", ["x"], ["a"]),
+    command("old", ["a"], ["old-cell"]),
+    command("reactivate", [], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("consume", ["a"], ["q"]),
+    command("far", ["far-root"], ["far-cell"])
+  ];
+  const knownCellIds = [
+    "root",
+    "u",
+    "x",
+    "a",
+    "old-cell",
+    "w",
+    "q",
+    "far-root",
+    "far-cell"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["w"],
+    componentCellIds: new Set([
+      "root",
+      "u",
+      "x",
+      "a",
+      "old-cell",
+      "w",
+      "q"
+    ])
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["p-2"]);
+  assert.deepEqual(
+    closure.downstreamCommandIds,
+    ["p-1", "creator", "reactivate", "consume"]
+  );
+  assert.deepEqual(closure.preservedCommandIds, ["old", "far"]);
+});
+
+test("shared identity upstream is stable under reversed seed order", () => {
+  const commands = [
+    command("p0", ["root"], ["x", "y"]),
+    command("creator-a", ["x"], ["a"]),
+    command("creator-b", ["y"], ["b"]),
+    command("old-a", ["a"], ["old-a-cell"]),
+    command("old-b", ["b"], ["old-b-cell"]),
+    command("reactivate-a", [], ["wa"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("reactivate-b", [], ["wb"], {
+      reactivatedCellIds: ["b"]
+    }),
+    command("consume-a", ["a"], ["qa"]),
+    command("consume-b", ["b"], ["qb"]),
+    command("far", ["far-root"], ["far-cell"])
+  ];
+  const knownCellIds = [
+    "root",
+    "x",
+    "y",
+    "a",
+    "b",
+    "old-a-cell",
+    "old-b-cell",
+    "wa",
+    "wb",
+    "qa",
+    "qb",
+    "far-root",
+    "far-cell"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const componentCellIds = new Set(
+    knownCellIds.filter((cellId) => !cellId.startsWith("far"))
+  );
+  const forward = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["wa", "wb"],
+    componentCellIds
+  });
+  const reverse = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["wb", "wa"],
+    componentCellIds
+  });
+
+  assert.deepEqual(forward.supportCommandIds, ["p0"]);
+  assert.deepEqual(
+    forward.downstreamCommandIds,
+    [
+      "creator-a",
+      "creator-b",
+      "reactivate-a",
+      "reactivate-b",
+      "consume-a",
+      "consume-b"
+    ]
+  );
+  assert.deepEqual(
+    forward.preservedCommandIds,
+    ["old-a", "old-b", "far"]
+  );
+  assert.deepEqual(reverse, forward);
+});
+
 test("history index rejects duplicate command ids before other provenance", () => {
   assert.throws(
     () => buildRefinementHistoryIndex([
