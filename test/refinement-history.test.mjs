@@ -9,6 +9,9 @@ import {
   buildRefinementHistoryIndex,
   cloneRefinementSessionCommandRecipe,
   freezeRefinementSessionCommandRecipe,
+  RefinementCellGeometryIndex,
+  RefinementCellGeometryMatchError,
+  snapshotRefinementCellGeometry,
   RefinementHistoryClosureError
 } from "../dist/index.js";
 
@@ -1268,4 +1271,385 @@ test("history index maps are read-only in the public TypeScript API", () => {
     ),
     []
   );
+});
+
+test("cell geometry remapping prefers the compatible original active id", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("duplicate", sampleGeometry("duplicate"));
+  index.add("e1", sampleGeometry("e1"));
+
+  assert.equal(index.uniqueMatch(sampleGeometry("e1")), "e1");
+});
+
+test("cell geometry remapping finds one exact corner set without node-id semantics", () => {
+  const points = sampleGeometry("source").points;
+  const session = {
+    nodes: [
+      ...points.map((point) => [...point]),
+      ...points.map((point) => [...point])
+    ],
+    cells: new Map([
+      ["old", {
+        id: "old",
+        kind: "H1",
+        level: 0,
+        role: "base",
+        element: [1, 2, 3, 4, 5, 6, 7, 8]
+      }],
+      ["replacement", {
+        id: "replacement",
+        kind: "H1",
+        level: 0,
+        role: "base",
+        element: [16, 15, 14, 13, 12, 11, 10, 9]
+      }]
+    ])
+  };
+  const candidate = snapshotRefinementCellGeometry(
+    session,
+    "replacement"
+  );
+  const query = snapshotRefinementCellGeometry(session, "old");
+  candidate.points[0][0] = -0;
+  const index = new RefinementCellGeometryIndex(0);
+  index.add("replacement", candidate);
+
+  assert.equal(index.uniqueMatch(query), "replacement");
+});
+
+test("cell geometry remapping tolerates noise on every coordinate and local corner reordering", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("replacement", sampleGeometry("replacement"));
+  const source = sampleGeometry("old");
+  const order = [6, 0, 5, 3, 1, 7, 2, 4];
+  source.points = order.map((pointIndex, orderIndex) =>
+    source.points[pointIndex].map((coordinate, coordinateIndex) =>
+      coordinate
+        + ((orderIndex + coordinateIndex) % 2 === 0 ? 2e-10 : -2e-10)
+    )
+  );
+
+  assert.equal(index.uniqueMatch(source), "replacement");
+});
+
+test("cell geometry remapping reports sorted frozen ambiguity and no-match undefined", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("b", sampleGeometry("b"));
+  index.add("a", sampleGeometry("a"));
+
+  assert.throws(
+    () => index.uniqueMatch(sampleGeometry("old")),
+    (error) => {
+      assert.equal(
+        error instanceof RefinementCellGeometryMatchError,
+        true
+      );
+      assert.equal(error.name, "RefinementCellGeometryMatchError");
+      assert.deepEqual(error.cellIds, ["a", "b"]);
+      assert.equal(Object.isFrozen(error.cellIds), true);
+      return true;
+    }
+  );
+  assert.equal(
+    index.uniqueMatch(sampleGeometry("far", 10)),
+    undefined
+  );
+});
+
+test("cell geometry remapping requires compatible metadata, point count, dimension, and tolerance", () => {
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("candidate", sampleGeometry("candidate"));
+
+  const incompatible = [
+    { ...sampleGeometry("old"), kind: "Q1" },
+    { ...sampleGeometry("old"), level: 1 },
+    { ...sampleGeometry("old"), role: "selected" },
+    {
+      ...sampleGeometry("old"),
+      points: [
+        ...sampleGeometry("old").points,
+        [2, 2, 2]
+      ]
+    },
+    {
+      ...sampleGeometry("old"),
+      points: sampleGeometry("old").points.map((point) => [
+        ...point,
+        0
+      ])
+    }
+  ];
+  for (const query of incompatible) {
+    assert.equal(index.uniqueMatch(query), undefined);
+  }
+
+  const overTolerance = sampleGeometry("old");
+  overTolerance.points[0][0] = 2e-8;
+  assert.equal(index.uniqueMatch(overTolerance), undefined);
+});
+
+test("cell geometry remapping rejects malformed and collapsed geometry", () => {
+  const malformed = [];
+  malformed.push({
+    geometry: { ...sampleGeometry("empty"), points: [] },
+    message: /at least one point/
+  });
+  const sparsePoints = sampleGeometry("sparse-points");
+  sparsePoints.points = new Array(8);
+  malformed.push({
+    geometry: sparsePoints,
+    message: /points must be dense/
+  });
+  const sparseCoordinate = sampleGeometry("sparse-coordinate");
+  sparseCoordinate.points[0] = new Array(3);
+  malformed.push({
+    geometry: sparseCoordinate,
+    message: /coordinates must be dense/
+  });
+  const nonfinite = sampleGeometry("nonfinite");
+  nonfinite.points[1][2] = Number.POSITIVE_INFINITY;
+  malformed.push({
+    geometry: nonfinite,
+    message: /coordinates must be finite/
+  });
+  const uneven = sampleGeometry("uneven");
+  uneven.points[2] = [1, 1];
+  malformed.push({
+    geometry: uneven,
+    message: /same dimension/
+  });
+
+  for (const { geometry, message } of malformed) {
+    const index = new RefinementCellGeometryIndex(1e-8);
+    assert.throws(
+      () => index.add(geometry.originalCellId, geometry),
+      (error) =>
+        error instanceof RefinementCellGeometryMatchError
+        && message.test(error.message)
+    );
+  }
+
+  const repeated = sampleGeometry("repeated");
+  repeated.points[1] = [...repeated.points[0]];
+  const zeroAreaQ1 = {
+    originalCellId: "zero-area",
+    kind: "Q1",
+    level: 0,
+    role: "base",
+    points: [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [3, 0]
+    ]
+  };
+  const coplanarH1 = sampleGeometry("coplanar");
+  coplanarH1.points = coplanarH1.points.map(([x, y]) => [x, y, 0]);
+
+  for (const geometry of [repeated, zeroAreaQ1, coplanarH1]) {
+    const index = new RefinementCellGeometryIndex(1e-8);
+    assert.throws(
+      () => index.add(geometry.originalCellId, geometry),
+      (error) =>
+        error instanceof RefinementCellGeometryMatchError
+        && error.cellIds[0] === geometry.originalCellId
+        && /collapsed/.test(error.message)
+    );
+  }
+});
+
+test("cell geometry remapping accepts finite 4D cells and treats dimension and extra coordinates as geometry", () => {
+  const candidate = sampleGeometry("candidate");
+  candidate.points = candidate.points.map((point, index) => [
+    ...point,
+    index
+  ]);
+  const reordered = {
+    ...sampleGeometry("old"),
+    points: [7, 3, 5, 1, 6, 2, 4, 0].map((index) => [
+      ...sampleGeometry("old").points[index],
+      index
+    ])
+  };
+  const index = new RefinementCellGeometryIndex(1e-8);
+  index.add("candidate", candidate);
+
+  assert.equal(index.uniqueMatch(reordered), "candidate");
+  assert.equal(
+    index.uniqueMatch(sampleGeometry("three-dimensional")),
+    undefined
+  );
+  reordered.points[0][3] += 2e-8;
+  assert.equal(index.uniqueMatch(reordered), undefined);
+});
+
+test("cell geometry index validates tolerance and ids and snapshots candidates on add", () => {
+  for (const tolerance of [
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY
+  ]) {
+    assert.throws(
+      () => new RefinementCellGeometryIndex(tolerance),
+      RangeError
+    );
+  }
+  assert.doesNotThrow(() => new RefinementCellGeometryIndex(0));
+
+  const index = new RefinementCellGeometryIndex(1e-8);
+  assert.throws(
+    () => index.add("", sampleGeometry("source")),
+    RefinementCellGeometryMatchError
+  );
+  const source = sampleGeometry("source");
+  const expected = structuredClone(source);
+  index.add("candidate", source);
+  assert.throws(
+    () => index.add("candidate", sampleGeometry("other", 4)),
+    (error) =>
+      error instanceof RefinementCellGeometryMatchError
+      && error.cellIds.join(",") === "candidate"
+      && /duplicate candidate cell id/.test(error.message)
+  );
+
+  source.kind = "Q1";
+  source.level = 7;
+  source.role = "selected";
+  source.points[0][0] = 100;
+  source.points.reverse();
+  assert.equal(index.uniqueMatch(expected), "candidate");
+});
+
+test("snapshotRefinementCellGeometry returns a deep copy and stable match errors", () => {
+  const sourcePoints = sampleGeometry("e1").points.map((point) => [
+    ...point
+  ]);
+  const cell = {
+    id: "e1",
+    kind: "H1",
+    level: 2,
+    role: "selected",
+    element: [1, 2, 3, 4, 5, 6, 7, 8]
+  };
+  const session = {
+    nodes: sourcePoints,
+    cells: new Map([["e1", cell]])
+  };
+  const snapshot = snapshotRefinementCellGeometry(session, "e1");
+
+  assert.deepEqual(snapshot, {
+    originalCellId: "e1",
+    kind: "H1",
+    level: 2,
+    role: "selected",
+    points: sampleGeometry("e1").points
+  });
+  assert.notStrictEqual(snapshot.points, sourcePoints);
+  assert.notStrictEqual(snapshot.points[0], sourcePoints[0]);
+  sourcePoints[0][0] = 99;
+  cell.element.reverse();
+  assert.equal(snapshot.points[0][0], 0);
+
+  const assertSnapshotError = (action, message, cellIds) => {
+    assert.throws(action, (error) => {
+      assert.equal(
+        error instanceof RefinementCellGeometryMatchError,
+        true
+      );
+      assert.equal(error.message, message);
+      assert.deepEqual(error.cellIds, cellIds);
+      assert.equal(Object.isFrozen(error.cellIds), true);
+      return true;
+    });
+  };
+  assertSnapshotError(
+    () => snapshotRefinementCellGeometry(session, "missing"),
+    "cannot snapshot missing cell missing",
+    ["missing"]
+  );
+
+  const missingNodeSession = {
+    nodes: sourcePoints.slice(0, 7),
+    cells: new Map([["e1", {
+      ...cell,
+      element: [1, 2, 3, 4, 5, 6, 7, 8]
+    }]])
+  };
+  assertSnapshotError(
+    () => snapshotRefinementCellGeometry(missingNodeSession, "e1"),
+    "cell e1 references missing node 8",
+    ["e1"]
+  );
+
+  const invalidPointSession = {
+    nodes: [
+      [Number.NaN, 0, 0],
+      ...sampleGeometry("e1").points.slice(1)
+    ],
+    cells: new Map([["e1", {
+      ...cell,
+      element: [1, 2, 3, 4, 5, 6, 7, 8]
+    }]])
+  };
+  assertSnapshotError(
+    () => snapshotRefinementCellGeometry(invalidPointSession, "e1"),
+    "cell e1 point 1 coordinates must be finite",
+    ["e1"]
+  );
+
+  const invalidPointShapeSession = {
+    nodes: [
+      null,
+      ...sampleGeometry("e1").points.slice(1)
+    ],
+    cells: new Map([["e1", {
+      ...cell,
+      element: [1, 2, 3, 4, 5, 6, 7, 8]
+    }]])
+  };
+  assertSnapshotError(
+    () => snapshotRefinementCellGeometry(
+      invalidPointShapeSession,
+      "e1"
+    ),
+    "cell e1 point 1 must be an array",
+    ["e1"]
+  );
+});
+
+test("cell geometry tolerance matching avoids squared-distance overflow and underflow", () => {
+  const scaleGeometry = (cellId, scale) => ({
+    ...sampleGeometry(cellId),
+    points: sampleGeometry(cellId).points.map((point) =>
+      point.map((coordinate) => coordinate * scale)
+    )
+  });
+
+  const overflowIndex = new RefinementCellGeometryIndex(2e190);
+  overflowIndex.add(
+    "overflow-candidate",
+    scaleGeometry("overflow-candidate", 1e200)
+  );
+  const overflowQuery = scaleGeometry("overflow-old", 1e200);
+  overflowQuery.points = overflowQuery.points.map((point) =>
+    point.map((coordinate) => coordinate + 1e190)
+  );
+  assert.equal(
+    overflowIndex.uniqueMatch(overflowQuery),
+    "overflow-candidate"
+  );
+
+  const underflowIndex = new RefinementCellGeometryIndex(2e-210);
+  underflowIndex.add(
+    "underflow-candidate",
+    scaleGeometry("underflow-candidate", 1e-200)
+  );
+  const underflowQuery = scaleGeometry("underflow-old", 1e-200);
+  underflowQuery.points = underflowQuery.points.map(([x, y, z]) => [
+    x + 3e-210,
+    y,
+    z
+  ]);
+  assert.equal(underflowIndex.uniqueMatch(underflowQuery), undefined);
 });
