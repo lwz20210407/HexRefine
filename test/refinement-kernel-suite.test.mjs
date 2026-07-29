@@ -10,6 +10,9 @@ import test from "node:test";
 
 import * as api from "../dist/index.js";
 import {
+  planRefinementSessionHistoryTransaction
+} from "../dist/refinement-session.js";
+import {
   pattern3PairTemplateLibrary,
   regularSweepTemplateLibrary
 } from "../dist/two-to-one-sweep-templates.js";
@@ -10358,6 +10361,507 @@ test("Hex 2:1 untouched support conflicts report creator and modifier commands",
   assert.deepEqual(session, before);
 });
 
+test("Hex 2:1 history transaction planner replays a consumed support component atomically", () => {
+  const mesh = createHexUnitCubeMesh(7, 7, 7);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const firstCoreCellIds = idsInIndexBlock(
+    7,
+    7,
+    7,
+    [2, 2, 2],
+    [4, 4, 4]
+  ).map((elementId) =>
+    activeBuildCellIdByElementId(initial, elementId)
+  ).filter(Boolean);
+  const supportCommand = refineSessionPatch(
+    session,
+    firstCoreCellIds,
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: initial
+    }
+  );
+  const boundaryCellId = firstActiveBoundaryCoreCell(session);
+  const centerCellId = supportCommand.createdCellIds
+    .map((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (
+        cell?.level !== 1
+        || cell.role !== "selected"
+        || !session.activeLeafIds.has(cellId)
+      ) {
+        return undefined;
+      }
+      const center = cell.element.reduce((sum, nodeId) => {
+        const point = session.nodes[nodeId - 1];
+        return [
+          sum[0] + point[0] / cell.element.length,
+          sum[1] + point[1] / cell.element.length,
+          sum[2] + point[2] / cell.element.length
+        ];
+      }, [0, 0, 0]);
+      return {
+        cellId,
+        distance: center.reduce(
+          (total, coordinate) => total + (coordinate - 0.5) ** 2,
+          0
+        )
+      };
+    })
+    .filter(Boolean)
+    .sort((first, second) => first.distance - second.distance)[0]?.cellId;
+  assert.ok(boundaryCellId);
+  assert.ok(centerCellId);
+  assert.notEqual(boundaryCellId, centerCellId);
+
+  const replayedCommand = refineSessionPatch(session, [centerCellId], {
+    hexRefinementRatio: 2,
+    includeTransitions: false
+  });
+  assert.equal(replayedCommand.id, "cmd-2");
+  assert.equal(session.cells.get(centerCellId)?.active, false);
+
+  const farFieldCellIds = [...new Set([
+    ...idsInIndexBlock(7, 7, 7, [6, 0, 0], [6, 6, 6]),
+    ...idsInIndexBlock(7, 7, 7, [0, 6, 0], [6, 6, 6]),
+    ...idsInIndexBlock(7, 7, 7, [0, 0, 6], [6, 6, 6])
+  ])].map((elementId) =>
+    activeBuildCellIdByElementId(initial, elementId)
+  ).filter(Boolean);
+  assert.equal(
+    farFieldCellIds.every((cellId) => session.activeLeafIds.has(cellId)),
+    true
+  );
+
+  const currentActive = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const requestOptions = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9
+  };
+  const sourceSnapshot = structuredClone(session);
+  const publicError = captureError(() =>
+    refineSessionPatch(session, [boundaryCellId], {
+      ...requestOptions,
+      activeBuild: currentActive
+    })
+  );
+  assert.equal(publicError.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+  assert.deepEqual(
+    publicError.diagnostic.historyCommandIds,
+    [supportCommand.id, replayedCommand.id]
+  );
+  assert.deepEqual(session, sourceSnapshot);
+
+  const compensation = normalizeTwoToOneCompensation(
+    1,
+    requestOptions
+  );
+  const resolution = currentActive.geometryResolution;
+  assert.ok(resolution);
+  const faceResolution = {
+    tolerance: Math.max(
+      1e-9,
+      resolution.minimumElementEdgeLength * 1e-8,
+      resolution.coordinateScale * Number.EPSILON * 64
+    ),
+    minimumElementEdgeLength:
+      resolution.minimumElementEdgeLength,
+    coordinateScale: resolution.coordinateScale,
+    mergeTolerance: 1e-9
+  };
+  const transaction = planRefinementSessionHistoryTransaction(
+    session,
+    [boundaryCellId],
+    {
+      ...requestOptions,
+      activeBuild: currentActive,
+      hexTwoToOneCompensation: compensation,
+      normalizedTwoToOneCompensation: compensation
+    },
+    faceResolution
+  );
+
+  assert.deepEqual(session, sourceSnapshot);
+  assert.notStrictEqual(transaction.finalSession, session);
+  assert.deepEqual(
+    transaction.historyClosure.supportCommandIds,
+    [supportCommand.id]
+  );
+  assert.deepEqual(
+    transaction.historyClosure.downstreamCommandIds,
+    [replayedCommand.id]
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack.map((command) => command.id),
+    [supportCommand.id, replayedCommand.id, "cmd-3"]
+  );
+  assert.equal(transaction.finalSession.redoStack.length, 0);
+  assert.equal(transaction.finalSession.nextCommandId, 4);
+  assert.equal(transaction.command.id, "cmd-3");
+  assert.strictEqual(
+    transaction.finalSession.undoStack.at(-1),
+    transaction.command
+  );
+  assert.equal(Object.isFrozen(transaction.command), true);
+  assert.equal(
+    transaction.finalSession.undoStack.some(
+      (command) => Number(command.id.slice(4)) > 3
+    ),
+    false
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack[0].recipe,
+    supportCommand.recipe
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack[1].recipe,
+    replayedCommand.recipe
+  );
+  assert.notStrictEqual(
+    transaction.finalSession.undoStack[0].recipe,
+    supportCommand.recipe
+  );
+  assertFrozenRecipe(transaction.finalSession.undoStack[0].recipe);
+  assertFrozenRecipe(transaction.finalSession.undoStack[1].recipe);
+  assertFrozenRecipe(transaction.command.recipe);
+  assert.equal(
+    farFieldCellIds.every(
+      (cellId) => transaction.finalSession.activeLeafIds.has(cellId)
+    ),
+    true
+  );
+
+  const finalMesh = buildActiveMesh(
+    transaction.finalSession,
+    {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    }
+  );
+  assert.deepEqual(transaction.preview.quality, transaction.command.quality);
+  assert.deepEqual(
+    transaction.preview.twoToOne,
+    transaction.command.twoToOne
+  );
+  assert.deepEqual(transaction.preview.summary, {
+    inputElementCount: currentActive.mesh.elements.length,
+    changedInputElementCount: transaction.command.hiddenCellIds.length,
+    preservedInputElementCount:
+      currentActive.mesh.elements.length
+      - transaction.command.hiddenCellIds.length,
+    outputElementCount: finalMesh.elements.length
+  });
+  assert.equal(
+    undoRefinementSession(transaction.finalSession)?.id,
+    transaction.command.id
+  );
+  assert.deepEqual(
+    buildActiveMesh(transaction.finalSession, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    }),
+    currentActive.mesh
+  );
+  assert.equal(
+    redoRefinementSession(transaction.finalSession)?.id,
+    transaction.command.id
+  );
+  assert.deepEqual(
+    buildActiveMesh(transaction.finalSession, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    }),
+    finalMesh
+  );
+});
+
+test("Hex 2:1 history transaction planner maps missing and unmatched replay recipes atomically", () => {
+  for (const fault of ["missing-recipe", "unmatched-geometry"]) {
+    const {
+      session,
+      boundaryCellId,
+      replayedCommand,
+      resolvedOptions,
+      faceResolution
+    } = createConsumedSupportHistoryFixture();
+    if (fault === "missing-recipe") {
+      replaceSessionCommand(session, replayedCommand, {
+        recipe: undefined
+      });
+    } else {
+      const recipe = structuredClone(replayedCommand.recipe);
+      recipe.selectedCellGeometry[0].points[0][0] += 10;
+      replaceSessionCommand(session, replayedCommand, {
+        recipe
+      });
+    }
+    const before = structuredClone(session);
+
+    const error = captureError(() =>
+      planRefinementSessionHistoryTransaction(
+        session,
+        [boundaryCellId],
+        resolvedOptions,
+        faceResolution
+      )
+    );
+
+    assert.equal(error instanceof TwoToOnePlanningError, true, fault);
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT", fault);
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [replayedCommand.id],
+      fault
+    );
+    assert.deepEqual(session, before, fault);
+  }
+});
+
+test("Hex 2:1 history transaction planner preserves an independent later command", () => {
+  const {
+    session,
+    boundaryCellId,
+    supportCommand,
+    replayedCommand
+  } = createConsumedSupportHistoryFixture();
+  const independentCommand = refineSessionPatch(
+    session,
+    ["e343"],
+    {
+      includeTransitions: false,
+      hexRefinementRatio: 2
+    }
+  );
+  const independentActiveCellIds =
+    independentCommand.createdCellIds.filter(
+      (cellId) => session.activeLeafIds.has(cellId)
+    );
+  const currentActive = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const requestOptions = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9
+  };
+  const compensation = normalizeTwoToOneCompensation(
+    1,
+    requestOptions
+  );
+  const resolution = currentActive.geometryResolution;
+  assert.ok(resolution);
+  const before = structuredClone(session);
+
+  const transaction = planRefinementSessionHistoryTransaction(
+    session,
+    [boundaryCellId],
+    {
+      ...requestOptions,
+      activeBuild: currentActive,
+      hexTwoToOneCompensation: compensation,
+      normalizedTwoToOneCompensation: compensation
+    },
+    {
+      tolerance: Math.max(
+        1e-9,
+        resolution.minimumElementEdgeLength * 1e-8,
+        resolution.coordinateScale * Number.EPSILON * 64
+      ),
+      minimumElementEdgeLength:
+        resolution.minimumElementEdgeLength,
+      coordinateScale: resolution.coordinateScale,
+      mergeTolerance: 1e-9
+    }
+  );
+
+  assert.deepEqual(session, before);
+  assert.deepEqual(
+    transaction.historyClosure.preservedCommandIds,
+    [independentCommand.id]
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack.map((command) => command.id),
+    [
+      supportCommand.id,
+      replayedCommand.id,
+      independentCommand.id,
+      "cmd-4"
+    ]
+  );
+  assert.equal(
+    independentActiveCellIds.every((cellId) =>
+      transaction.finalSession.activeLeafIds.has(cellId)
+    ),
+    true
+  );
+  assert.deepEqual(
+    transaction.finalSession.undoStack[2].recipe,
+    independentCommand.recipe
+  );
+});
+
+test("Hex 2:1 history transaction planner rejects cross-component closure and compensation overflow atomically", () => {
+  {
+    const mesh = createHexUnitCubeMesh(9, 9, 9);
+    const session = createRefinementSession(mesh);
+    const initial = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const firstCoreCellIds = [
+      ...idsInIndexBlock(9, 9, 9, [1, 1, 2], [2, 2, 3]),
+      ...idsInIndexBlock(9, 9, 9, [6, 6, 2], [7, 7, 3])
+    ].map((elementId) =>
+      activeBuildCellIdByElementId(initial, elementId)
+    ).filter(Boolean);
+    const supportCommand = refineSessionPatch(
+      session,
+      firstCoreCellIds,
+      {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        includeTransitions: true,
+        activeBuild: initial
+      }
+    );
+    const classified = supportCommand.createdCellIds
+      .map((cellId) => {
+        const cell = session.cells.get(cellId);
+        if (
+          !cell?.active
+          || cell.level !== 1
+          || cell.role !== "selected"
+        ) {
+          return undefined;
+        }
+        const center = cell.element.reduce((total, nodeId) => {
+          const point = session.nodes[nodeId - 1];
+          return [
+            total[0] + point[0] / cell.element.length,
+            total[1] + point[1] / cell.element.length,
+            total[2] + point[2] / cell.element.length
+          ];
+        }, [0, 0, 0]);
+        return { cellId, center };
+      })
+      .filter(Boolean);
+    const leftCandidate = classified
+      .filter(({ center }) => center[0] < 0.5)
+      .sort((first, second) =>
+        first.center.reduce((sum, value) => sum + value, 0)
+        - second.center.reduce((sum, value) => sum + value, 0)
+      )[0]?.cellId;
+    const rightComponentCellIds = classified
+      .filter(({ center }) =>
+        center[0] > 0.5 && center[1] > 0.5
+      )
+      .map(({ cellId }) => cellId);
+    assert.ok(leftCandidate);
+    assert.ok(rightComponentCellIds.length > 0);
+    const activeBuild = buildActiveMeshWithMap(session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    });
+    const requestOptions = {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      mergeTolerance: 1e-9
+    };
+    const compensation = normalizeTwoToOneCompensation(
+      1,
+      requestOptions
+    );
+    const resolution = activeBuild.geometryResolution;
+    assert.ok(resolution);
+    const before = structuredClone(session);
+
+    const error = captureError(() =>
+      planRefinementSessionHistoryTransaction(
+        session,
+        [leftCandidate],
+        {
+          ...requestOptions,
+          activeBuild,
+          hexTwoToOneCompensation: compensation,
+          normalizedTwoToOneCompensation: compensation
+        },
+        {
+          tolerance: Math.max(
+            1e-9,
+            resolution.minimumElementEdgeLength * 1e-8,
+            resolution.coordinateScale * Number.EPSILON * 64
+          ),
+          minimumElementEdgeLength:
+            resolution.minimumElementEdgeLength,
+          coordinateScale: resolution.coordinateScale,
+          mergeTolerance: 1e-9
+        }
+      )
+    );
+
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id]
+    );
+    assert.equal(
+      error.diagnostic.conflictingCellIds.some((cellId) =>
+        rightComponentCellIds.includes(cellId)
+      ),
+      true
+    );
+    assert.deepEqual(session, before);
+  }
+
+  {
+    const {
+      session,
+      boundaryCellId,
+      resolvedOptions,
+      faceResolution
+    } = createConsumedSupportHistoryFixture();
+    const compensation = {
+      mode: "local-topology",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 0
+    };
+    const before = structuredClone(session);
+
+    const error = captureError(() =>
+      planRefinementSessionHistoryTransaction(
+        session,
+        [boundaryCellId],
+        {
+          ...resolvedOptions,
+          hexTwoToOneCompensation: compensation,
+          normalizedTwoToOneCompensation: compensation
+        },
+        faceResolution
+      )
+    );
+
+    assert.equal(
+      error.code,
+      "TWO_TO_ONE_COMPENSATION_LIMIT"
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
 test("Hex 2:1 transition-shell rebuilding reports a modified support layer as a history conflict", () => {
   const {
     session,
@@ -11443,6 +11947,95 @@ function createTransitionShellRegressionFixture() {
     session,
     firstRefined,
     candidate: firstActiveBoundaryCoreCell(session)
+  };
+}
+
+function createConsumedSupportHistoryFixture() {
+  const {
+    session,
+    candidate: boundaryCellId
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.at(-1);
+  assert.ok(supportCommand);
+  const centerCellId = supportCommand.createdCellIds
+    .map((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (
+        cell?.level !== 1
+        || cell.role !== "selected"
+        || !session.activeLeafIds.has(cellId)
+      ) {
+        return undefined;
+      }
+      const center = cell.element.reduce((sum, nodeId) => {
+        const point = session.nodes[nodeId - 1];
+        return [
+          sum[0] + point[0] / cell.element.length,
+          sum[1] + point[1] / cell.element.length,
+          sum[2] + point[2] / cell.element.length
+        ];
+      }, [0, 0, 0]);
+      return {
+        cellId,
+        distance: center.reduce(
+          (total, coordinate) =>
+            total + (coordinate - 0.5) ** 2,
+          0
+        )
+      };
+    })
+    .filter(Boolean)
+    .sort((first, second) =>
+      first.distance - second.distance
+    )[0]?.cellId;
+  assert.ok(centerCellId);
+  const replayedCommand = refineSessionPatch(
+    session,
+    [centerCellId],
+    {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }
+  );
+  const activeBuild = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const requestOptions = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9
+  };
+  const compensation = normalizeTwoToOneCompensation(
+    1,
+    requestOptions
+  );
+  const resolution = activeBuild.geometryResolution;
+  assert.ok(resolution);
+  return {
+    session,
+    boundaryCellId,
+    centerCellId,
+    supportCommand,
+    replayedCommand,
+    resolvedOptions: {
+      ...requestOptions,
+      activeBuild,
+      hexTwoToOneCompensation: compensation,
+      normalizedTwoToOneCompensation: compensation
+    },
+    faceResolution: {
+      tolerance: Math.max(
+        1e-9,
+        resolution.minimumElementEdgeLength * 1e-8,
+        resolution.coordinateScale * Number.EPSILON * 64
+      ),
+      minimumElementEdgeLength:
+        resolution.minimumElementEdgeLength,
+      coordinateScale: resolution.coordinateScale,
+      mergeTolerance: 1e-9
+    }
   };
 }
 

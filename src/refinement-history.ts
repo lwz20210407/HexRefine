@@ -114,6 +114,14 @@ export interface RefinementHistoryClosure {
   readonly boundaryCellIds: readonly CellId[];
 }
 
+export interface TransitionHistoryComponent {
+  readonly selectedCellIds: readonly CellId[];
+  readonly supportCellIds: readonly CellId[];
+  readonly collidingTransitionParentIds: readonly CellId[];
+  readonly componentCellIds: ReadonlySet<CellId>;
+  readonly boundaryCellIds: readonly CellId[];
+}
+
 export class RefinementHistoryClosureError extends Error {
   readonly commandIds: readonly string[];
   readonly cellIds: readonly CellId[];
