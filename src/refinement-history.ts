@@ -182,7 +182,9 @@ const knownCellIdsByHistoryIndex = new WeakMap<
 >();
 
 interface RefinementHistoryStateDependencies {
-  readonly predecessorCommandIdsByCommandId:
+  readonly activePredecessorCommandIdsByCommandId:
+    ReadonlyMap<string, readonly string[]>;
+  readonly identityPredecessorCommandIdsByCommandId:
     ReadonlyMap<string, readonly string[]>;
   readonly consumerCommandIdsByProducerCommandId:
     ReadonlyMap<string, readonly string[]>;
@@ -309,25 +311,40 @@ export function buildRefinementHistoryClosure(
   }
 
   const includedCommandIds = new Set<string>();
-  const worklist: string[] = [];
-  const enqueueCommandId = (commandId: string | undefined): void => {
-    if (
-      commandId !== undefined
-      && !includedCommandIds.has(commandId)
-    ) {
+  const expandedActiveProducerCommandIds = new Set<string>();
+  const worklist: Array<{
+    readonly commandId: string;
+    readonly kind: "command" | "active-producer";
+  }> = [];
+  const includeCommandId = (
+    commandId: string | undefined,
+    expandActiveProducer: boolean
+  ): void => {
+    if (commandId === undefined) {
+      return;
+    }
+    if (!includedCommandIds.has(commandId)) {
       includedCommandIds.add(commandId);
-      worklist.push(commandId);
+      worklist.push({ commandId, kind: "command" });
+    }
+    if (
+      expandActiveProducer
+      && !expandedActiveProducerCommandIds.has(commandId)
+    ) {
+      expandedActiveProducerCommandIds.add(commandId);
+      worklist.push({ commandId, kind: "active-producer" });
     }
   };
   for (const cellId of seedCellIds) {
-    enqueueCommandId(
-      index.creatorCommandIdByCellId.get(cellId)
+    includeCommandId(
+      index.creatorCommandIdByCellId.get(cellId),
+      true
     );
     for (
       const commandId of
         index.consumerCommandIdsByCellId.get(cellId) ?? []
     ) {
-      enqueueCommandId(commandId);
+      includeCommandId(commandId, true);
     }
   }
 
@@ -336,27 +353,39 @@ export function buildRefinementHistoryClosure(
     worklistIndex < worklist.length;
     worklistIndex += 1
   ) {
-    const commandId = worklist[worklistIndex];
-    if (commandId === undefined) {
+    const item = worklist[worklistIndex];
+    if (item === undefined) {
       throw new Error(
         `history closure worklist is sparse at ${worklistIndex}`
       );
     }
-    for (
-      const predecessorCommandId of
-        stateDependencies.predecessorCommandIdsByCommandId.get(
-          commandId
-        ) ?? []
-    ) {
-      enqueueCommandId(predecessorCommandId);
+    const { commandId } = item;
+    if (item.kind === "active-producer") {
+      for (
+        const consumerCommandId of
+          stateDependencies.consumerCommandIdsByProducerCommandId.get(
+            commandId
+          ) ?? []
+      ) {
+        includeCommandId(consumerCommandId, true);
+      }
+      continue;
     }
     for (
-      const consumerCommandId of
-        stateDependencies.consumerCommandIdsByProducerCommandId.get(
+      const predecessorCommandId of
+        stateDependencies.activePredecessorCommandIdsByCommandId.get(
           commandId
         ) ?? []
     ) {
-      enqueueCommandId(consumerCommandId);
+      includeCommandId(predecessorCommandId, true);
+    }
+    for (
+      const identityPredecessorCommandId of
+        stateDependencies.identityPredecessorCommandIdsByCommandId.get(
+          commandId
+        ) ?? []
+    ) {
+      includeCommandId(identityPredecessorCommandId, false);
     }
   }
 
@@ -539,39 +568,70 @@ function appendStableUnique(
 function buildHistoryStateDependencies(
   commands: readonly RefinementSessionCommand[]
 ): RefinementHistoryStateDependencies {
-  const currentProducerCommandIdByCellId = new Map<CellId, string>();
-  const predecessorCommandIdsByCommandId =
+  const identityCreatorCommandIdByCellId = new Map<CellId, string>();
+  const currentActiveProducerCommandIdByCellId =
+    new Map<CellId, string>();
+  const activePredecessorCommandIdsByCommandId =
+    new Map<string, string[]>();
+  const identityPredecessorCommandIdsByCommandId =
     new Map<string, string[]>();
   const consumerCommandIdsByProducerCommandId =
     new Map<string, string[]>();
 
   for (const command of commands) {
-    for (const cellId of commandInputCellIds(command)) {
+    for (const cellId of stableUnique(command.hiddenCellIds)) {
       const producerCommandId =
-        currentProducerCommandIdByCellId.get(cellId);
-      if (producerCommandId === undefined) {
-        continue;
+        currentActiveProducerCommandIdByCellId.get(cellId);
+      if (producerCommandId !== undefined) {
+        appendCommandDependency(
+          activePredecessorCommandIdsByCommandId,
+          command.id,
+          producerCommandId
+        );
+        appendCommandDependency(
+          consumerCommandIdsByProducerCommandId,
+          producerCommandId,
+          command.id
+        );
       }
-      appendCommandDependency(
-        predecessorCommandIdsByCommandId,
-        command.id,
-        producerCommandId
-      );
-      appendCommandDependency(
-        consumerCommandIdsByProducerCommandId,
-        producerCommandId,
+      currentActiveProducerCommandIdByCellId.delete(cellId);
+    }
+    for (
+      const cellId of
+        stableUnique(command.reactivatedCellIds ?? [])
+    ) {
+      const identityCreatorCommandId =
+        identityCreatorCommandIdByCellId.get(cellId);
+      if (identityCreatorCommandId !== undefined) {
+        appendCommandDependency(
+          identityPredecessorCommandIdsByCommandId,
+          command.id,
+          identityCreatorCommandId
+        );
+      }
+      currentActiveProducerCommandIdByCellId.set(
+        cellId,
         command.id
       );
     }
-    for (const cellId of stateProducedCellIds(command)) {
-      currentProducerCommandIdByCellId.set(cellId, command.id);
+    for (const cellId of stableUnique(command.createdCellIds)) {
+      identityCreatorCommandIdByCellId.set(cellId, command.id);
+      currentActiveProducerCommandIdByCellId.set(
+        cellId,
+        command.id
+      );
     }
   }
 
   return Object.freeze({
-    predecessorCommandIdsByCommandId: freezeCommandDependencyMap(
-      predecessorCommandIdsByCommandId
-    ),
+    activePredecessorCommandIdsByCommandId:
+      freezeCommandDependencyMap(
+        activePredecessorCommandIdsByCommandId
+      ),
+    identityPredecessorCommandIdsByCommandId:
+      freezeCommandDependencyMap(
+        identityPredecessorCommandIdsByCommandId
+      ),
     consumerCommandIdsByProducerCommandId:
       freezeCommandDependencyMap(
         consumerCommandIdsByProducerCommandId
@@ -584,6 +644,9 @@ function appendCommandDependency(
   commandId: string,
   dependencyCommandId: string
 ): void {
+  if (commandId === dependencyCommandId) {
+    return;
+  }
   const commandIds = map.get(commandId);
   if (commandIds === undefined) {
     map.set(commandId, [dependencyCommandId]);
@@ -658,15 +721,6 @@ function commandInputCellIds(
   ]);
 }
 
-function stateProducedCellIds(
-  command: RefinementSessionCommand
-): CellId[] {
-  return stableUnique([
-    ...command.createdCellIds,
-    ...(command.reactivatedCellIds ?? [])
-  ]);
-}
-
 function affectedCommandCellIds(
   command: RefinementSessionCommand
 ): CellId[] {
@@ -707,11 +761,18 @@ function commandHasIncludedPredecessor(
   commandId: string,
   includedCommandIds: ReadonlySet<string>
 ): boolean {
-  return (
-    stateDependencies.predecessorCommandIdsByCommandId.get(
-      commandId
-    ) ?? []
-  ).some((predecessorCommandId) =>
+  return [
+    ...(
+      stateDependencies.activePredecessorCommandIdsByCommandId.get(
+        commandId
+      ) ?? []
+    ),
+    ...(
+      stateDependencies.identityPredecessorCommandIdsByCommandId.get(
+        commandId
+      ) ?? []
+    )
+  ].some((predecessorCommandId) =>
     includedCommandIds.has(predecessorCommandId)
   );
 }

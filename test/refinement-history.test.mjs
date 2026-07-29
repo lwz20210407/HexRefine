@@ -404,6 +404,95 @@ test("history closure does not cross unrelated state versions", () => {
   assert.deepEqual(closure.preservedCommandIds, ["u1"]);
 });
 
+test("history closure starts from the latest reactivated active version", () => {
+  const commands = [
+    command("i1", [], ["y"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("i2", ["a"], ["z"]),
+    command("i3", [], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("i4", ["a"], ["q"])
+  ];
+  const knownCellIds = ["a", "y", "z", "w", "q"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["w"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["i3"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["i4"]);
+  assert.deepEqual(closure.preservedCommandIds, ["i1", "i2"]);
+});
+
+test("history closure keeps interleaved cell state versions separate", () => {
+  const commands = [
+    command("a1", [], ["ay"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("b1", [], ["by"], {
+      reactivatedCellIds: ["b"]
+    }),
+    command("a2", ["a"], ["az"]),
+    command("b2", ["b"], ["bz"]),
+    command("a3", [], ["aw"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("b3", [], ["bw"], {
+      reactivatedCellIds: ["b"]
+    }),
+    command("a4", ["a"], ["aq"]),
+    command("b4", ["b"], ["bq"])
+  ];
+  const knownCellIds = [
+    "a",
+    "b",
+    "ay",
+    "by",
+    "az",
+    "bz",
+    "aw",
+    "bw",
+    "aq",
+    "bq"
+  ];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["aw"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["a3"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["a4"]);
+  assert.deepEqual(
+    closure.preservedCommandIds,
+    ["a1", "b1", "a2", "b2", "b3", "b4"]
+  );
+});
+
+test("reactivated state retains identity creator without old active consumers", () => {
+  const commands = [
+    command("c1", ["root"], ["a"]),
+    command("c2", ["a"], ["old"]),
+    command("c3", [], ["w"], {
+      reactivatedCellIds: ["a"]
+    }),
+    command("c4", ["a"], ["q"])
+  ];
+  const knownCellIds = ["root", "a", "old", "w", "q"];
+  const index = buildRefinementHistoryIndex(commands, knownCellIds);
+  const closure = buildRefinementHistoryClosure(index, {
+    seedCellIds: ["w"],
+    componentCellIds: new Set(knownCellIds)
+  });
+
+  assert.deepEqual(closure.supportCommandIds, ["c1"]);
+  assert.deepEqual(closure.downstreamCommandIds, ["c3", "c4"]);
+  assert.deepEqual(closure.preservedCommandIds, ["c2"]);
+});
+
 test("history index rejects duplicate command ids before other provenance", () => {
   assert.throws(
     () => buildRefinementHistoryIndex([
