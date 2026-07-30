@@ -1627,12 +1627,18 @@ function refineSessionPatchInternal(
           error
         );
         if (faceResolution !== undefined) {
-          return refineSessionPatchWithRebuiltTransitionShell(
+          const transaction =
+            planRefinementSessionHistoryTransaction(
+              session,
+              cellIds,
+              resolvedOptions,
+              faceResolution
+            );
+          replaceRefinementSessionState(
             session,
-            cellIds,
-            resolvedOptions,
-            faceResolution
+            transaction.finalSession
           );
+          return transaction.command;
         }
       }
       throw error;
@@ -2152,7 +2158,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
     }
     return cellId;
   });
-  refineSessionPatchInternal(
+  const currentRequestCommand = refineSessionPatchInternal(
     working,
     remappedCellIds,
     retryOptions,
@@ -2191,7 +2197,11 @@ function refineSessionPatchWithRebuiltTransitionShell(
     status: "compensated",
     topologyClass: "mixed-level",
     originalSelectedCellIds: [...validation.cellIds].sort(compareCellIds),
-    effectiveSelectedCellIds: [...remappedCellIds].sort(compareCellIds),
+    effectiveSelectedCellIds:
+      activeSelectedCommandOutputCellIds(
+        working,
+        currentRequestCommand
+      ),
     actions: [attemptedAction],
     affectedComponentCellIds: [...new Set([
       ...hiddenCellIds,
@@ -2258,6 +2268,22 @@ export function planRefinementSessionHistoryTransaction(
       validation.level,
       faceResolution.tolerance
     );
+  if (
+    supportDiscovery.component.supportCellIds.every((cellId) => {
+      const cell = requiredCell(session, cellId);
+      return cell.active
+        && !cell.hidden
+        && session.activeLeafIds.has(cellId);
+    })
+  ) {
+    return planUntouchedTransitionShellHistoryTransaction(
+      session,
+      validation.cellIds,
+      resolvedOptions,
+      faceResolution,
+      supportDiscovery
+    );
+  }
   const historyIndex = buildRefinementHistoryIndex(
     session.undoStack,
     [...session.cells.keys()]
@@ -2268,6 +2294,33 @@ export function planRefinementSessionHistoryTransaction(
       supportDiscovery.component,
       supportDiscovery.component.supportCellIds
     );
+  const preliminaryDownstreamCommandIdSet = new Set(
+    preliminaryHistoryClosure.downstreamCommandIds
+  );
+  const untraceableSupportCellIds =
+    supportDiscovery.component.supportCellIds.filter((cellId) => {
+      const cell = requiredCell(session, cellId);
+      const isInactive = !cell.active
+        || cell.hidden
+        || !session.activeLeafIds.has(cellId);
+      return isInactive
+        && !cellHasDownstreamHistoryTrace(
+          session,
+          historyIndex,
+          cellId,
+          preliminaryDownstreamCommandIdSet
+        );
+    });
+  if (untraceableSupportCellIds.length > 0) {
+    throw historyConflict(
+      `automatic transition-shell rebuilding requires an untouched supporting layer with traceable history: ${untraceableSupportCellIds.join(", ")}`,
+      untraceableSupportCellIds,
+      [
+        supportDiscovery.supportCommand.id,
+        ...preliminaryHistoryClosure.downstreamCommandIds
+      ]
+    );
+  }
   assertEligibleDownstreamHistoryCommands(
     historyIndex,
     preliminaryHistoryClosure
@@ -2596,7 +2649,7 @@ export function planRefinementSessionHistoryTransaction(
       closureCommandIds
     );
   }
-  refineSessionPatchInternal(
+  const currentRequestCommand = refineSessionPatchInternal(
     working,
     remappedCellIds,
     replaySessionPatchOptions(
@@ -2649,15 +2702,18 @@ export function planRefinementSessionHistoryTransaction(
     { length: working.nodes.length - originalNodeCount },
     (_, index) => originalNodeCount + index + 1
   );
+  const effectiveSelectedCellIds =
+    activeSelectedCommandOutputCellIds(
+      working,
+      currentRequestCommand
+    );
   const twoToOne: TwoToOneCapabilityReport<CellId> = {
     status: "compensated",
     topologyClass: "mixed-level",
     originalSelectedCellIds: [
       ...validation.cellIds
     ].sort(compareCellIds),
-    effectiveSelectedCellIds: [
-      ...remappedCellIds
-    ].sort(compareCellIds),
+    effectiveSelectedCellIds,
     actions: [attemptedAction],
     affectedComponentCellIds: [...new Set([
       ...hiddenCellIds,
@@ -2719,6 +2775,160 @@ export function planRefinementSessionHistoryTransaction(
   };
 }
 
+function activeSelectedCommandOutputCellIds(
+  session: RefinementSession,
+  command: RefinementSessionCommand
+): CellId[] {
+  return stableCellIds([
+    ...(
+      command.activeCreatedCellIds
+      ?? command.createdCellIds
+    ),
+    ...(command.reactivatedCellIds ?? [])
+  ].filter((cellId) => {
+    const cell = requiredCell(session, cellId);
+    return cell.active
+      && !cell.hidden
+      && session.activeLeafIds.has(cellId)
+      && cell.role === "selected";
+  }));
+}
+
+function planUntouchedTransitionShellHistoryTransaction(
+  session: RefinementSession,
+  cellIds: readonly CellId[],
+  resolvedOptions: ResolvedRefinementSessionPatchOptions,
+  faceResolution: SessionFaceResolution,
+  discovered: DiscoveredTransitionHistoryComponent
+): RefinementSessionHistoryTransactionPlan {
+  const working = cloneRefinementSession(session);
+  const command = refineSessionPatchWithRebuiltTransitionShell(
+    working,
+    [...cellIds],
+    resolvedOptions,
+    faceResolution
+  );
+  const finalActive = buildActiveMeshWithMap(working, {
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    ...(faceResolution.mergeTolerance === undefined
+      ? {}
+      : { mergeTolerance: faceResolution.mergeTolerance })
+  });
+  const inputElementCount =
+    resolvedOptions.activeBuild.mesh.elements.length;
+  const historyIndex = buildRefinementHistoryIndex(
+    session.undoStack,
+    [...session.cells.keys()]
+  );
+  const affectedInputCellIds =
+    traceLocalSupportCommandInputCellIds(
+      session,
+      discovered.supportCommand,
+      discovered.component.supportCellIds
+    );
+  const includedCommandIds = new Set([
+    discovered.supportCommand.id
+  ]);
+  const boundaryCellIds = affectedInputCellIds.filter((cellId) => {
+    const creatorCommandId =
+      historyIndex.creatorCommandIdByCellId.get(cellId);
+    return creatorCommandId === undefined
+      || !includedCommandIds.has(creatorCommandId);
+  });
+  const historyClosure: RefinementHistoryClosure = Object.freeze({
+    supportCommandIds: Object.freeze([
+      discovered.supportCommand.id
+    ]),
+    downstreamCommandIds: Object.freeze([]),
+    affectedInputCellIds: Object.freeze(affectedInputCellIds),
+    preservedCommandIds: Object.freeze(
+      session.undoStack
+        .filter((entry) =>
+          entry.id !== discovered.supportCommand.id
+        )
+        .map((entry) => entry.id)
+    ),
+    boundaryCellIds: Object.freeze(boundaryCellIds)
+  });
+  const preview: RefinementPreview<CellId> = {
+    kind: session.kind,
+    planMode: "aggregate",
+    plan: [],
+    compound: {
+      kind: "transition-shell-rebuild"
+    },
+    summary: {
+      inputElementCount,
+      changedInputElementCount: command.hiddenCellIds.length,
+      preservedInputElementCount:
+        inputElementCount - command.hiddenCellIds.length,
+      outputElementCount: finalActive.mesh.elements.length
+    },
+    twoToOne:
+      cloneTwoToOneCapabilityReport(command.twoToOne),
+    ...(command.quality === undefined
+      ? {}
+      : { quality: command.quality })
+  };
+  return {
+    historyClosure,
+    command,
+    finalSession: working,
+    preview
+  };
+}
+
+function traceLocalSupportCommandInputCellIds(
+  session: RefinementSession,
+  command: RefinementSessionCommand,
+  supportCellIds: readonly CellId[]
+): CellId[] {
+  const commandInputCellIds = stableCellIds([
+    ...command.hiddenCellIds,
+    ...(command.reactivatedCellIds ?? [])
+  ]);
+  const commandInputCellIdSet = new Set(commandInputCellIds);
+  const reachedInputCellIds = new Set<CellId>();
+  const supportAncestorGeometryKeys = new Set<string>();
+  for (const supportCellId of supportCellIds) {
+    let currentCellId: CellId | undefined = supportCellId;
+    const visitedCellIds = new Set<CellId>();
+    while (
+      currentCellId !== undefined
+      && !visitedCellIds.has(currentCellId)
+    ) {
+      visitedCellIds.add(currentCellId);
+      const currentCell = requiredCell(session, currentCellId);
+      supportAncestorGeometryKeys.add(
+        refinementCellGeometryKey(session, currentCell)
+      );
+      if (commandInputCellIdSet.has(currentCellId)) {
+        reachedInputCellIds.add(currentCellId);
+        break;
+      }
+      currentCellId = currentCell.parentId;
+    }
+  }
+  for (const commandInputCellId of commandInputCellIds) {
+    if (reachedInputCellIds.has(commandInputCellId)) {
+      continue;
+    }
+    const inputCell = requiredCell(session, commandInputCellId);
+    if (
+      supportAncestorGeometryKeys.has(
+        refinementCellGeometryKey(session, inputCell)
+      )
+    ) {
+      reachedInputCellIds.add(commandInputCellId);
+    }
+  }
+  return commandInputCellIds.filter((cellId) =>
+    reachedInputCellIds.has(cellId)
+  );
+}
+
 interface TransitionHistoryComponent {
   readonly selectedCellIds: readonly CellId[];
   readonly supportCellIds: readonly CellId[];
@@ -2742,7 +2952,14 @@ function discoverTransitionHistorySupportComponent(
     session,
     selectedCellIds
   );
-  const allSupportCellIds = supportCommand.createdCellIds.filter(
+  const supportOutputCellIds = stableCellIds([
+    ...(
+      supportCommand.activeCreatedCellIds
+      ?? supportCommand.createdCellIds
+    ),
+    ...(supportCommand.reactivatedCellIds ?? [])
+  ]);
+  const allSupportCellIds = supportOutputCellIds.filter(
     (cellId) => {
       const cell = session.cells.get(cellId);
       return cell?.level === selectedLevel
@@ -2853,6 +3070,43 @@ function completeTransitionHistoryComponent(
   };
 }
 
+function cellHasDownstreamHistoryTrace(
+  session: RefinementSession,
+  historyIndex: RefinementHistoryIndex,
+  cellId: CellId,
+  downstreamCommandIds: ReadonlySet<string>
+): boolean {
+  if (downstreamCommandIds.size === 0) {
+    return false;
+  }
+  const descendantCellIds = new Set<CellId>();
+  collectRefinementCellDescendants(
+    session,
+    cellId,
+    descendantCellIds
+  );
+  for (const descendantCellId of descendantCellIds) {
+    const creatorCommandId =
+      historyIndex.creatorCommandIdByCellId.get(descendantCellId);
+    if (
+      creatorCommandId !== undefined
+      && downstreamCommandIds.has(creatorCommandId)
+    ) {
+      return true;
+    }
+    const consumerCommandIds =
+      historyIndex.consumerCommandIdsByCellId.get(
+        descendantCellId
+      ) ?? [];
+    if (consumerCommandIds.some((commandId) =>
+      downstreamCommandIds.has(commandId)
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildSessionHistoryClosure(
   historyIndex: RefinementHistoryIndex,
   component: TransitionHistoryComponent,
@@ -2868,10 +3122,39 @@ function buildSessionHistoryClosure(
     );
   } catch (error) {
     if (error instanceof RefinementHistoryClosureError) {
+      const crossingCommandIds =
+        error.message
+          === "history closure crosses the component boundary"
+          ? error.commandIds.filter((commandId) => {
+              const command =
+                historyIndex.commandById.get(commandId);
+              if (command === undefined) {
+                return true;
+              }
+              const affectedCellIds = [
+                ...command.hiddenCellIds,
+                ...command.createdCellIds,
+                ...(command.activeCreatedCellIds ?? []),
+                ...(command.reactivatedCellIds ?? []),
+                ...(command.recipe?.selectedCellIds ?? []),
+                ...(
+                  command.recipe?.transitionSupportCellIds
+                  ?? []
+                )
+              ];
+              return affectedCellIds.some((cellId) =>
+                component.componentCellIds.has(cellId)
+              ) && affectedCellIds.some((cellId) =>
+                !component.componentCellIds.has(cellId)
+              );
+            })
+          : error.commandIds;
       throw historyConflict(
         error.message,
         error.cellIds,
-        error.commandIds
+        crossingCommandIds.length > 0
+          ? crossingCommandIds
+          : error.commandIds
       );
     }
     throw error;
@@ -4410,12 +4693,15 @@ export function previewSessionPatch(
         error
       );
       if (faceResolution !== undefined) {
-        return previewSessionPatchWithRebuiltTransitionShell(
-          session,
-          cellIds,
-          resolvedOptions,
-          sourceActive,
-          faceResolution
+        const transaction =
+          planRefinementSessionHistoryTransaction(
+            session,
+            cellIds,
+            resolvedOptions,
+            faceResolution
+          );
+        return cloneRefinementPreview(
+          transaction.preview
         );
       }
       throw error;
@@ -4463,43 +4749,49 @@ export function previewSessionPatch(
   }
 }
 
-function previewSessionPatchWithRebuiltTransitionShell(
-  session: RefinementSession,
-  cellIds: readonly CellId[],
-  options: ResolvedRefinementSessionPatchOptions,
-  sourceActive: ActiveMeshBuildResult,
-  faceResolution: SessionFaceResolution
+function cloneRefinementPreview(
+  preview: RefinementPreview<CellId>
 ): RefinementPreview<CellId> {
-  const working = cloneRefinementSession(session);
-  const command = refineSessionPatchWithRebuiltTransitionShell(working, [...cellIds], {
-    ...options,
-    activeBuild: sourceActive
-  }, faceResolution);
-  const finalActive = buildActiveMeshWithMap(working, {
-    mergeNodes: true,
-    includeSessionNodeIdByNodeId: false,
-    includeSessionNodeIdsByNodeId: false,
-    ...(faceResolution.mergeTolerance !== undefined
-      ? { mergeTolerance: faceResolution.mergeTolerance }
-      : {})
-  });
-  const changedInputElementCount = command.hiddenCellIds.length;
-  const inputElementCount = sourceActive.mesh.elements.length;
+  if (preview.planMode === "aggregate") {
+    return {
+      kind: preview.kind,
+      planMode: "aggregate",
+      plan: [],
+      summary: { ...preview.summary },
+      compound: { ...preview.compound },
+      twoToOne:
+        cloneTwoToOneCapabilityReport(preview.twoToOne),
+      ...(preview.quality === undefined
+        ? {}
+        : { quality: { ...preview.quality } }),
+      ...(preview.regularization === undefined
+        ? {}
+        : {
+            regularization:
+              structuredClone(preview.regularization)
+          })
+    };
+  }
   return {
-    kind: session.kind,
-    planMode: "aggregate",
-    plan: [],
-    compound: {
-      kind: "transition-shell-rebuild"
-    },
-    summary: {
-      inputElementCount,
-      changedInputElementCount,
-      preservedInputElementCount: inputElementCount - changedInputElementCount,
-      outputElementCount: finalActive.mesh.elements.length
-    },
-    twoToOne: cloneTwoToOneCapabilityReport(command.twoToOne),
-    ...(command.quality ? { quality: command.quality } : {})
+    kind: preview.kind,
+    planMode: "per-parent",
+    plan: preview.plan.map((item) => ({ ...item })),
+    summary: { ...preview.summary },
+    ...(preview.quality === undefined
+      ? {}
+      : { quality: { ...preview.quality } }),
+    ...(preview.regularization === undefined
+      ? {}
+      : {
+          regularization:
+            structuredClone(preview.regularization)
+        }),
+    ...(preview.twoToOne === undefined
+      ? {}
+      : {
+          twoToOne:
+            cloneTwoToOneCapabilityReport(preview.twoToOne)
+        })
   };
 }
 
