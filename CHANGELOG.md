@@ -11,6 +11,9 @@ Private/custom performance edition.
 - Preserved far-field cell identity across Stage B history transactions.
 - Added stable history-conflict diagnostics and shell compensation-limit
   enforcement.
+- Joined multiple support-command roots inside one authorized transition
+  component, rejected unsupported recipe versions and inactive replay support,
+  and added a final full-mesh conformance gate after history replay.
 - Stopped reporting raw transition-disabled 1-to-8 refinement as a conforming
   2:1 result.
 - Added explicit direct/compensated/rejected H1 2:1 planning outcomes.

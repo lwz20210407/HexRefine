@@ -101,7 +101,9 @@ component and builds the minimum history closure needed to restore it. The
 closure may contain one or more replayable refinement commands, including
 commands that partially refined the support shell. Every downstream command
 must be wholly inside the affected component; a command that also changes the
-far field is rejected rather than split.
+far field is rejected rather than split. Connected support outputs may be owned
+by more than one refinement command; their provenance is joined only when the
+combined support remains inside the same authorized component.
 
 The operation runs on a cloned session. It reverses the closure in strict
 reverse history order, restores the support parents, rebuilds the shell, replays
@@ -118,7 +120,10 @@ complete result without replanning. The command quality summary audits the net
 transaction boundary (`before - after` parents against `after - before`
 children), so intermediate rebuilt cells are not counted twice. Non-positive
 oriented Jacobians or relative volume error above `1e-8` discard the clone
-instead of committing it.
+instead of committing it. After every downstream recipe and the new request
+have been replayed, the complete active mesh must also pass
+`checkNoHangingNodes`; a pre-existing raw nonconforming command is rejected
+rather than hidden inside a successful compound transaction.
 
 Compound preview is explicitly aggregate: it returns an empty per-parent
 `plan`, exact final and changed-input counts, and the same net quality summary
@@ -203,8 +208,9 @@ compensation values are cloned and frozen.
 After an earlier command is rebuilt, recipe selections and transition support
 are remapped in this priority: original-ID, exact-geometry, then
 tolerance-geometry. Kind, level, and role must also match. Zero matches,
-multiple matches, missing or unsupported recipes, invalid closures, and
-commands crossing the affected component reject the complete transaction with
+multiple matches, inactive transition-support IDs, missing or unsupported
+recipe versions, invalid closures, and commands crossing the affected
+component reject the complete transaction with
 `TWO_TO_ONE_HISTORY_CONFLICT`.
 
 Commands without a recipe remain valid for ordinary undo and redo but are not
