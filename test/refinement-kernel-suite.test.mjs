@@ -7744,6 +7744,36 @@ test("refinement command recipe snapshots immutable replay inputs across history
   assertFrozenRecipe(redone.recipe);
 });
 
+test("refinement recipes reject inactive transition support atomically", () => {
+  const session = createRefinementSession(
+    createHexUnitCubeMesh(1, 1, 1)
+  );
+  const first = refineSessionPatch(session, ["e1"], {
+    hexRefinementRatio: 2,
+    includeTransitions: false
+  });
+  const selectedCellId = first.createdCellIds[0];
+  assert.ok(selectedCellId);
+  assert.equal(session.activeLeafIds.has("e1"), false);
+  const before = structuredClone(session);
+  const options = {
+    hexRefinementRatio: 2,
+    includeTransitions: false,
+    transitionSupportCellIds: ["e1"]
+  };
+
+  for (const operation of [
+    () => previewSessionPatch(session, [selectedCellId], options),
+    () => refineSessionPatch(session, [selectedCellId], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.deepEqual(error.diagnostic.conflictingCellIds, ["e1"]);
+    assert.deepEqual(session, before);
+  }
+});
+
 test("selection compensation command recipe replays through the public session API", () => {
   const sourceSession = createRefinementSession(
     createHexUnitCubeMesh(2, 2, 5)
@@ -10337,6 +10367,63 @@ for (const limitCase of [
   });
 }
 
+test("Hex 2:1 shell collision discovery honors an explicit parent-count limit", () => {
+  const mesh = createHexUnitCubeMesh(7, 7, 7);
+  const session = createRefinementSession(mesh);
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const firstCore = idsInIndexBlock(
+    7,
+    7,
+    7,
+    [2, 2, 2],
+    [4, 4, 4]
+  ).map((elementId) =>
+    activeBuildCellIdByElementId(initial, elementId)
+  ).filter(Boolean);
+  refineSessionPatch(session, firstCore, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9,
+    activeBuild: initial
+  });
+  const targetZ = 2.75 / 7;
+  const selectedCellIds = [...session.activeLeafIds]
+    .filter((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (cell?.level !== 1 || cell.role !== "selected") {
+        return false;
+      }
+      const centerZ = cell.element.reduce(
+        (sum, nodeId) => sum + session.nodes[nodeId - 1][2] / 8,
+        0
+      );
+      return Math.abs(centerZ - targetZ) < 1e-12;
+    })
+    .sort();
+  assert.equal(selectedCellIds.length, 36);
+  const before = structuredClone(session);
+
+  const preview = previewSessionPatch(session, selectedCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9,
+    hexTwoToOneCompensation: {
+      mode: "local-topology",
+      maxAddedParentLayers: 1,
+      maxAddedParentCount: 36
+    }
+  });
+
+  assert.equal(preview.planMode, "aggregate");
+  assert.equal(preview.twoToOne.status, "compensated");
+  assert.deepEqual(session, before);
+});
+
 test("Hex 2:1 shell fallback snapshots compensation getters once per operation", () => {
   const diagnostics = [];
   for (const operation of ["preview", "refine"]) {
@@ -10482,13 +10569,20 @@ test("Hex 2:1 transition-shell rebuilding reports an untraceable support cell as
   }
 });
 
-test("Hex 2:1 transition-shell rebuilding reports mixed support commands as a history conflict", () => {
+test("Hex 2:1 transition-shell rebuilding joins connected support commands", () => {
   const {
     session,
     firstRefined
   } = createTransitionShellRegressionFixture();
-  const selectedCellIds = activeBoundaryCoreCellIds(session).slice(0, 2);
-  assert.equal(selectedCellIds.length, 2);
+  const boundaryCellIds = activeBoundaryCoreCellIds(session);
+  const options = transitionShellRegressionOptions(firstRefined);
+  const selectedCellIds = ["e115/2", "e164/2"];
+  assert.equal(
+    selectedCellIds.every((cellId) =>
+      boundaryCellIds.includes(cellId)
+    ),
+    true
+  );
   const supportCommand = session.undoStack.find((command) =>
     selectedCellIds.every((cellId) => command.createdCellIds.includes(cellId))
   );
@@ -10498,44 +10592,48 @@ test("Hex 2:1 transition-shell rebuilding reports mixed support commands as a hi
   replaceSessionCommand(session, supportCommand, {
     createdCellIds: supportCommand.createdCellIds.filter(
       (cellId) => cellId !== splitCellId
-    )
+    ),
+    activeCreatedCellIds:
+      supportCommand.activeCreatedCellIds?.filter(
+        (cellId) => cellId !== splitCellId
+      )
   });
   session.undoStack.push(Object.freeze({
     ...supportCommand,
     id: syntheticCommandId,
     hiddenCellIds: Object.freeze([]),
     createdCellIds: Object.freeze([splitCellId]),
+    activeCreatedCellIds: Object.freeze([splitCellId]),
     createdNodeIds: Object.freeze([])
   }));
   const before = structuredClone(session);
-  const options = transitionShellRegressionOptions(firstRefined);
 
-  for (const operation of [
-    () => previewSessionPatch(session, selectedCellIds, options),
-    () => refineSessionPatch(session, selectedCellIds, options)
-  ]) {
-    const error = captureError(operation);
-    assert.equal(
-      error instanceof TwoToOnePlanningError,
-      true,
-      `${error?.constructor?.name}: ${error?.message}`
-    );
-    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
-    assert.match(
-      error.message,
-      /requires cells from one supporting refinement command/
-    );
-    assert.deepEqual(
-      error.diagnostic.historyCommandIds,
-      [supportCommand.id, syntheticCommandId].sort()
-    );
-    assert.deepEqual(session, before);
-  }
+  const preview = previewSessionPatch(
+    session,
+    selectedCellIds,
+    options
+  );
+  assert.equal(preview.planMode, "aggregate");
+  assert.equal(preview.twoToOne.status, "compensated");
+  assert.deepEqual(session, before);
+
+  const command = refineSessionPatch(
+    session,
+    selectedCellIds,
+    options
+  );
+  const finalMesh = buildActiveMesh(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  assert.deepEqual(command.twoToOne, preview.twoToOne);
+  assert.equal(checkNoHangingNodes(finalMesh, 1e-9).ok, true);
 });
 
 test("Hex 2:1 modified support routes through the public history transaction", () => {
   const {
-    session
+    session,
+    firstRefined
   } = createTransitionShellRegressionFixture();
   const supportCommand = session.undoStack.at(-1);
   assert.equal(supportCommand?.id, "cmd-1");
@@ -10574,10 +10672,22 @@ test("Hex 2:1 modified support routes through the public history transaction", (
 
   const modifyingCommand = refineSessionPatch(session, [centerCellId], {
     hexRefinementRatio: 2,
-    includeTransitions: false
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined
   });
   assert.equal(modifyingCommand.id, "cmd-2");
   assert.equal(modifyingCommand.hiddenCellIds.includes(centerCellId), true);
+  assert.equal(
+    checkNoHangingNodes(
+      buildActiveMesh(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      1e-9
+    ).ok,
+    true
+  );
   const before = structuredClone(session);
 
   const preview = previewSessionPatch(
@@ -10599,6 +10709,33 @@ test("Hex 2:1 modified support routes through the public history transaction", (
     8
   );
   assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 history transactions reject a nonconforming final replay atomically", () => {
+  const {
+    session,
+    boundaryCellId
+  } = createConsumedSupportHistoryFixture({
+    rawNonconformingDownstream: true
+  });
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions();
+
+  for (const operation of [
+    () => previewSessionPatch(session, [boundaryCellId], options),
+    () => refineSessionPatch(session, [boundaryCellId], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(
+      error instanceof TwoToOnePlanningError,
+      true,
+      `${error?.constructor?.name}: ${error?.message}`
+    );
+    assert.equal(error.code, "TWO_TO_ONE_CONFORMANCE");
+    assertFrozenPlanningDiagnostic(error);
+    assert.deepEqual(error.diagnostic.conflictingCellIds, [boundaryCellId]);
+    assert.deepEqual(session, before);
+  }
 });
 
 test("Hex 2:1 history transaction planner replays a consumed support component atomically", () => {
@@ -10660,12 +10797,29 @@ test("Hex 2:1 history transaction planner replays a consumed support component a
   assert.ok(centerCellId);
   assert.notEqual(boundaryCellId, centerCellId);
 
+  const firstRefined = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
   const replayedCommand = refineSessionPatch(session, [centerCellId], {
     hexRefinementRatio: 2,
-    includeTransitions: false
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: firstRefined,
+    mergeTolerance: 1e-9
   });
   assert.equal(replayedCommand.id, "cmd-2");
   assert.equal(session.cells.get(centerCellId)?.active, false);
+  assert.equal(
+    checkNoHangingNodes(
+      buildActiveMesh(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      1e-9
+    ).ok,
+    true
+  );
 
   const farFieldCellIds = [...new Set([
     ...idsInIndexBlock(7, 7, 7, [6, 0, 0], [6, 6, 6]),
@@ -10950,7 +11104,7 @@ test("Hex 2:1 history transactions replay none selection and local compensation 
         .rebuildExistingTransitions,
       mode !== "none"
     );
-    assert.equal(replayedCommand.twoToOne, undefined);
+    assert.equal(replayedCommand.twoToOne?.status, "direct");
 
     const transaction =
       planRefinementSessionHistoryTransaction(
@@ -11118,25 +11272,76 @@ test("history replay eligibility accepts ordinary and selection-compensated comm
 });
 
 test("Hex 2:1 history transaction planner replays three ordinary downstream commands", () => {
-  const {
+  const dimension = 9;
+  const session = createRefinementSession(
+    createHexUnitCubeMesh(
+      dimension,
+      dimension,
+      dimension
+    )
+  );
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const firstCoreCellIds = idsInIndexBlock(
+    dimension,
+    dimension,
+    dimension,
+    [2, 2, 2],
+    [6, 6, 6]
+  ).map((elementId) =>
+    activeBuildCellIdByElementId(initial, elementId)
+  ).filter(Boolean);
+  refineSessionPatch(session, firstCoreCellIds, {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    activeBuild: initial,
+    mergeTolerance: 1e-9
+  });
+  const boundaryCellId = firstActiveBoundaryCoreCell(session);
+  assert.ok(boundaryCellId);
+  const replayedCommand = refineSessionPatch(
     session,
-    boundaryCellId,
-    replayedCommand
-  } = createConsumedSupportHistoryFixture();
-  const secondDownstream = refineSessionPatch(
-    session,
-    [firstActiveSelectedCreatedCell(session, replayedCommand)],
+    centralActiveSelectedCellBlock(session, 1, 4),
     {
       hexRefinementRatio: 2,
-      includeTransitions: false
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      mergeTolerance: 1e-9
+    }
+  );
+  const secondDownstream = refineSessionPatch(
+    session,
+    centralActiveSelectedCellBlock(session, 2, 4),
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      mergeTolerance: 1e-9
     }
   );
   const thirdDownstream = refineSessionPatch(
     session,
-    [firstActiveSelectedCreatedCell(session, secondDownstream)],
+    centralActiveSelectedCellBlock(session, 3, 3),
     {
       hexRefinementRatio: 2,
-      includeTransitions: false
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      mergeTolerance: 1e-9
     }
   );
   const {
@@ -11280,6 +11485,68 @@ test("Hex 2:1 history transaction planner maps a real generic command without a 
   );
   assert.deepEqual(error.diagnostic.conflictingCellIds, []);
   assert.deepEqual(session, before);
+});
+
+test("Hex 2:1 history transactions reject unsupported recipe versions atomically", () => {
+  const {
+    session,
+    boundaryCellId,
+    replayedCommand
+  } = createConsumedSupportHistoryFixture();
+  assert.ok(replayedCommand.recipe);
+  replaceSessionCommand(session, replayedCommand, {
+    recipe: Object.freeze({
+      ...replayedCommand.recipe,
+      version: 2
+    })
+  });
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions();
+
+  for (const operation of [
+    () => previewSessionPatch(session, [boundaryCellId], options),
+    () => refineSessionPatch(session, [boundaryCellId], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [replayedCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
+});
+
+test("Hex 2:1 untouched support rejects unsupported recipe versions atomically", () => {
+  const {
+    session,
+    candidate: boundaryCellId
+  } = createTransitionShellRegressionFixture();
+  const supportCommand = session.undoStack.at(-1);
+  assert.ok(supportCommand?.recipe);
+  replaceSessionCommand(session, supportCommand, {
+    recipe: Object.freeze({
+      ...supportCommand.recipe,
+      version: 2
+    })
+  });
+  const before = structuredClone(session);
+  const options = transitionShellRegressionOptions();
+
+  for (const operation of [
+    () => previewSessionPatch(session, [boundaryCellId], options),
+    () => refineSessionPatch(session, [boundaryCellId], options)
+  ]) {
+    const error = captureError(operation);
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(error.code, "TWO_TO_ONE_HISTORY_CONFLICT");
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
 });
 
 test("history recipe remapping converts real zero and duplicate geometry matches to history conflicts", async () => {
@@ -11429,19 +11696,84 @@ test("Hex 2:1 history transaction rejects ambiguous active replay geometry atomi
 });
 
 test("Hex 2:1 history transaction planner preserves an independent later command", () => {
-  const {
+  const dimension = 7;
+  const component = createHexUnitCubeMesh(
+    dimension,
+    dimension,
+    dimension
+  );
+  const nodeOffset = component.nodes.length;
+  const elementOffset = component.elements.length;
+  const session = createRefinementSession({
+    kind: "H1",
+    nodes: [
+      ...component.nodes.map((point) => [...point]),
+      ...component.nodes.map(([x, y, z]) => [
+        x + 2,
+        y,
+        z
+      ])
+    ],
+    elements: [
+      ...component.elements.map((element) => [...element]),
+      ...component.elements.map((element) =>
+        element.map((nodeId) => nodeId + nodeOffset)
+      )
+    ]
+  });
+  const initial = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const supportCommand = refineSessionPatch(
     session,
-    boundaryCellId,
-    supportCommand,
-    replayedCommand
-  } = createConsumedSupportHistoryFixture();
-  const independentCommand = refineSessionPatch(
-    session,
-    ["e343"],
+    idsInIndexBlock(
+      dimension,
+      dimension,
+      dimension,
+      [2, 2, 2],
+      [4, 4, 4]
+    ).map((elementId) =>
+      activeBuildCellIdByElementId(initial, elementId)
+    ).filter(Boolean),
     {
-      includeTransitions: false,
-      hexRefinementRatio: 2
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: initial,
+      mergeTolerance: 1e-9
     }
+  );
+  const boundaryCellId = firstActiveBoundaryCoreCell(session);
+  assert.ok(boundaryCellId);
+  const nestedCellId = nearestActiveSelectedCreatedCell(
+    session,
+    supportCommand,
+    [0.5, 0.5, 0.5]
+  );
+  const replayedCommand = refineSessionPatch(
+    session,
+    [nestedCellId],
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local",
+      includeTransitions: true,
+      activeBuild: buildActiveMeshWithMap(session, {
+        mergeNodes: true,
+        mergeTolerance: 1e-9
+      }),
+      mergeTolerance: 1e-9
+    }
+  );
+  const independentCommand = refineSessionCells(
+    session,
+    component.elements.map((_, index) =>
+      activeBuildCellIdByElementId(
+        initial,
+        index + 1 + elementOffset
+      )
+    ).filter(Boolean),
+    refineHexTo8Hex
   );
   const independentActiveCellIds =
     independentCommand.createdCellIds.filter(
@@ -13501,10 +13833,12 @@ function createTransitionShellRegressionFixture() {
 
 function createConsumedSupportHistoryFixture({
   downstreamCompensationMode,
-  genericDownstream = false
+  genericDownstream = false,
+  rawNonconformingDownstream = false
 } = {}) {
   const {
     session,
+    firstRefined,
     candidate: boundaryCellId
   } = createTransitionShellRegressionFixture();
   const supportCommand = session.undoStack.at(-1);
@@ -13550,19 +13884,25 @@ function createConsumedSupportHistoryFixture({
     : refineSessionPatch(
         session,
         [centerCellId],
-        downstreamCompensationMode === undefined
+        rawNonconformingDownstream
           ? {
               hexRefinementRatio: 2,
               includeTransitions: false
             }
           : {
               hexRefinementRatio: 2,
-              includeTransitions: false,
-              rebuildExistingTransitions:
-                downstreamCompensationMode !== "none",
-              hexTwoToOneCompensation: {
-                mode: downstreamCompensationMode
-              },
+              hexTwoToOneSelectionMode: "local",
+              includeTransitions: true,
+              activeBuild: firstRefined,
+              ...(downstreamCompensationMode === undefined
+                ? {}
+                : {
+                    rebuildExistingTransitions:
+                      downstreamCompensationMode !== "none",
+                    hexTwoToOneCompensation: {
+                      mode: downstreamCompensationMode
+                    }
+                  }),
               mergeTolerance: 1e-9
             }
       );
@@ -13793,6 +14133,57 @@ function firstActiveSelectedCreatedCell(session, command) {
   });
   assert.ok(cellId);
   return cellId;
+}
+
+function centralActiveSelectedCellBlock(
+  session,
+  level,
+  axisCellCount
+) {
+  const cells = [...session.activeLeafIds]
+    .map((cellId) => {
+      const cell = session.cells.get(cellId);
+      if (
+        cell?.level !== level
+        || cell.role !== "selected"
+      ) {
+        return undefined;
+      }
+      const center = cell.element.reduce(
+        (sum, nodeId) => {
+          const point = session.nodes[nodeId - 1];
+          return sum.map(
+            (coordinate, axis) =>
+              coordinate + point[axis] / cell.element.length
+          );
+        },
+        [0, 0, 0]
+      );
+      return { cellId, center };
+    })
+    .filter(Boolean);
+  const selectedAxisCoordinates = [0, 1, 2].map(
+    (axis) =>
+      [...new Set(cells.map(({ center }) => center[axis]))]
+        .sort((first, second) =>
+          Math.abs(first - 0.5) - Math.abs(second - 0.5)
+        )
+        .slice(0, axisCellCount)
+  );
+  const selectedCellIds = cells
+    .filter(({ center }) =>
+      selectedAxisCoordinates.every(
+        (coordinates, axis) =>
+          coordinates.some(
+            (coordinate) =>
+              Math.abs(coordinate - center[axis]) < 1e-12
+          )
+      )
+    )
+    .map(({ cellId }) => cellId)
+    .sort();
+  assert.ok(selectedCellIds.length > 0);
+  return selectedCellIds;
 }
 
 function commandInputAncestorsForCells(session, command, cellIds) {

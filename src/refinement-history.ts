@@ -32,9 +32,26 @@ export interface RefinementSessionCommandRecipeV1 {
   readonly options: RefinementSessionReplayOptionsV1;
 }
 
+export class UnsupportedRefinementSessionCommandRecipeVersionError
+  extends Error {
+  constructor(version: unknown) {
+    super(
+      `unsupported refinement session command recipe version ${String(version)}`
+    );
+    this.name =
+      "UnsupportedRefinementSessionCommandRecipeVersionError";
+  }
+}
+
 export function cloneRefinementSessionCommandRecipe(
   recipe: RefinementSessionCommandRecipeV1
 ): RefinementSessionCommandRecipeV1 {
+  const version: unknown = recipe.version;
+  if (version !== 1) {
+    throw new UnsupportedRefinementSessionCommandRecipeVersionError(
+      version
+    );
+  }
   return {
     version: 1,
     selectedCellIds: [...recipe.selectedCellIds],
@@ -552,6 +569,26 @@ function snapshotHistoryCommand(
     createdNodeIds,
     `command ${id} createdNodeIds`
   );
+  let recipeSnapshot: RefinementSessionCommandRecipeV1 | undefined;
+  if (recipe !== undefined) {
+    try {
+      recipeSnapshot = freezeRefinementSessionCommandRecipe(
+        recipe as RefinementSessionCommandRecipeV1
+      );
+    } catch (error) {
+      if (
+        error instanceof
+          UnsupportedRefinementSessionCommandRecipeVersionError
+      ) {
+        throw new RefinementHistoryClosureError(
+          error.message,
+          [id],
+          []
+        );
+      }
+      throw error;
+    }
+  }
 
   return Object.freeze({
     id,
@@ -591,12 +628,10 @@ function snapshotHistoryCommand(
             RefinementSessionCommand["twoToOne"]
           >
         }),
-    ...(recipe === undefined
+    ...(recipeSnapshot === undefined
       ? {}
       : {
-          recipe: freezeRefinementSessionCommandRecipe(
-            recipe as RefinementSessionCommandRecipeV1
-          )
+          recipe: recipeSnapshot
         })
   });
 }

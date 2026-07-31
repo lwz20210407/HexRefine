@@ -2009,7 +2009,18 @@ function refineSessionPatchWithRebuiltTransitionShell(
           mergeTolerance: faceResolution.mergeTolerance
         };
   const selectedLevel = validation.level;
-  const supportCommand = findSingleSupportCommand(working, validation.cellIds);
+  const supportCommands = findSupportCommands(
+    working,
+    validation.cellIds
+  );
+  if (supportCommands.length !== 1) {
+    throw historyConflict(
+      "untouched transition-shell rebuilding requires one supporting root command",
+      validation.cellIds,
+      supportCommands.map((command) => command.id)
+    );
+  }
+  const supportCommand = supportCommands[0]!;
   const allSupportLayerCellIds = supportCommand.createdCellIds.filter((cellId) => {
     const cell = working.cells.get(cellId);
     return cell?.level === selectedLevel && cell.parentId !== undefined;
@@ -2113,7 +2124,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
   const authorizedCompletionParentIds = collectAuthorizedCompletionParentIds(
     working,
     originalSupportParentIds,
-    supportCommand,
+    [supportCommand],
     selectedLevel - 1,
     faceTolerance
   );
@@ -2135,7 +2146,7 @@ function refineSessionPatchWithRebuiltTransitionShell(
     working,
     rebuiltSupportPlan.hiddenCellIds,
     originalSupportParentIds,
-    supportCommand,
+    [supportCommand],
     faceTolerance
   );
   const rebuiltSupportCommand = refineSessionPatchInternal(
@@ -2269,7 +2280,10 @@ export function planRefinementSessionHistoryTransaction(
       validation.level,
       faceResolution.tolerance
     );
+  const historyIndex = buildSessionHistoryIndex(session);
   if (
+    supportDiscovery.supportCommands.length === 1
+    &&
     supportDiscovery.component.supportCellIds.every((cellId) => {
       const cell = requiredCell(session, cellId);
       return cell.active
@@ -2282,13 +2296,10 @@ export function planRefinementSessionHistoryTransaction(
       validation.cellIds,
       resolvedOptions,
       faceResolution,
-      supportDiscovery
+      supportDiscovery,
+      historyIndex
     );
   }
-  const historyIndex = buildRefinementHistoryIndex(
-    session.undoStack,
-    [...session.cells.keys()]
-  );
   const preliminaryHistoryClosure =
     buildSessionHistoryClosure(
       historyIndex,
@@ -2317,7 +2328,9 @@ export function planRefinementSessionHistoryTransaction(
       `automatic transition-shell rebuilding requires an untouched supporting layer with traceable history: ${untraceableSupportCellIds.join(", ")}`,
       untraceableSupportCellIds,
       [
-        supportDiscovery.supportCommand.id,
+        ...supportDiscovery.supportCommands.map(
+          (command) => command.id
+        ),
         ...preliminaryHistoryClosure.downstreamCommandIds
       ]
     );
@@ -2326,16 +2339,42 @@ export function planRefinementSessionHistoryTransaction(
     historyIndex,
     preliminaryHistoryClosure
   );
-  assertSingleHistorySupportCommand(
+  assertHistorySupportCommands(
     preliminaryHistoryClosure,
     supportDiscovery
   );
+  const preliminaryCollisionWorking =
+    cloneRefinementSession(session);
+  const preliminaryDownstreamCommands =
+    preliminaryHistoryClosure.downstreamCommandIds.map(
+      (commandId) => {
+        const command = historyIndex.commandById.get(commandId);
+        if (command === undefined) {
+          throw new Error(
+            `history closure references unknown command ${commandId}`
+          );
+        }
+        return command;
+      }
+    );
+  reverseRefinementHistoryCommands(
+    preliminaryCollisionWorking,
+    preliminaryDownstreamCommands,
+    historyIndex.commandOrdinalById
+  );
+  const preliminaryCollidingTransitionParentIds =
+    findCollidingTransitionParentIds(
+      preliminaryCollisionWorking,
+      validation.cellIds,
+      supportDiscovery.component.supportCellIds,
+      validation.level,
+      resolvedOptions,
+      faceResolution.tolerance
+    );
   const discovered = completeTransitionHistoryComponent(
-    session,
+    preliminaryCollisionWorking,
     supportDiscovery,
-    validation.level,
-    resolvedOptions,
-    faceResolution.tolerance
+    preliminaryCollidingTransitionParentIds
   );
   const historyClosure = buildSessionHistoryClosure(
     historyIndex,
@@ -2349,7 +2388,7 @@ export function planRefinementSessionHistoryTransaction(
     historyIndex,
     historyClosure
   );
-  assertSingleHistorySupportCommand(
+  assertHistorySupportCommands(
     historyClosure,
     discovered
   );
@@ -2408,7 +2447,10 @@ export function planRefinementSessionHistoryTransaction(
     historyIndex.commandOrdinalById
   );
 
-  const supportCommand = discovered.supportCommand;
+  const supportCommands = discovered.supportCommands;
+  const supportCommandIds = supportCommands.map(
+    (command) => command.id
+  );
   const originalSupportParentIds = stableCellIds(
     discovered.component.supportCellIds.map((cellId) => {
       const parentId = requiredCell(working, cellId).parentId;
@@ -2478,14 +2520,14 @@ export function planRefinementSessionHistoryTransaction(
     working,
     rebuiltCoreParentIds,
     authorizedCompletionParentIds,
-    [supportCommand.id],
+    supportCommandIds,
     retryOptions
   );
   validateRebuiltSupportPlanOwnership(
     working,
     rebuiltSupportPlan.hiddenCellIds,
     originalSupportParentIds,
-    supportCommand,
+    supportCommands,
     faceResolution.tolerance
   );
   refineSessionPatchInternal(
@@ -2598,8 +2640,6 @@ export function planRefinementSessionHistoryTransaction(
       TRANSACTION_REFINEMENT_SESSION_PATCH
     );
     assertHistoryReplayCommandEquivalent(
-      session,
-      working,
       historicalCommand,
       replayedCommand,
       selectedCellIds,
@@ -2749,6 +2789,29 @@ export function planRefinementSessionHistoryTransaction(
       ? {}
       : { mergeTolerance: faceResolution.mergeTolerance })
   });
+  const conformance = checkNoHangingNodes(
+    finalActive.mesh,
+    faceResolution.tolerance
+  );
+  if (!conformance.ok) {
+    throw freezeTwoToOnePlanningErrorDiagnostic(
+      new TwoToOnePlanningError<CellId>(
+        "TWO_TO_ONE_CONFORMANCE",
+        `history transaction final mesh is nonconforming: ${
+          conformance.hanging[0]?.message
+          ?? `${conformance.unmatchedInteriorBoundaryCount} unmatched interior boundaries`
+        }`,
+        {
+          conflictingCellIds: stableCellIds(validation.cellIds),
+          conflictingInterfaces: [],
+          attemptedActions: [attemptedAction],
+          suggestion: {
+            kind: "expand-selection"
+          }
+        }
+      )
+    );
+  }
   const inputElementCount =
     resolvedOptions.activeBuild.mesh.elements.length;
   const preview: RefinementPreview<CellId> = {
@@ -2800,8 +2863,18 @@ function planUntouchedTransitionShellHistoryTransaction(
   cellIds: readonly CellId[],
   resolvedOptions: ResolvedRefinementSessionPatchOptions,
   faceResolution: SessionFaceResolution,
-  discovered: DiscoveredTransitionHistoryComponent
+  discovered: DiscoveredTransitionHistoryComponent,
+  historyIndex: RefinementHistoryIndex
 ): RefinementSessionHistoryTransactionPlan {
+  const supportCommand = discovered.supportCommands[0];
+  if (
+    supportCommand === undefined
+    || discovered.supportCommands.length !== 1
+  ) {
+    throw new Error(
+      "untouched transition-shell planning requires one supporting root command"
+    );
+  }
   const working = cloneRefinementSession(session);
   const command = refineSessionPatchWithRebuiltTransitionShell(
     working,
@@ -2819,18 +2892,14 @@ function planUntouchedTransitionShellHistoryTransaction(
   });
   const inputElementCount =
     resolvedOptions.activeBuild.mesh.elements.length;
-  const historyIndex = buildRefinementHistoryIndex(
-    session.undoStack,
-    [...session.cells.keys()]
-  );
   const affectedInputCellIds =
     traceLocalSupportCommandInputCellIds(
       session,
-      discovered.supportCommand,
+      supportCommand,
       discovered.component.supportCellIds
     );
   const includedCommandIds = new Set([
-    discovered.supportCommand.id
+    supportCommand.id
   ]);
   const boundaryCellIds = affectedInputCellIds.filter((cellId) => {
     const creatorCommandId =
@@ -2840,14 +2909,14 @@ function planUntouchedTransitionShellHistoryTransaction(
   });
   const historyClosure: RefinementHistoryClosure = Object.freeze({
     supportCommandIds: Object.freeze([
-      discovered.supportCommand.id
+      supportCommand.id
     ]),
     downstreamCommandIds: Object.freeze([]),
     affectedInputCellIds: Object.freeze(affectedInputCellIds),
     preservedCommandIds: Object.freeze(
       session.undoStack
         .filter((entry) =>
-          entry.id !== discovered.supportCommand.id
+          entry.id !== supportCommand.id
         )
         .map((entry) => entry.id)
     ),
@@ -2940,7 +3009,7 @@ interface TransitionHistoryComponent {
 
 interface DiscoveredTransitionHistoryComponent {
   readonly component: TransitionHistoryComponent;
-  readonly supportCommand: RefinementSessionCommand;
+  readonly supportCommands: readonly RefinementSessionCommand[];
 }
 
 function discoverTransitionHistorySupportComponent(
@@ -2949,17 +3018,19 @@ function discoverTransitionHistorySupportComponent(
   selectedLevel: number,
   tolerance: number
 ): DiscoveredTransitionHistoryComponent {
-  const supportCommand = findSingleSupportCommand(
+  const supportCommands = findSupportCommands(
     session,
     selectedCellIds
   );
-  const supportOutputCellIds = stableCellIds([
-    ...(
-      supportCommand.activeCreatedCellIds
-      ?? supportCommand.createdCellIds
-    ),
-    ...(supportCommand.reactivatedCellIds ?? [])
-  ]);
+  const supportOutputCellIds = stableCellIds(
+    supportCommands.flatMap((supportCommand) => [
+      ...(
+        supportCommand.activeCreatedCellIds
+        ?? supportCommand.createdCellIds
+      ),
+      ...(supportCommand.reactivatedCellIds ?? [])
+    ])
+  );
   const allSupportCellIds = supportOutputCellIds.filter(
     (cellId) => {
       const cell = session.cells.get(cellId);
@@ -2991,7 +3062,7 @@ function discoverTransitionHistorySupportComponent(
     collectAuthorizedCompletionParentIds(
       session,
       supportParentIds,
-      supportCommand,
+      supportCommands,
       selectedLevel - 1,
       tolerance
     );
@@ -3015,7 +3086,7 @@ function discoverTransitionHistorySupportComponent(
     );
   }
   return {
-    supportCommand,
+    supportCommands: Object.freeze([...supportCommands]),
     component: {
       selectedCellIds: Object.freeze(
         stableCellIds(selectedCellIds)
@@ -3031,19 +3102,8 @@ function discoverTransitionHistorySupportComponent(
 function completeTransitionHistoryComponent(
   session: RefinementSession,
   discovered: DiscoveredTransitionHistoryComponent,
-  selectedLevel: number,
-  options: RefinementSessionPatchOptions,
-  tolerance: number
+  collidingTransitionParentIds: readonly CellId[]
 ): DiscoveredTransitionHistoryComponent {
-  const collidingTransitionParentIds =
-    findCollidingTransitionParentIds(
-      session,
-      discovered.component.selectedCellIds,
-      discovered.component.supportCellIds,
-      selectedLevel,
-      options,
-      tolerance
-    );
   if (collidingTransitionParentIds.length === 0) {
     throw new Error(
       "history transaction could not isolate colliding transition parents"
@@ -3060,7 +3120,7 @@ function completeTransitionHistoryComponent(
     );
   }
   return {
-    supportCommand: discovered.supportCommand,
+    supportCommands: discovered.supportCommands,
     component: {
       ...discovered.component,
       collidingTransitionParentIds: Object.freeze([
@@ -3106,6 +3166,26 @@ function cellHasDownstreamHistoryTrace(
     }
   }
   return false;
+}
+
+function buildSessionHistoryIndex(
+  session: RefinementSession
+): RefinementHistoryIndex {
+  try {
+    return buildRefinementHistoryIndex(
+      session.undoStack,
+      [...session.cells.keys()]
+    );
+  } catch (error) {
+    if (error instanceof RefinementHistoryClosureError) {
+      throw historyConflict(
+        error.message,
+        error.cellIds,
+        error.commandIds
+      );
+    }
+    throw error;
+  }
 }
 
 function buildSessionHistoryClosure(
@@ -3162,22 +3242,24 @@ function buildSessionHistoryClosure(
   }
 }
 
-function assertSingleHistorySupportCommand(
+function assertHistorySupportCommands(
   historyClosure: RefinementHistoryClosure,
   discovered: DiscoveredTransitionHistoryComponent
 ): void {
-  if (
-    historyClosure.supportCommandIds.length === 1
-    && historyClosure.supportCommandIds[0]
-      === discovered.supportCommand.id
-  ) {
+  const discoveredCommandIds = discovered.supportCommands.map(
+    (command) => command.id
+  );
+  if (sameSortedStrings(
+    historyClosure.supportCommandIds,
+    discoveredCommandIds
+  )) {
     return;
   }
   throw historyConflict(
-    "history transaction requires one supporting root command",
+    "history transaction support roots changed during closure planning",
     discovered.component.supportCellIds,
     [
-      discovered.supportCommand.id,
+      ...discoveredCommandIds,
       ...historyClosure.supportCommandIds
     ]
   );
@@ -3545,8 +3627,6 @@ function replaySessionPatchOptions(
 }
 
 function assertHistoryReplayCommandEquivalent(
-  historicalSession: RefinementSession,
-  replaySession: RefinementSession,
   historicalCommand: RefinementSessionCommand,
   replayedCommand: RefinementSessionCommand,
   remappedSelectedCellIds: readonly CellId[],
@@ -3579,43 +3659,9 @@ function assertHistoryReplayCommandEquivalent(
       historicalRecipe.transitionSupportCellGeometry,
       replayedRecipe.transitionSupportCellGeometry
     );
-  const deltaIsEquivalent =
-    sameCommandCellStructures(
-      historicalSession,
-      historicalCommand.hiddenCellIds,
-      replaySession,
-      replayedCommand.hiddenCellIds
-    )
-    && sameCommandCellStructures(
-      historicalSession,
-      historicalCommand.createdCellIds,
-      replaySession,
-      replayedCommand.createdCellIds
-    )
-    && sameCommandCellStructures(
-      historicalSession,
-      historicalCommand.activeCreatedCellIds
-        ?? historicalCommand.createdCellIds,
-      replaySession,
-      replayedCommand.activeCreatedCellIds
-        ?? replayedCommand.createdCellIds
-    )
-    && sameCommandCellStructures(
-      historicalSession,
-      historicalCommand.reactivatedCellIds ?? [],
-      replaySession,
-      replayedCommand.reactivatedCellIds ?? []
-    );
   if (
     replayedCommand.kind !== historicalCommand.kind
     || !recipeIsEquivalent
-    || !deltaIsEquivalent
-    || !sameHistoryCapabilityReportStructure(
-      historicalSession,
-      historicalCommand.twoToOne,
-      replaySession,
-      replayedCommand.twoToOne
-    )
   ) {
     throw historyConflict(
       `history command ${historyCommandId} replay changed its refinement output`,
@@ -3667,111 +3713,6 @@ function refinementGeometrySnapshotStructure(
     level: geometry.level,
     role: geometry.role,
     points
-  });
-}
-
-function sameCommandCellStructures(
-  firstSession: RefinementSession,
-  firstCellIds: readonly CellId[],
-  secondSession: RefinementSession,
-  secondCellIds: readonly CellId[]
-): boolean {
-  return sameSortedStrings(
-    firstCellIds.map((cellId) =>
-      refinementCellReplayStructure(firstSession, cellId)
-    ),
-    secondCellIds.map((cellId) =>
-      refinementCellReplayStructure(secondSession, cellId)
-    )
-  );
-}
-
-function refinementCellReplayStructure(
-  session: RefinementSession,
-  cellId: CellId
-): string {
-  const cell = requiredCell(session, cellId);
-  const parent = cell.parentId === undefined
-    ? undefined
-    : requiredCell(session, cell.parentId);
-  return JSON.stringify({
-    kind: cell.kind,
-    level: cell.level,
-    role: cell.role,
-    template: cell.template ?? null,
-    geometry: refinementCellGeometryKey(session, cell),
-    parent: parent === undefined
-      ? null
-      : {
-          kind: parent.kind,
-          level: parent.level,
-          role: parent.role,
-          geometry: refinementCellGeometryKey(
-            session,
-            parent
-          )
-        }
-  });
-}
-
-function sameHistoryCapabilityReportStructure(
-  firstSession: RefinementSession,
-  first:
-    ReadonlyTwoToOneCapabilityReport<CellId> | undefined,
-  secondSession: RefinementSession,
-  second:
-    ReadonlyTwoToOneCapabilityReport<CellId> | undefined
-): boolean {
-  if (first === undefined || second === undefined) {
-    return first === second;
-  }
-  if (
-    first.status !== second.status
-    || first.topologyClass !== second.topologyClass
-    || first.actions.length !== second.actions.length
-  ) {
-    return false;
-  }
-  if (
-    !sameCommandCellStructures(
-      firstSession,
-      first.originalSelectedCellIds,
-      secondSession,
-      second.originalSelectedCellIds
-    )
-    || !sameCommandCellStructures(
-      firstSession,
-      first.effectiveSelectedCellIds,
-      secondSession,
-      second.effectiveSelectedCellIds
-    )
-    || !sameCommandCellStructures(
-      firstSession,
-      first.affectedComponentCellIds,
-      secondSession,
-      second.affectedComponentCellIds
-    )
-  ) {
-    return false;
-  }
-  return first.actions.every((firstAction, index) => {
-    const secondAction = second.actions[index];
-    return secondAction !== undefined
-      && firstAction.kind === secondAction.kind
-      && firstAction.reason === secondAction.reason
-      && firstAction.templateId === secondAction.templateId
-      && sameCommandCellStructures(
-        firstSession,
-        firstAction.addedParentCellIds,
-        secondSession,
-        secondAction.addedParentCellIds
-      )
-      && sameCommandCellStructures(
-        firstSession,
-        firstAction.replacedTransitionCellIds,
-        secondSession,
-        secondAction.replacedTransitionCellIds
-      );
   });
 }
 
@@ -3892,12 +3833,16 @@ function completeLogicalSupportParentBlock(
 function collectAuthorizedCompletionParentIds(
   session: RefinementSession,
   originalSupportParentIds: readonly CellId[],
-  supportCommand: RefinementSessionCommand,
+  supportCommands: readonly RefinementSessionCommand[],
   parentLevel: number,
   tolerance: number
 ): Set<CellId> {
   const authorized = new Set(originalSupportParentIds);
-  const supportCreatedCellIds = new Set(supportCommand.createdCellIds);
+  const supportCreatedCellIds = new Set(
+    supportCommands.flatMap((command) =>
+      command.createdCellIds
+    )
+  );
   const boundaryFaces = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(originalSupportParentIds)) {
     for (const face of refinementCellFaces(session, requiredCell(session, cellId))) {
@@ -3936,11 +3881,18 @@ function validateRebuiltSupportPlanOwnership(
   session: RefinementSession,
   replacementParentIds: readonly CellId[],
   originalSupportParentIds: readonly CellId[],
-  supportCommand: RefinementSessionCommand,
+  supportCommands: readonly RefinementSessionCommand[],
   tolerance: number
 ): void {
   const originalSupport = new Set(originalSupportParentIds);
-  const supportCreated = new Set(supportCommand.createdCellIds);
+  const supportCreated = new Set(
+    supportCommands.flatMap((command) =>
+      command.createdCellIds
+    )
+  );
+  const supportCommandIds = supportCommands.map(
+    (command) => command.id
+  );
   const replacementInterfaces = createSessionFaceIndex(tolerance);
   for (const cellId of stableCellIds(replacementParentIds)) {
     const cell = requiredCell(session, cellId);
@@ -3958,7 +3910,7 @@ function validateRebuiltSupportPlanOwnership(
     throw historyConflict(
       `automatic transition-shell rebuilding would cross refinement-command provenance at ${cellId}`,
       [cellId],
-      [supportCommand.id]
+      supportCommandIds
     );
   }
 }
@@ -3985,6 +3937,12 @@ function findCollidingTransitionParentIds(
     {
       includeTransitions: options.includeTransitions ?? true,
       hexRefinementRatio: 2,
+      ...(options.hexTwoToOneCompensation === undefined
+        ? {}
+        : {
+            hexTwoToOneCompensation:
+              options.hexTwoToOneCompensation
+          }),
       transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
         .map((cellId) => activeBuildElementIdByCellId(session, planningActive, cellId))
         .filter((elementId): elementId is number => elementId !== undefined),
@@ -4486,10 +4444,10 @@ function refinementCellFaces(
   });
 }
 
-function findSingleSupportCommand(
+function findSupportCommands(
   session: RefinementSession,
   cellIds: readonly CellId[]
-): RefinementSessionCommand {
+): RefinementSessionCommand[] {
   const commands = new Set<RefinementSessionCommand>();
   for (const cellId of cellIds) {
     const command = [...session.undoStack]
@@ -4503,14 +4461,9 @@ function findSingleSupportCommand(
     }
     commands.add(command);
   }
-  if (commands.size !== 1) {
-    throw historyConflict(
-      "automatic transition-shell rebuilding requires cells from one supporting refinement command",
-      cellIds,
-      [...commands].map((command) => command.id)
-    );
-  }
-  return [...commands][0]!;
+  return session.undoStack.filter((command) =>
+    commands.has(command)
+  );
 }
 
 function historyCommandIdsForHiddenCells(
@@ -4827,6 +4780,24 @@ function buildRefinementSessionPatchPlan(
   if (selectedElementIds.length !== validation.cellIds.length) {
     throw new Error("refinement selection contains cells outside the active mesh");
   }
+  const transitionSupportCellIds = stableCellIds(
+    options.transitionSupportCellIds ?? []
+  );
+  const transitionSupportElementIds =
+    transitionSupportCellIds.map((cellId) =>
+      activeBuildElementIdByCellId(session, active, cellId)
+    );
+  const inactiveTransitionSupportCellIds =
+    transitionSupportCellIds.filter(
+      (_, index) =>
+        transitionSupportElementIds[index] === undefined
+    );
+  if (inactiveTransitionSupportCellIds.length > 0) {
+    throw historyConflict(
+      "transition support contains cells outside the active planning mesh",
+      inactiveTransitionSupportCellIds
+    );
+  }
 
   const planningOptions: RefineOptions & TwoToOneCompensationCarrier = {
     includeTransitions: options.includeTransitions ?? true,
@@ -4842,9 +4813,8 @@ function buildRefinementSessionPatchPlan(
     ...(options.rebuildExistingTransitions === undefined
       ? {}
       : { rebuildExistingTransitions: options.rebuildExistingTransitions }),
-    transitionSupportElementIds: (options.transitionSupportCellIds ?? [])
-      .map((cellId) => activeBuildElementIdByCellId(session, active, cellId))
-      .filter((elementId): elementId is number => elementId !== undefined),
+    transitionSupportElementIds:
+      transitionSupportElementIds as number[],
     regularizeHexSelection: false,
     ...(options.mergeTolerance !== undefined ? { mergeTolerance: options.mergeTolerance } : {})
   };

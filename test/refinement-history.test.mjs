@@ -299,6 +299,28 @@ test("recipe freeze snapshots the source and clone creates independent nested re
   assert.deepEqual(frozen, expected);
 });
 
+test("version 2 recipes are rejected by cloning and history index construction", () => {
+  const recipe = {
+    ...sampleRecipe(),
+    version: 2
+  };
+  const expectedError = {
+    message: "unsupported refinement session command recipe version 2"
+  };
+
+  assert.throws(
+    () => cloneRefinementSessionCommandRecipe(recipe),
+    expectedError
+  );
+
+  const source = command("cmd-version-2", [], []);
+  source.recipe = recipe;
+  assert.throws(
+    () => buildRefinementHistoryIndex([source], []),
+    expectedError
+  );
+});
+
 test("recipe freeze deeply freezes options, compensation, geometry arrays, and points", () => {
   const frozen = freezeRefinementSessionCommandRecipe(sampleRecipe());
 
