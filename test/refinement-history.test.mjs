@@ -455,7 +455,9 @@ test("history closure replays consumers of reactivated state versions", () => {
 
   assert.deepEqual(closure.supportCommandIds, ["s1"]);
   assert.deepEqual(closure.downstreamCommandIds, ["s2", "s3"]);
+  assert.deepEqual(closure.affectedInputCellIds, ["a", "x"]);
   assert.deepEqual(closure.preservedCommandIds, []);
+  assert.deepEqual(closure.boundaryCellIds, ["a"]);
 });
 
 test("history closure classifies later seed consumers as downstream", () => {

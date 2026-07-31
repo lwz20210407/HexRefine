@@ -8203,7 +8203,7 @@ test("Hex 2:1 local refinement supports a second level in a warped mapped core",
   assert.ok(minimumCornerScaledJacobian(twiceRefined) > 0);
 });
 
-test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-level core", () => {
+test("Hex 2:1 three-level history preserves transition shells through undo redo and replay", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
   const initial = buildActiveMeshWithMap(session);
@@ -8496,30 +8496,175 @@ test("Hex 2:1 transition-shell rebuilding previews a shell reached by a second-l
     .filter(Boolean)
     .sort((left, right) => left.centerTotal - right.centerTotal)[0]?.cellId;
   assert.ok(thirdLevelCandidate);
-  const thirdCommand = refineSessionPatch(session, [thirdLevelCandidate], {
+  const thirdOptions = {
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local",
     includeTransitions: true,
+    mergeTolerance: 1e-9,
     activeBuild: secondRefinedBuild
+  };
+  assert.equal(
+    protectedFarFieldCellIds.every(
+      (cellId) => session.activeLeafIds.has(cellId)
+    ),
+    true
+  );
+  const farFieldBefore = snapshotRefinementCells(
+    session,
+    protectedFarFieldCellIds
+  );
+  const thirdPreview = previewSessionPatch(
+    session,
+    [thirdLevelCandidate],
+    thirdOptions
+  );
+  const affectedBefore = new Set(
+    thirdPreview.twoToOne.affectedComponentCellIds
+  );
+  assert.ok(affectedBefore.size > 0);
+  assert.ok(affectedBefore.size < session.activeLeafIds.size);
+  assert.deepEqual(
+    protectedFarFieldCellIds.filter(
+      (cellId) => affectedBefore.has(cellId)
+    ),
+    []
+  );
+  const baseState = snapshotActiveRefinementState(session);
+  const baseNodeCount = session.nodes.length;
+  const baseUndoIds = session.undoStack.map((entry) => entry.id);
+  const baseRevision = session.revision;
+  const {
+    resolvedOptions: thirdResolvedOptions,
+    faceResolution: thirdFaceResolution
+  } = createHistoryTransactionRequest(session);
+  const thirdTransaction =
+    planRefinementSessionHistoryTransaction(
+      session,
+      [thirdLevelCandidate],
+      thirdResolvedOptions,
+      thirdFaceResolution
+    );
+  assert.deepEqual(
+    thirdTransaction.historyClosure.supportCommandIds,
+    [command.id]
+  );
+  assert.equal(
+    [
+      ...thirdTransaction.historyClosure.supportCommandIds,
+      ...thirdTransaction.historyClosure.downstreamCommandIds
+    ].filter((commandId) => commandId === command.id).length,
+    1
+  );
+  assert.equal(thirdTransaction.command.recipe?.version, 1);
+
+  const thirdCommand = refineSessionPatch(session, [thirdLevelCandidate], {
+    ...thirdOptions
   });
   const thirdRefined = buildActiveMesh(session, {
     mergeNodes: true,
     mergeTolerance: 1e-9
   });
+  const finalState = snapshotActiveRefinementState(session);
+  const finalNodeCount = session.nodes.length;
+  const finalUndoIds = session.undoStack.map((entry) => entry.id);
+  let expectedRevision = baseRevision + 1;
+
+  assert.ok(finalNodeCount > baseNodeCount);
+  assert.equal(session.revision, expectedRevision);
+  assert.equal(thirdCommand.recipe?.version, 1);
+  assert.equal(thirdCommand.twoToOne.status, "compensated");
+  assert.equal(
+    thirdCommand.twoToOne.actions.some(
+      (action) => action.kind === "transition-shell-rebuild"
+    ),
+    true
+  );
+  assert.deepEqual(
+    thirdCommand.twoToOne,
+    thirdTransaction.command.twoToOne
+  );
   assert.equal(thirdCommand.quality?.ok, true);
   assert.equal(checkNoHangingNodes(thirdRefined, 1e-9).ok, true);
   assert.ok(Math.abs(hexMeshVolume(thirdRefined) - 1) < 1e-10);
   assert.ok(minimumCornerScaledJacobian(thirdRefined) > 0);
+  assert.deepEqual(
+    snapshotRefinementCells(session, protectedFarFieldCellIds),
+    farFieldBefore
+  );
   assert.equal(undoRefinementSession(session)?.id, thirdCommand.id);
-  assert.deepEqual(buildActiveMesh(session, {
-    mergeNodes: true,
-    mergeTolerance: 1e-9
-  }), twiceRefined);
+  expectedRevision += 1;
+  assert.equal(session.revision, expectedRevision);
+  assert.equal(session.nodes.length, finalNodeCount);
+  assert.deepEqual(snapshotActiveRefinementState(session), baseState);
+  assert.deepEqual(
+    session.undoStack.map((entry) => entry.id),
+    baseUndoIds
+  );
+  assert.equal(session.redoStack.at(-1)?.id, thirdCommand.id);
   assert.equal(redoRefinementSession(session)?.id, thirdCommand.id);
-  assert.deepEqual(buildActiveMesh(session, {
-    mergeNodes: true,
-    mergeTolerance: 1e-9
-  }), thirdRefined);
+  expectedRevision += 1;
+  assert.equal(session.revision, expectedRevision);
+  assert.equal(session.nodes.length, finalNodeCount);
+  assert.deepEqual(snapshotActiveRefinementState(session), finalState);
+  assert.deepEqual(
+    session.undoStack.map((entry) => entry.id),
+    finalUndoIds
+  );
+  assert.equal(session.redoStack.length, 0);
+
+  assert.equal(undoRefinementSession(session)?.id, thirdCommand.id);
+  expectedRevision += 1;
+  assert.equal(session.revision, expectedRevision);
+  assert.equal(session.nodes.length, finalNodeCount);
+  assert.deepEqual(snapshotActiveRefinementState(session), baseState);
+  assert.equal(redoRefinementSession(session)?.id, thirdCommand.id);
+  expectedRevision += 1;
+  assert.equal(session.revision, expectedRevision);
+  assert.equal(session.nodes.length, finalNodeCount);
+  assert.deepEqual(snapshotActiveRefinementState(session), finalState);
+
+  const threeLevelReplayCommands = [
+    ...replayCommands,
+    {
+      kind: "refine.patch",
+      payload: {
+        cellIds: [thirdLevelCandidate],
+        options: {
+          hexRefinementRatio: 2,
+          hexTwoToOneSelectionMode: "local",
+          includeTransitions: true,
+          mergeTolerance: 1e-9
+        }
+      }
+    }
+  ];
+  const firstThreeLevelReplay = replayHexRefineCommandScript({
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: threeLevelReplayCommands
+  });
+  const secondThreeLevelReplay = replayHexRefineCommandScript({
+    format: "hexrefine-command-script",
+    version: 1,
+    app: "HexRefine",
+    commands: threeLevelReplayCommands
+  });
+  assert.deepEqual(firstThreeLevelReplay.warnings, []);
+  assert.deepEqual(secondThreeLevelReplay.warnings, []);
+  assert.deepEqual(firstThreeLevelReplay.mesh, thirdRefined);
+  assert.deepEqual(
+    firstThreeLevelReplay.mesh,
+    secondThreeLevelReplay.mesh
+  );
+  assert.deepEqual(
+    firstThreeLevelReplay.session.undoStack,
+    secondThreeLevelReplay.session.undoStack
+  );
+  assert.equal(
+    checkNoHangingNodes(firstThreeLevelReplay.mesh, 1e-9).ok,
+    true
+  );
 });
 
 test("Hex 2:1 transition-shell rebuilding recognizes near-coincident duplicate interface nodes", () => {
@@ -11133,6 +11278,7 @@ test("Hex 2:1 history transaction planner maps a real generic command without a 
     error.diagnostic.historyCommandIds,
     [replayedCommand.id]
   );
+  assert.deepEqual(error.diagnostic.conflictingCellIds, []);
   assert.deepEqual(session, before);
 });
 
@@ -11197,6 +11343,89 @@ test("history recipe remapping converts real zero and duplicate geometry matches
     ambiguousError.diagnostic.historyCommandIds,
     historyCommandIds
   );
+});
+
+test("Hex 2:1 history transaction rejects ambiguous active replay geometry atomically", () => {
+  const {
+    session,
+    boundaryCellId,
+    supportCommand,
+    replayedCommand
+  } = createConsumedSupportHistoryFixture();
+  const sourceCell = session.cells.get(boundaryCellId);
+  assert.ok(sourceCell);
+  const duplicateCellId = `${boundaryCellId}-duplicate`;
+  const duplicateOrdinal = session.nextCellOrdinal;
+  session.nextCellOrdinal += 1;
+  session.cells.set(duplicateCellId, {
+    ...sourceCell,
+    id: duplicateCellId,
+    ordinal: duplicateOrdinal,
+    parentId: undefined,
+    element: [...sourceCell.element],
+    children: [],
+    active: false,
+    hidden: true
+  });
+  const independentCommand = refineSessionPatch(
+    session,
+    ["e343"],
+    {
+      hexRefinementRatio: 2,
+      includeTransitions: false
+    }
+  );
+  replaceSessionCommand(session, independentCommand, {
+    hiddenCellIds: [
+      ...independentCommand.hiddenCellIds,
+      duplicateCellId
+    ]
+  });
+  session.sortedActiveLeafIdsDirty = true;
+  const {
+    resolvedOptions,
+    faceResolution
+  } = createHistoryTransactionRequest(session);
+  const before = structuredClone(session);
+  const expectedConflictingCellIds = [
+    boundaryCellId,
+    "e115/15",
+    duplicateCellId
+  ];
+
+  for (const operation of [
+    () => planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    ),
+    () => previewSessionPatch(
+      session,
+      [boundaryCellId],
+      {
+        ...resolvedOptions,
+        activeBuild: resolvedOptions.activeBuild
+      }
+    )
+  ]) {
+    const error = captureError(operation);
+    assert.equal(error instanceof TwoToOnePlanningError, true);
+    assert.equal(
+      error.code,
+      "TWO_TO_ONE_HISTORY_CONFLICT",
+      error.message
+    );
+    assert.deepEqual(
+      error.diagnostic.conflictingCellIds,
+      expectedConflictingCellIds
+    );
+    assert.deepEqual(
+      error.diagnostic.historyCommandIds,
+      [supportCommand.id, replayedCommand.id]
+    );
+    assert.deepEqual(session, before);
+  }
 });
 
 test("Hex 2:1 history transaction planner preserves an independent later command", () => {
@@ -13622,6 +13851,51 @@ function testCellGeometryKey(session, cell) {
     )
     .sort()
     .join("|");
+}
+
+function snapshotRefinementCells(session, cellIds) {
+  return [...cellIds].sort().map((cellId) => {
+    const cell = session.cells.get(cellId);
+    assert.ok(cell);
+    return {
+      id: cell.id,
+      element: [...cell.element],
+      role: cell.role,
+      level: cell.level,
+      active: cell.active,
+      hidden: cell.hidden,
+      points: cell.element.map((nodeId) => [
+        ...session.nodes[nodeId - 1]
+      ])
+    };
+  });
+}
+
+function snapshotActiveRefinementState(session) {
+  const activeCellIds = [...session.activeLeafIds];
+  const activeNodeIds = [
+    ...new Set(activeCellIds.flatMap((cellId) => {
+      const cell = session.cells.get(cellId);
+      assert.ok(cell);
+      return cell.element;
+    }))
+  ].sort((left, right) => left - right);
+  return {
+    nodes: activeNodeIds.map((nodeId) => ({
+      id: nodeId,
+      point: [...session.nodes[nodeId - 1]]
+    })),
+    activeCells: snapshotRefinementCells(
+      session,
+      activeCellIds
+    ),
+    commandRecipes: session.undoStack.map((command) => ({
+      id: command.id,
+      recipe: command.recipe === undefined
+        ? undefined
+        : structuredClone(command.recipe)
+    }))
+  };
 }
 
 function createHistoryTransactionRequest(
