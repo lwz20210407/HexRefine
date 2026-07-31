@@ -304,8 +304,9 @@ export interface RefinementSessionPatchOptions {
   hexTwoToOneSelectionMode?: "section" | "local";
   hexTwoToOneCompensation?: TwoToOneCompensationOptions;
   /**
-   * Rebuild one untouched supporting 2:1 shell when a nested local patch
-   * reaches it. Set false to preserve strict collision rejection.
+   * Rebuild a component-local closure of replayable 2:1 history when a nested
+   * local patch reaches an existing shell. Set false to preserve strict
+   * collision rejection.
    */
   rebuildExistingTransitions?: boolean;
   transitionSupportCellIds?: readonly CellId[];

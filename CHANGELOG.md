@@ -4,6 +4,15 @@
 
 Private/custom performance edition.
 
+- Added replayable refinement-command recipes and component-local history
+  closure planning.
+- Added atomic multi-command and partially refined 2:1 transition-shell
+  rebuilding.
+- Preserved far-field cell identity across Stage B history transactions.
+- Added stable history-conflict diagnostics and shell compensation-limit
+  enforcement.
+- Stopped reporting raw transition-disabled 1-to-8 refinement as a conforming
+  2:1 result.
 - Added explicit direct/compensated/rejected H1 2:1 planning outcomes.
 - Added bounded one-layer selection compensation and structured planning errors.
 - Made aggregate shell-rebuild previews unambiguous.
@@ -16,14 +25,13 @@ Private/custom performance edition.
   atomic full-mesh conformance gate before nested `2:1` hierarchy mutation.
 - Added exact command replay, undo/redo, and cell/node set-remap regression
   coverage for second-level local `2:1` refinement.
-- Added transactional rebuilding for a nested local `2:1` patch that reaches
-  one untouched existing transition shell. Only the connected support
-  component and directly colliding transition parents are promoted; logical
-  block completion is a parity fallback rather than the default. The rebuild
-  is committed with the new level as one replayable undo command, with an
-  aggregate preview and net before/after quality audit. Affine and lightly
-  warped mapped-block collisions are covered. Strict rejection remains
-  available through `rebuildExistingTransitions: false`.
+- Transition-shell transactions promote only the affected connected support
+  component and directly colliding transition parents; logical block completion
+  is a parity fallback rather than the default. Each rebuild is committed with
+  the new level as one replayable undo command, with an aggregate preview and
+  net before/after quality audit. Affine and lightly warped mapped-block
+  collisions are covered. Strict rejection remains available through
+  `rebuildExistingTransitions: false`.
 - Added provenance and one-ring authorization guards for rebuilt support plans,
   structured collision/quality error codes, and a final net-quality transaction
   gate. Negative-orientation Hexes now use the shared per-corner oriented

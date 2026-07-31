@@ -45,13 +45,14 @@ customize for research, engineering experiments, and selected project work:
   script, and browser GUI; `Auto` remains the default.
 - Repeated `2:1` refinement inside a sufficiently deep, same-level refined core;
   each level again uses one uniform core pass and one transition-parent layer.
-  When a nested local patch reaches one untouched transition shell from its
-  supporting refinement command, the session restores only that connected
-  support component, promotes the prior core plus directly colliding transition
-  parents, and rebuilds the shell before applying the new level. The exact
-  irregular core is tried first; minimum logical-block completion is only a
-  parity fallback. Preview, execution, command replay, undo, and redo use the
-  same transactional path. Set `rebuildExistingTransitions: false` to keep
+  When a nested local patch reaches an existing transition shell, the session
+  discovers the affected component and computes its replayable history closure.
+  One or more refinement commands can be reversed, rebuilt, and replayed on a
+  clone when every affected downstream command stays wholly inside that
+  component. The exact irregular core is tried first; minimum logical-block
+  completion is only a parity fallback. Preview, execution, and command replay
+  share the transactional planner; undo and redo apply the recorded compound
+  delta without replanning. Set `rebuildExistingTransitions: false` to keep
   strict atomic rejection instead.
 - Atomic H1 session quality gates reject inverted children and volume loss
   before nodes, cells, or undo history are mutated. Single-parent refinements
@@ -74,9 +75,21 @@ bounded face-connected parent layer or rebuild the colliding transition
 component when the operation remains conforming. Every compensation is reported
 in `twoToOne.actions`.
 
+Stage B shell rebuilding permits one or more replayable refinement commands to
+form a component-local history closure. Every downstream command in that closure
+must be wholly inside the affected component. Missing recipes, ambiguous
+selection remapping, or commands that cross the component reject the complete
+transaction with `TWO_TO_ONE_HISTORY_CONFLICT`. Rejected previews and executions
+leave the session unchanged; successful transactions preserve far-field cell
+IDs and connectivity.
+
 HexRefine does not promise a conforming 2:1 result for every arbitrary Hex
 topology. Unsupported parity, valence, ambiguous geometry, history, or quality
 conditions throw `TwoToOnePlanningError` before the mesh or session is changed.
+Arbitrary cavity filling and splitting a replayed downstream command across
+components are unsupported. The untouched-support fallback may preserve other
+disconnected outputs owned by its root command; once downstream history replay
+is required, every included command must remain inside the affected component.
 
 Preview consumers must narrow on `planMode`. `"per-parent"` previews expose an
 honest replacement entry for each changed parent; `"aggregate"` previews report
@@ -98,7 +111,7 @@ uses regular Owen templates plus a paired pattern-3 construction to close all
 directions around mapped-lattice cores. Rectangular, L-shaped, and disjoint
 logical-cell selections are covered by regression tests. Highly irregular
 selections that leave an unpaired pattern-3 face, refinement across existing
-transition shells created by multiple or partially modified history commands,
+transition components whose command closure crosses into the far field,
 irregular mixed-level domains, and automatic odd-section topology completion
 are not yet part of the TypeScript runtime.
 Repeated local refinement reconstructs a same-level, non-transition planning
@@ -117,9 +130,9 @@ nonconforming mesh.
 
 The current 2:1 scope is intentionally limited to structured or recoverable
 mapped lattices and even full-section O-grid interfaces. Arbitrary unstructured
-Hex topology, odd-section topology compensation, and general transition-shell
-collision rebuilding across independently modified histories remain outside
-the first contribution scope.
+Hex topology, odd-section topology compensation, arbitrary cavity remeshing,
+and splitting downstream commands that cross an affected history component
+remain outside the supported scope.
 
 Set `hexTwoToOneSelectionMode: "local"` or choose `2:1 domain -> Local box` in
 the browser to retain a local core. Disable regularization when an explicit

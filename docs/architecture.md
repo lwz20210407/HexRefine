@@ -106,22 +106,34 @@ The public 2:1 capability path is:
 
 ```text
 selection
-  -> direct two-to-one solver
-  -> bounded compensation planner
-  -> classified replacement plan
+  -> direct 2:1 solver
+  -> bounded compensation
+  -> transition component discovery
+  -> provenance index and history closure
+  -> cloned reverse / rebuild / replay transaction
   -> conformance and quality gates
-  -> flat result or atomic session command
+  -> aggregate preview or one compound session command
 ```
 
 The direct solver is always attempted first. Compensation may change the
 effective selected parent set or rebuild one authorized transition component,
-but it never bypasses the final conformance and quality gates.
+but it never bypasses the final conformance and quality gates. Component
+rebuilding computes the minimum replayable closure across one or more
+refinement commands. Every downstream command must remain wholly inside the
+affected component.
 
 For repeated local `2:1`, `refinement-session.ts` builds a planning mesh from
 same-level active cells that are not transition cells. `previewSessionPatch`
 and `refineSessionPatch` share this plan. The plan is remapped to the complete
 active mesh and checked for hanging nodes before the hierarchy is mutated, so a
 new local shell cannot silently cut through an older transition layer.
+
+History transactions run against a cloned session. They reverse the affected
+closure, rebuild its support shell, replay downstream recipes, and apply the new
+request before producing an aggregate preview or one compound command. Missing
+recipes, ambiguous remapping, or a command crossing the component reject
+atomically with `TWO_TO_ONE_HISTORY_CONFLICT`. Commands and active cells outside
+the closure retain their IDs and connectivity.
 
 H1 session plans also pass through `hex-quality.ts` before mutation. Every
 parent and generated child must have a positive oriented corner scaled

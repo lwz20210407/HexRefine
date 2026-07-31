@@ -96,34 +96,36 @@ replacements are mapped back onto the complete active mesh and passed through
 `checkNoHangingNodes`.
 
 If that gate finds that a nested local core reaches an existing transition
-shell, the default session path can rebuild one untouched supporting patch.
-The operation runs on a cloned session first and restores only the connected
-support component containing the selected fine cells. Its initial rebuilt core
-is the previous core plus transition parents that share a face with the new
-patch. The planner first tries that exact irregular core; only unsupported Owen
-corner signatures or unpaired pattern-3 faces trigger completion to the minimum
-logical bounding block of that local core. Disconnected support components
-remain untouched. Bounding completion is limited to the original component and
-its one-face-neighbor parents, and a rebuilt plan may not consume cells owned by
-another refinement command.
+shell, the Stage B session path discovers the face-connected transition
+component and builds the minimum history closure needed to restore it. The
+closure may contain one or more replayable refinement commands, including
+commands that partially refined the support shell. Every downstream command
+must be wholly inside the affected component; a command that also changes the
+far field is rejected rather than split.
 
-The requested fine cells are remapped by exact vertex geometry before the next
-level is applied. The internal patches are committed as one command whose
-active-cell delta records newly created leaves and existing coarse parents
-reactivated by the rebuild. Undo therefore returns exactly to the pre-request
-mesh and redo restores the complete result. The command quality summary audits
-the net transaction boundary (`before - after` parents against `after - before`
-children), so intermediate rebuilt cells are not counted twice.
-The net audit is also the final transaction gate: non-positive oriented
-Jacobians or relative volume error above `1e-8` discard the cloned session
+The operation runs on a cloned session. It reverses the closure in strict
+reverse history order, restores the support parents, rebuilds the shell, replays
+downstream command recipes, and then applies the new request. The planner first
+tries the exact irregular core; only unsupported Owen corner signatures or
+unpaired pattern-3 faces trigger completion to the minimum logical block inside
+the authorized component. Unrelated commands, far-field cell IDs, and
+far-field connectivity remain unchanged.
+
+The internal changes are committed as one compound command whose active-cell
+delta records newly created leaves and existing coarse parents reactivated by
+the rebuild. Undo returns exactly to the pre-request mesh and redo restores the
+complete result without replanning. The command quality summary audits the net
+transaction boundary (`before - after` parents against `after - before`
+children), so intermediate rebuilt cells are not counted twice. Non-positive
+oriented Jacobians or relative volume error above `1e-8` discard the clone
 instead of committing it.
 
 Compound preview is explicitly aggregate: it returns an empty per-parent
 `plan`, exact final and changed-input counts, and the same net quality summary
 as execution. It does not invent template codes or distribute output counts
 across obsolete input cells. Command replay exercises the same transactional
-path. Callers can set `rebuildExistingTransitions: false` to retain the original
-atomic rejection behavior.
+path. Callers can set `rebuildExistingTransitions: false` to retain strict
+atomic collision rejection.
 
 Conformance collisions and patch-quality failures use distinct structured error
 codes. A warped mapped candidate that reports a provisional volume error is
@@ -131,22 +133,36 @@ eligible for rebuilding only when its selected cell also has an exact shared
 face with an active transition cell; the rebuilt transaction must then pass the
 same net quality gate.
 
-### Stage A 2:1 capability contract
+### Stage B 2:1 capability contract
 
 The direct 2:1 solver runs before compensation. The
 `hexTwoToOneCompensation.mode` values are:
 
 - `"none"`: reject when the original selection has no conforming direct plan.
 - `"selection"`: permit bounded parent-selection expansion.
-- `"local-topology"`: permit selection expansion and one authorized local
+- `"local-topology"`: permit selection expansion and one authorized component
   transition-shell rebuild.
 
 The default mode is `"local-topology"`. Selection compensation may add at most
 one face-connected parent layer by default. Its default parent-count limit is
 `max(32, ceil(originalSelectedParentCount / 4))`; callers can configure the
 limits with `maxAddedParentLayers` and `maxAddedParentCount`. A zero limit
-disables that form of expansion. Exceeding a limit rejects the complete request
-without mutating the mesh or session.
+disables that form of expansion.
+
+Compensation limits apply to every compensation action, not only selection
+growth. Promoting colliding transition parents during a shell rebuild consumes
+one added parent layer and counts every unique parent reported by that action.
+Each action is checked before its cloned simulation. Logical parity completion
+inside the already authorized support component is part of the shell rebuild,
+not a separate compensation action. Exceeding a limit rejects the complete
+request with `TWO_TO_ONE_COMPENSATION_LIMIT` without mutating the mesh, session,
+revision, or command stacks.
+
+`hexRefinementRatio: 2` with `includeTransitions: false` is a raw uniform
+`1 -> 8` refinement for callers that manage conformity themselves. It returns
+replacement and quality data but no `twoToOne` capability report. The `direct`
+and `compensated` outcomes are reserved for operations that build and audit a
+conforming transition.
 
 Imported meshes may represent one interface with coincident but differently
 numbered nodes. Interface discovery therefore uses exact node-id identity first,
@@ -168,14 +184,57 @@ interfaces, attempted compensation actions, and an optional recovery
 suggestion. Errors are produced before committing a flat result or session
 command.
 
-Stage A remains deliberately bounded:
+### Replay recipes and component history
 
-- Selection expansion is one-layer and only for rectangular
-  structured/recoverable-mapped parent ranges.
-- Shell rebuilding is limited to one untouched supporting refinement command.
-- Arbitrary cavity remeshing is not implemented.
-- Component-scoped overlays across independent or partially modified histories
-  are not implemented.
+Each new replayable session patch command stores an immutable recipe with
+`version: 1`. Its fields are:
+
+- `selectedCellIds` and `selectedCellGeometry`.
+- `transitionSupportCellIds` and `transitionSupportCellGeometry`.
+- `options`, containing `includeTransitions`, `hexRefinementRatio`,
+  `hexTwoToOneSelectionMode`, normalized `hexTwoToOneCompensation`,
+  `rebuildExistingTransitions`, and optional `mergeTolerance`.
+
+Each geometry snapshot records `originalCellId`, `kind`, `level`, `role`, and
+the element-local `points`. Recipes exclude `activeBuild`; replay creates fresh
+trusted active-build metadata. Arrays, geometry, points, options, and
+compensation values are cloned and frozen.
+
+After an earlier command is rebuilt, recipe selections and transition support
+are remapped in this priority: original-ID, exact-geometry, then
+tolerance-geometry. Kind, level, and role must also match. Zero matches,
+multiple matches, missing or unsupported recipes, invalid closures, and
+commands crossing the affected component reject the complete transaction with
+`TWO_TO_ONE_HISTORY_CONFLICT`.
+
+Commands without a recipe remain valid for ordinary undo and redo but are not
+eligible for a Stage B history closure.
+
+History diagnostics expose `historyCommandIds` in a deterministic stable order.
+They survive internal planning-error cloning and the explicit
+`serializeTwoToOnePlanningError` DTO path. Raw JavaScript `Error` structured
+cloning does not preserve custom diagnostics, so browser or worker transport
+must use that DTO when callers need the IDs. The IDs identify every command
+involved in a missing-recipe, remap, or component-crossing conflict.
+
+Temporary reverse, rebuild, and replay commands exist only in the cloned
+planning session and never enter public history. A successful operation replaces
+them with one compound command. A new edit after undo clears the redo stack;
+ordinary undo and redo of the compound command apply its recorded delta without
+rerunning history planning.
+
+Stage B remains deliberately bounded:
+
+- The history closure is local to one face-connected transition component.
+- Every replayed downstream command must be replayable and wholly inside that
+  component; downstream command splitting is unsupported.
+- The untouched-support fallback may preserve disconnected outputs owned by its
+  root command. The general history-closure path requires every included
+  command, including the root, to remain inside the component.
+- Selection growth and shell promotion remain subject to the configured
+  compensation limits.
+- Arbitrary cavity filling, arbitrary unstructured Hex topology, odd-parity
+  completion, and new odd-valence templates are unsupported.
 
 Direct mutation of session geometry, cells, active leaves, or active-build
 metadata is unsupported. Use refinement commands and rebuild the active mesh;
@@ -191,12 +250,10 @@ node scripts/generate-lsdyna-regression-fixtures.mjs
 The generator writes only mesh keywords and audits the tensile O-grid,
 compression O-grid, and double-shear inputs before updating their manifests.
 
-Automatic rebuilding currently requires the selected cells to come from one
-supporting refinement command and every cell in that supporting level to remain
-an active leaf. A shell spanning multiple history commands, or a shell already
-partly refined by later commands, is rejected explicitly rather than reordered.
-Structured affine and lightly warped mapped-block collisions are covered by
-regression tests.
+Automatic rebuilding accepts one or more replayable commands in the affected
+history closure, including a support shell partly refined by later commands.
+Independent far-field histories remain untouched. Structured affine and
+lightly warped mapped-block collisions are covered by regression tests.
 
 The planner returns classified replacements with:
 
