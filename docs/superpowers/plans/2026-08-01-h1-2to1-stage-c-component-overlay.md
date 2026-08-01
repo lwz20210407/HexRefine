@@ -125,7 +125,9 @@ import { createDirectRefinementSessionState } from "../dist/refinement-session-s
 
 test("direct session state reads and writes through explicit accessors", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
-  const state = createDirectRefinementSessionState(session);
+  const state = createDirectRefinementSessionState(session, (point) =>
+    point.map((value) => value.toPrecision(17)).join(",")
+  );
 
   assert.equal(state.nodeCount, 8);
   assert.equal(state.cell("e1")?.active, true);
@@ -137,6 +139,47 @@ test("direct session state reads and writes through explicit accessors", () => {
   assert.equal(session.cells.get("e1")?.hidden, true);
 });
 ```
+
+Add focused tests for the active-state invariant boundary. The direct adapter
+must keep `activeLeafIds`, `activeLeafIdsByNodeKey`, and
+`sortedActiveLeafIdsDirty` consistent as one operation: assert owner lists after
+add/remove, reject an unknown cell, treat an inactive removal as an idempotent
+no-op, reject a cell with a missing node without changing any collection, and
+observe the dirty flag after each effective change (including that idempotent
+operations do not dirty it). Use a test cell with a shared node so owner removal
+can verify that one owner remains while the other is removed.
+
+```js
+test("direct active updates preserve owners and dirty the sorted cache", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const key = (point) => point.map((value) => value.toPrecision(17)).join(",");
+  const state = createDirectRefinementSessionState(session, key);
+  const firstKey = key(session.nodes[0]);
+
+  session.sortedActiveLeafIdsDirty = false;
+  state.removeActiveLeaf("e1");
+  assert.deepEqual(state.activeOwnersByNodeKey(firstKey), []);
+  assert.equal(session.sortedActiveLeafIdsDirty, true);
+
+  session.sortedActiveLeafIdsDirty = false;
+  state.removeActiveLeaf("e1");
+  assert.equal(session.sortedActiveLeafIdsDirty, false);
+  assert.throws(() => state.removeActiveLeaf("missing"), /unknown refinement cell/);
+
+  state.addActiveLeaf("e1");
+  assert.deepEqual(state.activeOwnersByNodeKey(firstKey), ["e1"]);
+  assert.equal(session.sortedActiveLeafIdsDirty, true);
+  session.sortedActiveLeafIdsDirty = false;
+  state.addActiveLeaf("e1");
+  assert.equal(session.sortedActiveLeafIdsDirty, false);
+});
+```
+
+Add a companion malformed-cell case by inserting a temporary cell whose
+`element` contains a missing node id. Assert that `addActiveLeaf` throws and
+that active ids, every owner list, and `sortedActiveLeafIdsDirty` retain their
+pre-call values. For a shared-node fixture, remove one of two active cells and
+assert the other owner remains in that node's list.
 
 - [ ] **Step 2: Run the test and verify the missing-module failure**
 
@@ -187,7 +230,8 @@ export interface RefinementSessionStateReader {
   readonly activeLeafCount: number;
   readonly nextCommandId: number;
   readonly nextCellOrdinal: number;
-  node(nodeId: number): readonly number[] | undefined;
+  readonly sortedActiveLeafIdsDirty: boolean;
+  node(nodeId: number): Point | undefined;
   cell(cellId: CellId): RefinementSessionCell | undefined;
   hasActiveLeaf(cellId: CellId): boolean;
   activeLeafIds(): Iterable<CellId>;
@@ -198,7 +242,7 @@ export interface RefinementSessionStateReader {
 
 export interface RefinementSessionStateWriter extends RefinementSessionStateReader {
   mutableCell(cellId: CellId): MutableRefinementSessionCell;
-  appendNode(point: readonly number[]): number;
+  appendNode(point: Point): number;
   setCell(cell: MutableRefinementSessionCell): void;
   addActiveLeaf(cellId: CellId): void;
   removeActiveLeaf(cellId: CellId): void;
@@ -217,6 +261,7 @@ interface MutableSessionShape {
   redoStack: RefinementSessionCommand[];
   nextCommandId: number;
   nextCellOrdinal: number;
+  sortedActiveLeafIdsDirty: boolean;
 }
 
 function mutableSession(session: RefinementSession): MutableSessionShape {
@@ -235,7 +280,8 @@ function requiredMutableCell(
 }
 
 export function createDirectRefinementSessionState(
-  session: RefinementSession
+  session: RefinementSession,
+  nodeKey: (point: Point) => string
 ): RefinementSessionStateWriter {
   const mutable = mutableSession(session);
   return {
@@ -247,6 +293,7 @@ export function createDirectRefinementSessionState(
     get activeLeafCount() { return session.activeLeafIds.size; },
     get nextCommandId() { return session.nextCommandId; },
     get nextCellOrdinal() { return session.nextCellOrdinal; },
+    get sortedActiveLeafIdsDirty() { return session.sortedActiveLeafIdsDirty; },
     node: (nodeId) => session.nodes[nodeId - 1],
     cell: (cellId) => session.cells.get(cellId),
     hasActiveLeaf: (cellId) => session.activeLeafIds.has(cellId),
@@ -260,8 +307,45 @@ export function createDirectRefinementSessionState(
       return mutable.nodes.length;
     },
     setCell(cell) { mutable.cells.set(cell.id, cell); },
-    addActiveLeaf(cellId) { mutable.activeLeafIds.add(cellId); },
-    removeActiveLeaf(cellId) { mutable.activeLeafIds.delete(cellId); },
+    addActiveLeaf(cellId) {
+      if (mutable.activeLeafIds.has(cellId)) return;
+      const cell = requiredMutableCell(session, cellId);
+      const points = cell.element.map((nodeId) => {
+        const point = session.nodes[nodeId - 1];
+        if (point === undefined) {
+          throw new Error(`active cell ${cellId} references missing node ${nodeId}`);
+        }
+        return point;
+      });
+      mutable.activeLeafIds.add(cellId);
+      mutable.sortedActiveLeafIdsDirty = true;
+      for (const point of points) {
+        const key = nodeKey(point);
+        const owners = mutable.activeLeafIdsByNodeKey.get(key) ?? [];
+        mutable.activeLeafIdsByNodeKey.set(key, [...owners, cellId]);
+      }
+    },
+    removeActiveLeaf(cellId) {
+      const cell = requiredMutableCell(session, cellId);
+      if (!mutable.activeLeafIds.has(cellId)) return;
+      const points = cell.element.map((nodeId) => {
+        const point = session.nodes[nodeId - 1];
+        if (point === undefined) {
+          throw new Error(`active cell ${cellId} references missing node ${nodeId}`);
+        }
+        return point;
+      });
+      mutable.activeLeafIds.delete(cellId);
+      mutable.sortedActiveLeafIdsDirty = true;
+      for (const point of points) {
+        const key = nodeKey(point);
+        const owners = mutable.activeLeafIdsByNodeKey.get(key);
+        if (owners === undefined) continue;
+        const next = owners.filter((ownerId) => ownerId !== cellId);
+        if (next.length === 0) mutable.activeLeafIdsByNodeKey.delete(key);
+        else mutable.activeLeafIdsByNodeKey.set(key, next);
+      }
+    },
     allocateCellOrdinal() {
       const ordinal = mutable.nextCellOrdinal;
       mutable.nextCellOrdinal += 1;
@@ -396,6 +480,7 @@ interface OverlayStorage {
   activeLeafAdditions: Set<CellId>;
   activeLeafRemovals: Set<CellId>;
   ownerOverridesByNodeKey: Map<string, CellId[]>;
+  sortedActiveLeafIdsDirty: boolean;
   appendedUndoCommands: RefinementSessionCommand[];
   clearRedo: boolean;
   nextCommandId: number;
@@ -410,7 +495,7 @@ export interface RefinementSessionOverlay extends RefinementSessionStateWriter {
 }
 
 export interface RefinementSessionOverlayOptions {
-  readonly nodeKey: (point: readonly number[]) => string;
+  readonly nodeKey: (point: Point) => string;
   readonly cellNodeIds: (cell: RefinementSessionCell) => readonly number[];
 }
 
@@ -433,10 +518,11 @@ export function createRefinementSessionOverlay(
     activeLeafAdditions: new Set(),
     activeLeafRemovals: new Set(),
     ownerOverridesByNodeKey: new Map(),
+    sortedActiveLeafIdsDirty: false,
     appendedUndoCommands: [],
     clearRedo: false,
     nextCommandId: baseSession.nextCommandId,
-    nextCellOrdinal: baseSession.nextCellOrdinal,
+    nextCellOrdinal: baseSession.nextCellOrdinal ?? baseSession.cells.size + 1,
     referencedBaseCellIds: new Set(),
     referencedBaseNodeIds: new Set()
   };
@@ -455,6 +541,9 @@ export function createRefinementSessionOverlay(
     },
     get nextCommandId() { return storage.nextCommandId; },
     get nextCellOrdinal() { return storage.nextCellOrdinal; },
+    get sortedActiveLeafIdsDirty() {
+      return storage.sortedActiveLeafIdsDirty || baseSession.sortedActiveLeafIdsDirty;
+    },
     node(nodeId) {
       if (nodeId <= baseSession.nodes.length) {
         storage.referencedBaseNodeIds.add(nodeId);
@@ -629,9 +718,13 @@ Expected: FAIL because delta/fork/commit exports are missing.
 Use the exact-node-key callback already required by overlay creation so the
 overlay does not duplicate `refinement-session.ts` geometry rules. Production
 history callers pass `exactActiveMergeKey` and `(cell) => cell.element`.
-Implement both active methods by canceling the opposite set, cloning each
-touched owner list once, and adding/removing the id exactly once. Reject an
-unknown or inactive removal before changing any collection.
+Implement both active methods by first validating the cell and every
+referenced node, then canceling the opposite set, cloning each touched owner
+list once, and adding/removing the id exactly once. Adding an already active
+cell and removing a known inactive cell are idempotent no-ops. Reject an
+unknown cell, or a missing node before changing any collection. The direct
+adapter must use the same validation and owner-index rules, including setting
+`sortedActiveLeafIdsDirty` only for effective membership changes.
 
 ```ts
 function updateOwnerLists(
@@ -678,7 +771,7 @@ if (
 }
 ```
 
-Validate all touched fingerprints and standard `Array`/`Map`/`Set` prototypes. Prepare cloned points, cells, owner lists, and stack edits before applying them. Then append nodes, set cells, apply active deltas, replace touched owner lists, append the command, clear redo, update counters, and increment revision once.
+Validate all touched fingerprints and standard `Array`/`Map`/`Set` prototypes. Prepare cloned points, cells, owner lists, active membership, and stack edits before applying them. Then install the prepared nodes, cells, active-leaf set, owner lists, and sorted-active cache invalidation as one atomic active-state update; append the command, clear redo, update counters, and increment revision once. Do not call direct `addActiveLeaf`/`removeActiveLeaf` during commit after preparing the owner lists, or the owner transition will be applied twice.
 
 - [ ] **Step 6: Verify GREEN and failure atomicity**
 
@@ -756,7 +849,10 @@ Add state-reader variants of hierarchy validation so they resolve cells through 
 
 - [ ] **Step 4: Adapt real-session callers through the direct adapter**
 
-Ordinary undo/redo and direct patch application must call `createDirectRefinementSessionState(session)`. Preserve existing public return values and revision increments. Do not migrate unrelated mesh algorithms.
+Ordinary undo/redo and direct patch application must call
+`createDirectRefinementSessionState(session, exactActiveMergeKey)`. Preserve
+existing public return values and revision increments. Do not migrate unrelated
+mesh algorithms.
 
 - [ ] **Step 5: Verify GREEN and run all history tests**
 

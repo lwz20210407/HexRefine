@@ -136,8 +136,9 @@ interface RefinementSessionStateReader {
   readonly activeLeafCount: number;
   readonly nextCommandId: number;
   readonly nextCellOrdinal: number;
+  readonly sortedActiveLeafIdsDirty: boolean;
 
-  node(nodeId: number): readonly number[] | undefined;
+  node(nodeId: number): Point | undefined;
   cell(cellId: CellId): RefinementSessionCell | undefined;
   hasActiveLeaf(cellId: CellId): boolean;
   activeLeafIds(): Iterable<CellId>;
@@ -149,7 +150,7 @@ interface RefinementSessionStateReader {
 interface RefinementSessionStateWriter
   extends RefinementSessionStateReader {
   mutableCell(cellId: CellId): MutableRefinementSessionCell;
-  appendNode(point: readonly number[]): number;
+  appendNode(point: Point): number;
   setCell(cell: MutableRefinementSessionCell): void;
   addActiveLeaf(cellId: CellId): void;
   removeActiveLeaf(cellId: CellId): void;
@@ -163,6 +164,21 @@ interface RefinementSessionStateWriter
 The exact names may change during implementation, but the separation between
 read access and explicit mutation is mandatory.
 
+Active-leaf membership and its derived state form one invariant boundary.
+Every real-session or overlay writer must reject unknown cell ids, validate
+all referenced nodes before an actual membership change, and update active
+membership, per-node owner indexes, and sorted-active-leaf cache invalidation
+as one operation. Adding an already active cell or removing a known inactive
+cell is an idempotent no-op; neither case may dirty caches or duplicate owner
+ids. A real-session change sets `sortedActiveLeafIdsDirty`; an overlay records
+the equivalent sparse owner overrides and its guarded commit sets the real
+session dirty exactly when the effective active membership changes.
+
+Ordinal allocation also preserves the current runtime compatibility rule. The
+effective starting value is
+`session.nextCellOrdinal ?? session.cells.size + 1`, including when an overlay
+is created from a legacy-shaped session that lacks the counter.
+
 ### Direct Adapter
 
 `DirectRefinementSessionState` wraps the current real session. It centralizes
@@ -172,6 +188,13 @@ migrated.
 
 The direct adapter is not a clone. It is used only after public validation or
 when committing an already verified overlay delta.
+
+The direct adapter receives the exact active-node-key function as an injected
+callback from `refinement-session.ts`. The state module may import session
+types with `import type`, but it must not import a runtime helper back from
+`refinement-session.ts`; that would create a cycle. If the key function is
+later shared by import instead, it must move to a neutral leaf internal module
+used by both files.
 
 ### Copy-on-Write Overlay
 
@@ -188,6 +211,7 @@ interface RefinementSessionOverlayStorage {
   readonly historyEdit: RefinementSessionHistoryEdit;
   nextCommandId: number;
   nextCellOrdinal: number;
+  sortedActiveLeafIdsDirty: boolean;
 }
 
 interface RefinementSessionHistoryEdit {
@@ -222,7 +246,11 @@ otherwise => base membership
 ```
 
 Adding and removing the same id cancels the opposite delta. Per-node owner
-indexes are copied only for keys touched by an active-leaf change.
+indexes are copied only for keys touched by an active-leaf change. Overlay
+active methods obey the same validation and idempotence rules as the direct
+adapter. Guarded commit installs membership, prepared owner lists, and sorted
+cache invalidation once; it must not also invoke direct active methods and
+thereby apply the owner transition twice.
 
 The command objects are deeply immutable already. The overlay stores history
 edits and reads unchanged commands directly from the base stack. It neither
@@ -433,13 +461,13 @@ uses the existing real collections and applies only bounded updates:
 
 1. append prepared node point arrays;
 2. replace overridden cells and insert created cells;
-3. apply active-leaf removals and additions;
-4. update touched node-owner keys;
-5. apply the prepared history edit, reusing unaffected immutable command
+3. install the prepared active-leaf membership, touched node-owner keys, and
+   `sortedActiveLeafIdsDirty` state as one atomic active-state update;
+4. apply the prepared history edit, reusing unaffected immutable command
    objects and appending the compound command without cloning the full stack;
-6. update counters;
-7. increment revision;
-8. publish the new certificate.
+5. update counters;
+6. increment revision;
+7. publish the new certificate.
 
 No planner, geometry matcher, quality calculation, user callback, property
 getter, or formatter runs during commit.
