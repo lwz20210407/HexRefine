@@ -57,6 +57,43 @@ function cloneCell(
   };
 }
 
+function sameCellIds(left: readonly CellId[], right: readonly CellId[]): boolean {
+  return left.length === right.length && left.every((cellId, index) => cellId === right[index]);
+}
+
+function activeNodeKeys(
+  baseSession: RefinementSession,
+  storage: OverlayStorage,
+  options: RefinementSessionOverlayOptions,
+  cell: RefinementSessionCell
+): string[] {
+  const keys = new Set<string>();
+  for (const nodeId of options.cellNodeIds(cell)) {
+    const point = nodeId >= 1 && nodeId <= baseSession.nodes.length
+      ? baseSession.nodes[nodeId - 1]
+      : storage.appendedNodes[nodeId - baseSession.nodes.length - 1];
+    if (point === undefined) {
+      throw new Error(`active cell ${cell.id} references missing node ${nodeId}`);
+    }
+    keys.add(options.nodeKey(point));
+  }
+  return [...keys];
+}
+
+function requiredCell(
+  baseSession: RefinementSession,
+  storage: OverlayStorage,
+  cellId: CellId
+): RefinementSessionCell {
+  const cell = storage.createdCells.get(cellId)
+    ?? storage.cellOverrides.get(cellId)
+    ?? baseSession.cells.get(cellId);
+  if (cell === undefined) {
+    throw new Error(`unknown refinement cell ${cellId}`);
+  }
+  return cell;
+}
+
 export function createRefinementSessionOverlay(
   baseSession: RefinementSession,
   options: RefinementSessionOverlayOptions
@@ -176,11 +213,61 @@ export function createRefinementSessionOverlay(
         ?? baseSession.activeLeafIdsByNodeKey.get(key)
         ?? [];
     },
-    addActiveLeaf() {
-      throw new Error("active overlay updates are not implemented");
+    addActiveLeaf(cellId) {
+      const cell = requiredCell(baseSession, storage, cellId);
+      const wasActive = this.hasActiveLeaf(cellId);
+      if (wasActive) return;
+      const keys = activeNodeKeys(baseSession, storage, options, cell);
+      const ownerUpdates = new Map<string, CellId[]>();
+      for (const key of keys) {
+        const owners = storage.ownerOverridesByNodeKey.get(key)
+          ?? baseSession.activeLeafIdsByNodeKey.get(key)
+          ?? [];
+        ownerUpdates.set(key, owners.includes(cellId) ? [...owners] : [...owners, cellId]);
+      }
+
+      if (baseSession.activeLeafIds.has(cellId)) {
+        storage.activeLeafRemovals.delete(cellId);
+      } else {
+        storage.activeLeafAdditions.add(cellId);
+      }
+      storage.sortedActiveLeafIdsDirty = true;
+      for (const [key, owners] of ownerUpdates) {
+        const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
+        if (sameCellIds(owners, baseOwners)) {
+          storage.ownerOverridesByNodeKey.delete(key);
+        } else {
+          storage.ownerOverridesByNodeKey.set(key, owners);
+        }
+      }
     },
-    removeActiveLeaf() {
-      throw new Error("active overlay updates are not implemented");
+    removeActiveLeaf(cellId) {
+      const cell = requiredCell(baseSession, storage, cellId);
+      const wasActive = this.hasActiveLeaf(cellId);
+      if (!wasActive) return;
+      const keys = activeNodeKeys(baseSession, storage, options, cell);
+      const ownerUpdates = new Map<string, CellId[]>();
+      for (const key of keys) {
+        const owners = storage.ownerOverridesByNodeKey.get(key)
+          ?? baseSession.activeLeafIdsByNodeKey.get(key)
+          ?? [];
+        ownerUpdates.set(key, owners.filter((ownerId) => ownerId !== cellId));
+      }
+
+      if (baseSession.activeLeafIds.has(cellId)) {
+        storage.activeLeafRemovals.add(cellId);
+      } else {
+        storage.activeLeafAdditions.delete(cellId);
+      }
+      storage.sortedActiveLeafIdsDirty = true;
+      for (const [key, owners] of ownerUpdates) {
+        const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
+        if (sameCellIds(owners, baseOwners)) {
+          storage.ownerOverridesByNodeKey.delete(key);
+        } else {
+          storage.ownerOverridesByNodeKey.set(key, owners);
+        }
+      }
     },
     allocateCellOrdinal() {
       const ordinal = storage.nextCellOrdinal;
@@ -206,6 +293,34 @@ export function createRefinementSessionOverlay(
       storage.clearRedo = true;
     }
   };
+}
+
+export function forkRefinementSessionOverlay(
+  parent: RefinementSessionOverlay
+): RefinementSessionOverlay {
+  const fork = createRefinementSessionOverlay(parent.baseSession, parent.options);
+  const source = parent.storage;
+  const target = fork.storage;
+  for (const [cellId, cell] of source.cellOverrides) {
+    target.cellOverrides.set(cellId, cloneCell(cell));
+  }
+  for (const [cellId, cell] of source.createdCells) {
+    target.createdCells.set(cellId, cloneCell(cell));
+  }
+  target.appendedNodes.push(...source.appendedNodes.map((point) => [...point] as Point));
+  for (const cellId of source.activeLeafAdditions) target.activeLeafAdditions.add(cellId);
+  for (const cellId of source.activeLeafRemovals) target.activeLeafRemovals.add(cellId);
+  for (const [key, owners] of source.ownerOverridesByNodeKey) {
+    target.ownerOverridesByNodeKey.set(key, [...owners]);
+  }
+  target.sortedActiveLeafIdsDirty = source.sortedActiveLeafIdsDirty;
+  target.appendedUndoCommands.push(...source.appendedUndoCommands);
+  target.clearRedo = source.clearRedo;
+  target.nextCommandId = source.nextCommandId;
+  target.nextCellOrdinal = source.nextCellOrdinal;
+  for (const cellId of source.referencedBaseCellIds) target.referencedBaseCellIds.add(cellId);
+  for (const nodeId of source.referencedBaseNodeIds) target.referencedBaseNodeIds.add(nodeId);
+  return fork;
 }
 
 export function refinementSessionOverlayStats(

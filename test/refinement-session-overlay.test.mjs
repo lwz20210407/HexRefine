@@ -4,6 +4,7 @@ import test from "node:test";
 import { createHexUnitCubeMesh, createRefinementSession } from "../dist/index.js";
 import {
   createRefinementSessionOverlay,
+  forkRefinementSessionOverlay,
   refinementSessionOverlayStats
 } from "../dist/refinement-session-overlay-internal.js";
 import { createDirectRefinementSessionState } from "../dist/refinement-session-state-internal.js";
@@ -250,4 +251,100 @@ test("direct active remove rejects missing nodes atomically", () => {
     /active cell e1 references missing node 999/
   );
   assert.deepEqual(activeStateSnapshot(session), before);
+});
+
+test("overlay active remove then add restores original membership without sparse changes", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const key = exactNodeKey(session.nodes[0]);
+
+  overlay.removeActiveLeaf("e1");
+  overlay.addActiveLeaf("e1");
+
+  assert.equal(refinementSessionOverlayStats(overlay).activeLeafAdditionCount, 0);
+  assert.equal(refinementSessionOverlayStats(overlay).activeLeafRemovalCount, 0);
+  assert.equal(refinementSessionOverlayStats(overlay).copiedNodeOwnerKeyCount, 0);
+  assert.deepEqual(overlay.activeOwnersByNodeKey(key), session.activeLeafIdsByNodeKey.get(key));
+});
+
+test("overlay active mutations reject malformed or late-throwing keys atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  let throwLate = false;
+  let nodeKeyCalls = 0;
+  const overlay = createRefinementSessionOverlay(session, {
+    nodeKey: (point) => {
+      if (throwLate && ++nodeKeyCalls === 4) throw new Error("late node key failure");
+      return exactNodeKey(point);
+    },
+    cellNodeIds: (cell) => cell.element
+  });
+  const malformed = cloneCell(overlay.mutableCell("e1"), "bad", 2);
+  malformed.element = [...malformed.element.slice(0, -1), 999];
+  overlay.setCell(malformed);
+  const beforeStorage = overlay.storage;
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  const beforeCollections = {
+    additions: beforeStorage.activeLeafAdditions,
+    removals: beforeStorage.activeLeafRemovals,
+    owners: beforeStorage.ownerOverridesByNodeKey
+  };
+
+  assert.throws(() => overlay.addActiveLeaf("bad"), /missing node 999/);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  assert.equal(overlay.storage.activeLeafAdditions, beforeCollections.additions);
+  assert.equal(overlay.storage.activeLeafRemovals, beforeCollections.removals);
+  assert.equal(overlay.storage.ownerOverridesByNodeKey, beforeCollections.owners);
+
+  throwLate = true;
+  assert.throws(() => overlay.removeActiveLeaf("e1"), /late node key failure/);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  assert.equal(overlay.storage.activeLeafAdditions, beforeCollections.additions);
+  assert.equal(overlay.storage.activeLeafRemovals, beforeCollections.removals);
+  assert.equal(overlay.storage.ownerOverridesByNodeKey, beforeCollections.owners);
+});
+
+test("forked overlays isolate parent sparse state and report copied base cells", () => {
+  const base = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const parent = createTestOverlay(base);
+  const parentE1 = parent.mutableCell("e1");
+  parentE1.children.push("parent-child");
+  const created = cloneCell(parentE1, "created", 2);
+  parent.setCell(created);
+  parent.appendNode([0.25, 0.25, 0.25]);
+  parent.removeActiveLeaf("e1");
+  const child = forkRefinementSessionOverlay(parent);
+  const childE2 = child.mutableCell("e2");
+  childE2.children.push("child-child");
+  child.mutableCell("e1").children.push("child-e1");
+  child.cell("created").children.push("child-created");
+  child.storage.appendedNodes[0][0] += 10;
+  child.addActiveLeaf("e1");
+  child.appendUndoCommand({ id: "child-command" });
+
+  assert.equal(refinementSessionOverlayStats(child).copiedBaseCellCount, 2);
+  assert.deepEqual(parent.mutableCell("e1").children, ["parent-child"]);
+  assert.deepEqual(base.cells.get("e1").children, []);
+  assert.deepEqual(parent.mutableCell("e2").children, []);
+  assert.deepEqual(parent.cell("created").children, ["parent-child"]);
+  assert.equal(parent.storage.appendedNodes[0][0], 0.25);
+  assert.equal(parent.hasActiveLeaf("e1"), false);
+  assert.notEqual(child.mutableCell("e1"), parent.mutableCell("e1"));
+  assert.notEqual(child.activeOwnersByNodeKey(exactNodeKey(base.nodes[0])), parent.activeOwnersByNodeKey(exactNodeKey(base.nodes[0])));
+  assert.notEqual(child.storage.appendedUndoCommands, parent.storage.appendedUndoCommands);
+});
+
+test("fork preserves the base-appended node boundary and isolated undo history", () => {
+  const base = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const parent = createTestOverlay(base);
+  parent.appendNode([0.25, 0.25, 0.25]);
+  parent.appendUndoCommand({ id: "parent-command" });
+  const child = forkRefinementSessionOverlay(parent);
+
+  assert.strictEqual(child.node(base.nodes.length), base.nodes.at(-1));
+  assert.deepEqual(child.node(base.nodes.length + 1), [0.25, 0.25, 0.25]);
+  assert.deepEqual([...child.undoCommands()], [...parent.undoCommands()]);
+
+  child.appendUndoCommand({ id: "child-command" });
+  assert.equal([...parent.undoCommands()].length, base.undoStack.length + 1);
+  assert.equal([...child.undoCommands()].length, base.undoStack.length + 2);
 });
