@@ -61,6 +61,18 @@ function sameCellIds(left: readonly CellId[], right: readonly CellId[]): boolean
   return left.length === right.length && left.every((cellId, index) => cellId === right[index]);
 }
 
+function canonicalOwnerIds(
+  ownerIds: readonly CellId[],
+  baseOwners: readonly CellId[]
+): CellId[] {
+  const remaining = new Set(ownerIds);
+  const canonical = baseOwners.filter((cellId) => remaining.delete(cellId));
+  for (const cellId of ownerIds) {
+    if (remaining.delete(cellId)) canonical.push(cellId);
+  }
+  return canonical;
+}
+
 function activeNodeKeys(
   baseSession: RefinementSession,
   storage: OverlayStorage,
@@ -223,7 +235,14 @@ export function createRefinementSessionOverlay(
         const owners = storage.ownerOverridesByNodeKey.get(key)
           ?? baseSession.activeLeafIdsByNodeKey.get(key)
           ?? [];
-        ownerUpdates.set(key, owners.includes(cellId) ? [...owners] : [...owners, cellId]);
+        const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
+        ownerUpdates.set(
+          key,
+          canonicalOwnerIds(
+            owners.includes(cellId) ? owners : [...owners, cellId],
+            baseOwners
+          )
+        );
       }
 
       if (baseSession.activeLeafIds.has(cellId)) {
@@ -231,7 +250,8 @@ export function createRefinementSessionOverlay(
       } else {
         storage.activeLeafAdditions.add(cellId);
       }
-      storage.sortedActiveLeafIdsDirty = true;
+      storage.sortedActiveLeafIdsDirty = storage.activeLeafAdditions.size > 0
+        || storage.activeLeafRemovals.size > 0;
       for (const [key, owners] of ownerUpdates) {
         const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
         if (sameCellIds(owners, baseOwners)) {
@@ -251,7 +271,14 @@ export function createRefinementSessionOverlay(
         const owners = storage.ownerOverridesByNodeKey.get(key)
           ?? baseSession.activeLeafIdsByNodeKey.get(key)
           ?? [];
-        ownerUpdates.set(key, owners.filter((ownerId) => ownerId !== cellId));
+        const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
+        ownerUpdates.set(
+          key,
+          canonicalOwnerIds(
+            owners.filter((ownerId) => ownerId !== cellId),
+            baseOwners
+          )
+        );
       }
 
       if (baseSession.activeLeafIds.has(cellId)) {
@@ -259,7 +286,8 @@ export function createRefinementSessionOverlay(
       } else {
         storage.activeLeafAdditions.delete(cellId);
       }
-      storage.sortedActiveLeafIdsDirty = true;
+      storage.sortedActiveLeafIdsDirty = storage.activeLeafAdditions.size > 0
+        || storage.activeLeafRemovals.size > 0;
       for (const [key, owners] of ownerUpdates) {
         const baseOwners = baseSession.activeLeafIdsByNodeKey.get(key) ?? [];
         if (sameCellIds(owners, baseOwners)) {

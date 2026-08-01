@@ -267,6 +267,49 @@ test("overlay active remove then add restores original membership without sparse
   assert.deepEqual(overlay.activeOwnersByNodeKey(key), session.activeLeafIdsByNodeKey.get(key));
 });
 
+test("overlay active cancellation restores shared base owner order and net dirty state", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+  const [key, baseOwners] = [...session.activeLeafIdsByNodeKey]
+    .find(([, owners]) => owners.length === 2);
+
+  assert.deepEqual(baseOwners, ["e1", "e2"]);
+  overlay.removeActiveLeaf("e1");
+  overlay.addActiveLeaf("e1");
+
+  assert.equal(refinementSessionOverlayStats(overlay).activeLeafAdditionCount, 0);
+  assert.equal(refinementSessionOverlayStats(overlay).activeLeafRemovalCount, 0);
+  assert.equal(refinementSessionOverlayStats(overlay).copiedNodeOwnerKeyCount, 0);
+  assert.equal(overlay.sortedActiveLeafIdsDirty, false);
+  assert.deepEqual(overlay.activeOwnersByNodeKey(key), baseOwners);
+});
+
+test("overlay idempotent and unknown active mutations leave sparse state untouched", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const before = {
+    additions: overlay.storage.activeLeafAdditions,
+    removals: overlay.storage.activeLeafRemovals,
+    owners: overlay.storage.ownerOverridesByNodeKey,
+    additionsContent: [...overlay.storage.activeLeafAdditions],
+    removalsContent: [...overlay.storage.activeLeafRemovals],
+    ownersContent: [...overlay.storage.ownerOverridesByNodeKey],
+    dirty: overlay.sortedActiveLeafIdsDirty
+  };
+
+  overlay.addActiveLeaf("e1");
+  assert.throws(() => overlay.addActiveLeaf("missing"), /unknown refinement cell missing/);
+  assert.throws(() => overlay.removeActiveLeaf("missing"), /unknown refinement cell missing/);
+
+  assert.equal(overlay.storage.activeLeafAdditions, before.additions);
+  assert.equal(overlay.storage.activeLeafRemovals, before.removals);
+  assert.equal(overlay.storage.ownerOverridesByNodeKey, before.owners);
+  assert.deepEqual([...overlay.storage.activeLeafAdditions], before.additionsContent);
+  assert.deepEqual([...overlay.storage.activeLeafRemovals], before.removalsContent);
+  assert.deepEqual([...overlay.storage.ownerOverridesByNodeKey], before.ownersContent);
+  assert.equal(overlay.sortedActiveLeafIdsDirty, before.dirty);
+});
+
 test("overlay active mutations reject malformed or late-throwing keys atomically", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   let throwLate = false;
@@ -304,7 +347,7 @@ test("overlay active mutations reject malformed or late-throwing keys atomically
 });
 
 test("forked overlays isolate parent sparse state and report copied base cells", () => {
-  const base = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const base = createRefinementSession(createHexUnitCubeMesh(10, 10, 10));
   const parent = createTestOverlay(base);
   const parentE1 = parent.mutableCell("e1");
   parentE1.children.push("parent-child");
@@ -322,6 +365,7 @@ test("forked overlays isolate parent sparse state and report copied base cells",
   child.appendUndoCommand({ id: "child-command" });
 
   assert.equal(refinementSessionOverlayStats(child).copiedBaseCellCount, 2);
+  assert.equal(base.cells.size, 1000);
   assert.deepEqual(parent.mutableCell("e1").children, ["parent-child"]);
   assert.deepEqual(base.cells.get("e1").children, []);
   assert.deepEqual(parent.mutableCell("e2").children, []);
