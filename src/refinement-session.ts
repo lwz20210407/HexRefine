@@ -3388,28 +3388,36 @@ function reverseRefinementHistoryCommands(
     }
   );
   for (const command of descendingCommands) {
+    assertHistoryStateCellsExist(
+      state,
+      command.activeCreatedCellIds ?? command.createdCellIds
+    );
+    assertHistoryStateCellsExist(state, command.reactivatedCellIds ?? []);
+    assertHistoryStateCellsExist(state, command.hiddenCellIds);
+  }
+  for (const command of descendingCommands) {
     for (
       const cellId of
         command.activeCreatedCellIds ?? command.createdCellIds
     ) {
-      const cell = state.mutableCell(cellId);
+      const cell = requiredStateMutableCell(state, cellId);
       cell.active = false;
       cell.hidden = true;
       state.removeActiveLeaf(cellId);
     }
     for (const cellId of command.reactivatedCellIds ?? []) {
-      const cell = state.mutableCell(cellId);
+      const cell = requiredStateMutableCell(state, cellId);
       cell.active = false;
       cell.hidden = true;
       state.removeActiveLeaf(cellId);
     }
     for (const cellId of command.hiddenCellIds) {
-      const cell = state.mutableCell(cellId);
+      const cell = requiredStateMutableCell(state, cellId);
       cell.active = true;
       cell.hidden = false;
       state.addActiveLeaf(cellId);
     }
-    assertActivatedRefinementSessionCellsHaveNoActiveRelations(
+    assertActivatedRefinementSessionCellsHaveNoActiveRelationsFromState(
       state,
       command.hiddenCellIds
     );
@@ -3417,7 +3425,17 @@ function reverseRefinementHistoryCommands(
 }
 
 export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
-  state: RefinementSessionStateReader,
+  session: Pick<RefinementSession, "cells">,
+  activatedCellIds: readonly CellId[]
+): void {
+  assertActivatedRefinementSessionCellsHaveNoActiveRelationsFromState(
+    { cell: (cellId) => session.cells.get(cellId) },
+    activatedCellIds
+  );
+}
+
+function assertActivatedRefinementSessionCellsHaveNoActiveRelationsFromState(
+  state: Pick<RefinementSessionStateReader, "cell">,
   activatedCellIds: readonly CellId[]
 ): void {
   const visitedAncestorIds = new Set<CellId>();
@@ -3472,7 +3490,7 @@ export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
 }
 
 function requiredHierarchyCell(
-  state: RefinementSessionStateReader,
+  state: Pick<RefinementSessionStateReader, "cell">,
   cellId: CellId
 ): RefinementSessionCell {
   const cell = state.cell(cellId);
@@ -3480,6 +3498,25 @@ function requiredHierarchyCell(
     throw new Error(`unknown refinement cell ${cellId}`);
   }
   return cell;
+}
+
+function requiredStateMutableCell(
+  state: RefinementSessionStateWriter,
+  cellId: CellId
+): MutableRefinementSessionCell {
+  if (state.cell(cellId) === undefined) {
+    throw new Error(`cell ${cellId} does not exist`);
+  }
+  return state.mutableCell(cellId);
+}
+
+function assertHistoryStateCellsExist(
+  state: RefinementSessionStateWriter,
+  cellIds: readonly CellId[]
+): void {
+  for (const cellId of cellIds) {
+    requiredStateMutableCell(state, cellId);
+  }
 }
 
 function buildActiveRefinementGeometryIndex(
@@ -5510,25 +5547,32 @@ function isTransitionSessionRole(role: RefinementSessionCellRole): boolean {
 
 export function undoRefinementSession(session: RefinementSession): RefinementSessionCommand | undefined {
   const mutable = mutableRefinementSession(session);
-  const command = mutable.undoStack.pop();
+  const command = mutable.undoStack.at(-1);
   if (!command) {
     return undefined;
   }
   const state = createDirectRefinementSessionState(session, exactActiveMergeKey);
-  for (const cellId of command.createdCellIds) {
-    const cell = state.mutableCell(cellId);
+  const createdCellIds = command.createdCellIds;
+  const reactivatedCellIds = command.reactivatedCellIds ?? [];
+  const hiddenCellIds = command.hiddenCellIds;
+  assertHistoryStateCellsExist(state, createdCellIds);
+  assertHistoryStateCellsExist(state, reactivatedCellIds);
+  assertHistoryStateCellsExist(state, hiddenCellIds);
+  mutable.undoStack.pop();
+  for (const cellId of createdCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = false;
     cell.hidden = true;
     state.removeActiveLeaf(cellId);
   }
-  for (const cellId of command.reactivatedCellIds ?? []) {
-    const cell = state.mutableCell(cellId);
+  for (const cellId of reactivatedCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = false;
     cell.hidden = true;
     state.removeActiveLeaf(cellId);
   }
-  for (const cellId of command.hiddenCellIds) {
-    const cell = state.mutableCell(cellId);
+  for (const cellId of hiddenCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = true;
     cell.hidden = false;
     state.addActiveLeaf(cellId);
@@ -5540,25 +5584,33 @@ export function undoRefinementSession(session: RefinementSession): RefinementSes
 
 export function redoRefinementSession(session: RefinementSession): RefinementSessionCommand | undefined {
   const mutable = mutableRefinementSession(session);
-  const command = mutable.redoStack.pop();
+  const command = mutable.redoStack.at(-1);
   if (!command) {
     return undefined;
   }
   const state = createDirectRefinementSessionState(session, exactActiveMergeKey);
-  for (const cellId of command.hiddenCellIds) {
-    const cell = state.mutableCell(cellId);
+  const hiddenCellIds = command.hiddenCellIds;
+  const activeCreatedCellIds =
+    command.activeCreatedCellIds ?? command.createdCellIds;
+  const reactivatedCellIds = command.reactivatedCellIds ?? [];
+  assertHistoryStateCellsExist(state, hiddenCellIds);
+  assertHistoryStateCellsExist(state, activeCreatedCellIds);
+  assertHistoryStateCellsExist(state, reactivatedCellIds);
+  mutable.redoStack.pop();
+  for (const cellId of hiddenCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = false;
     cell.hidden = true;
     state.removeActiveLeaf(cellId);
   }
-  for (const cellId of command.activeCreatedCellIds ?? command.createdCellIds) {
-    const cell = state.mutableCell(cellId);
+  for (const cellId of activeCreatedCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = true;
     cell.hidden = false;
     state.addActiveLeaf(cellId);
   }
-  for (const cellId of command.reactivatedCellIds ?? []) {
-    const cell = state.mutableCell(cellId);
+  for (const cellId of reactivatedCellIds) {
+    const cell = requiredStateMutableCell(state, cellId);
     cell.active = true;
     cell.hidden = false;
     state.addActiveLeaf(cellId);

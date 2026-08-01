@@ -63,10 +63,41 @@ test("history reversal mutates through explicit session state", () => {
   assert.equal(depth, 0);
 
   const body = source.slice(bodyStart + 1, bodyEnd - 1);
-  assert.match(body, /state\.mutableCell\(/);
   assert.match(body, /state\.addActiveLeaf\(/);
   assert.match(body, /state\.removeActiveLeaf\(/);
+  assert.match(body, /requiredStateMutableCell\(state, cellId\)/);
   assert.doesNotMatch(body, /requiredCell\(session,/);
+  assert.match(
+    source,
+    /function requiredStateMutableCell\([\s\S]*?state\.cell\(cellId\)[\s\S]*?state\.mutableCell\(cellId\)/
+  );
+});
+
+test("malformed history undo and redo preserve missing-cell errors atomically", () => {
+  for (const operation of ["undo", "redo"]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const command = refineSessionCell(session, "e1", refineHexTo27Hex);
+    if (operation === "redo") {
+      assert.equal(undoRefinementSession(session)?.id, command.id);
+      session.redoStack[0] = Object.freeze({
+        ...command,
+        createdCellIds: Object.freeze(["missing"])
+      });
+    } else {
+      session.undoStack[0] = Object.freeze({
+        ...command,
+        createdCellIds: Object.freeze(["missing"])
+      });
+    }
+    const before = structuredClone(session);
+
+    const error = captureError(() => operation === "undo"
+      ? undoRefinementSession(session)
+      : redoRefinementSession(session));
+
+    assert.equal(error.message, "cell missing does not exist", operation);
+    assert.deepEqual(session, before, operation);
+  }
 });
 
 const {
