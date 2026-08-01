@@ -41,6 +41,34 @@ import {
 import * as twoToOneModule from "../dist/two-to-one.js";
 import * as twoToOnePlannerModule from "../dist/two-to-one-planner.js";
 import * as twoToOneSweepModule from "../dist/two-to-one-sweep.js";
+
+test("history reversal mutates through explicit session state", () => {
+  const source = readFileSync(
+    new URL("../src/refinement-session.ts", import.meta.url),
+    "utf8"
+  );
+  const declaration = "function reverseRefinementHistoryCommands(";
+  const start = source.indexOf(declaration);
+  assert.notEqual(start, -1);
+  const bodyStart = source.indexOf("{", start);
+  assert.notEqual(bodyStart, -1);
+  let depth = 1;
+  let bodyEnd = bodyStart + 1;
+  while (depth > 0 && bodyEnd < source.length) {
+    const character = source[bodyEnd];
+    if (character === "{") depth += 1;
+    if (character === "}") depth -= 1;
+    bodyEnd += 1;
+  }
+  assert.equal(depth, 0);
+
+  const body = source.slice(bodyStart + 1, bodyEnd - 1);
+  assert.match(body, /state\.mutableCell\(/);
+  assert.match(body, /state\.addActiveLeaf\(/);
+  assert.match(body, /state\.removeActiveLeaf\(/);
+  assert.doesNotMatch(body, /requiredCell\(session,/);
+});
+
 const {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality,

@@ -78,7 +78,12 @@ import {
   RefinementCellGeometryMatchError,
   snapshotRefinementCellGeometry
 } from "./refinement-cell-geometry.js";
-import type { MutableRefinementSessionCell } from "./refinement-session-state-internal.js";
+import { createDirectRefinementSessionState } from "./refinement-session-state-internal.js";
+import type {
+  MutableRefinementSessionCell,
+  RefinementSessionStateReader,
+  RefinementSessionStateWriter
+} from "./refinement-session-state-internal.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -1466,6 +1471,10 @@ export function refineSessionCells(
   factory: LocalRefinementFactory
 ): RefinementSessionCommand {
   const mutable = mutableRefinementSession(session);
+  const state = createDirectRefinementSessionState(
+    session,
+    exactActiveMergeKey
+  );
   const validation = validateRefinementSessionSelection(session, cellIds);
   if (!validation.ok) {
     throw new Error(validation.errors.join("; "));
@@ -1535,13 +1544,13 @@ export function refineSessionCells(
         child.sourceElementId = parent.sourceElementId;
       }
       mutable.cells.set(childId, child);
-      addActiveLeafCellId(session, childId);
+      state.addActiveLeaf(childId);
     });
 
     parent.children.push(...parentCreatedCellIds);
     parent.active = false;
     parent.hidden = true;
-    removeActiveLeafCellId(session, parentId);
+    state.removeActiveLeaf(parentId);
     hiddenCellIds.push(parentId);
   }
 
@@ -1801,6 +1810,10 @@ function applyRefinementSessionPatchPlan(
 ): RefinementSessionCommand {
   assertRefinementSessionPatchPlanParents(session, plan);
   const mutable = mutableRefinementSession(session);
+  const state = createDirectRefinementSessionState(
+    session,
+    exactActiveMergeKey
+  );
   const {
     planningActive: active,
     replacements,
@@ -1841,7 +1854,7 @@ function applyRefinementSessionPatchPlan(
         child.sourceElementId = parent.sourceElementId;
       }
       mutable.cells.set(childId, child);
-      addActiveLeafCellId(session, childId);
+      state.addActiveLeaf(childId);
     });
     parent.children.push(...parentCreatedCellIds);
   }
@@ -1850,7 +1863,7 @@ function applyRefinementSessionPatchPlan(
     const parent = requiredCell(session, parentId);
     parent.active = false;
     parent.hidden = true;
-    removeActiveLeafCellId(session, parentId);
+    state.removeActiveLeaf(parentId);
   }
 
   const command = freezeRefinementSessionCommand({
@@ -1982,6 +1995,10 @@ function refineSessionPatchWithRebuiltTransitionShell(
     );
   }
   const working = cloneRefinementSession(session);
+  const workingState = createDirectRefinementSessionState(
+    working,
+    exactActiveMergeKey
+  );
   const validation = validateRefinementSessionSelection(working, [...cellIds]);
   if (!validation.ok || validation.level === undefined || validation.level < 1) {
     throw new Error(validation.errors.join("; ") || "transition-shell rebuilding requires a refined selection");
@@ -2099,13 +2116,13 @@ function refineSessionPatchWithRebuiltTransitionShell(
     const cell = requiredCell(working, cellId);
     cell.active = false;
     cell.hidden = true;
-    removeActiveLeafCellId(working, cellId);
+    workingState.removeActiveLeaf(cellId);
   }
   for (const parentId of originalSupportParentIds) {
     const parent = requiredCell(working, parentId);
     parent.active = true;
     parent.hidden = false;
-    addActiveLeafCellId(working, parentId);
+    workingState.addActiveLeaf(parentId);
   }
   const authorizedCompletionParentIds = collectAuthorizedCompletionParentIds(
     working,
@@ -2331,6 +2348,10 @@ export function planRefinementSessionHistoryTransaction(
   );
   const preliminaryCollisionWorking =
     cloneRefinementSession(session);
+  const preliminaryCollisionState = createDirectRefinementSessionState(
+    preliminaryCollisionWorking,
+    exactActiveMergeKey
+  );
   const preliminaryDownstreamCommands =
     preliminaryHistoryClosure.downstreamCommandIds.map(
       (commandId) => {
@@ -2344,7 +2365,7 @@ export function planRefinementSessionHistoryTransaction(
       }
     );
   reverseRefinementHistoryCommands(
-    preliminaryCollisionWorking,
+    preliminaryCollisionState,
     preliminaryDownstreamCommands,
     historyIndex.commandOrdinalById
   );
@@ -2380,6 +2401,10 @@ export function planRefinementSessionHistoryTransaction(
   );
 
   const working = cloneRefinementSession(session);
+  const workingState = createDirectRefinementSessionState(
+    working,
+    exactActiveMergeKey
+  );
   const originalUndoStack = working.undoStack.slice();
   const originalActiveLeafIds = new Set(session.activeLeafIds);
   const originalCellIds = new Set(session.cells.keys());
@@ -2402,7 +2427,7 @@ export function planRefinementSessionHistoryTransaction(
     historyClosure.downstreamCommandIds
   );
   reverseRefinementHistoryCommands(
-    working,
+    workingState,
     closureCommands.filter((command) =>
       downstreamCommandIdSet.has(command.id)
     ),
@@ -2426,7 +2451,7 @@ export function planRefinementSessionHistoryTransaction(
     historyClosure.supportCommandIds
   );
   reverseRefinementHistoryCommands(
-    working,
+    workingState,
     closureCommands.filter((command) =>
       supportCommandIdSet.has(command.id)
     ),
@@ -2525,6 +2550,10 @@ export function planRefinementSessionHistoryTransaction(
   );
 
   const currentPlanningWorking = cloneRefinementSession(working);
+  const currentPlanningState = createDirectRefinementSessionState(
+    currentPlanningWorking,
+    exactActiveMergeKey
+  );
   const preservedCommands =
     historyClosure.preservedCommandIds.map((commandId) => {
       const command = historyIndex.commandById.get(commandId);
@@ -2536,7 +2565,7 @@ export function planRefinementSessionHistoryTransaction(
       return command;
     });
   reverseRefinementHistoryCommands(
-    currentPlanningWorking,
+    currentPlanningState,
     preservedCommands,
     historyIndex.commandOrdinalById
   );
@@ -3339,7 +3368,7 @@ function collectRefinementCellDescendants(
 }
 
 function reverseRefinementHistoryCommands(
-  session: RefinementSession,
+  state: RefinementSessionStateWriter,
   commands: readonly RefinementSessionCommand[],
   commandOrdinalById: ReadonlyMap<string, number>
 ): void {
@@ -3363,39 +3392,39 @@ function reverseRefinementHistoryCommands(
       const cellId of
         command.activeCreatedCellIds ?? command.createdCellIds
     ) {
-      const cell = requiredCell(session, cellId);
+      const cell = state.mutableCell(cellId);
       cell.active = false;
       cell.hidden = true;
-      removeActiveLeafCellId(session, cellId);
+      state.removeActiveLeaf(cellId);
     }
     for (const cellId of command.reactivatedCellIds ?? []) {
-      const cell = requiredCell(session, cellId);
+      const cell = state.mutableCell(cellId);
       cell.active = false;
       cell.hidden = true;
-      removeActiveLeafCellId(session, cellId);
+      state.removeActiveLeaf(cellId);
     }
     for (const cellId of command.hiddenCellIds) {
-      const cell = requiredCell(session, cellId);
+      const cell = state.mutableCell(cellId);
       cell.active = true;
       cell.hidden = false;
-      addActiveLeafCellId(session, cellId);
+      state.addActiveLeaf(cellId);
     }
     assertActivatedRefinementSessionCellsHaveNoActiveRelations(
-      session,
+      state,
       command.hiddenCellIds
     );
   }
 }
 
 export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
-  session: Pick<RefinementSession, "cells">,
+  state: RefinementSessionStateReader,
   activatedCellIds: readonly CellId[]
 ): void {
   const visitedAncestorIds = new Set<CellId>();
   const visitedDescendantIds = new Set<CellId>();
   for (const activatedCellId of new Set(activatedCellIds)) {
     const activatedCell = requiredHierarchyCell(
-      session,
+      state,
       activatedCellId
     );
     if (!activatedCell.active || activatedCell.hidden) {
@@ -3410,7 +3439,7 @@ export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
       if (visitedAncestorIds.has(ancestorId)) {
         break;
       }
-      const ancestor = requiredHierarchyCell(session, ancestorId);
+      const ancestor = requiredHierarchyCell(state, ancestorId);
       if (ancestor.active && !ancestor.hidden) {
         throw new Error(
           `active cell ${ancestorId} has active descendant ${descendantId}`
@@ -3429,7 +3458,7 @@ export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
       }
       visitedDescendantIds.add(descendantId);
       const descendant = requiredHierarchyCell(
-        session,
+        state,
         descendantId
       );
       if (descendant.active && !descendant.hidden) {
@@ -3443,10 +3472,10 @@ export function assertActivatedRefinementSessionCellsHaveNoActiveRelations(
 }
 
 function requiredHierarchyCell(
-  session: Pick<RefinementSession, "cells">,
+  state: RefinementSessionStateReader,
   cellId: CellId
 ): RefinementSessionCell {
-  const cell = session.cells.get(cellId);
+  const cell = state.cell(cellId);
   if (cell === undefined) {
     throw new Error(`unknown refinement cell ${cellId}`);
   }
@@ -5485,23 +5514,24 @@ export function undoRefinementSession(session: RefinementSession): RefinementSes
   if (!command) {
     return undefined;
   }
+  const state = createDirectRefinementSessionState(session, exactActiveMergeKey);
   for (const cellId of command.createdCellIds) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = false;
     cell.hidden = true;
-    removeActiveLeafCellId(session, cellId);
+    state.removeActiveLeaf(cellId);
   }
   for (const cellId of command.reactivatedCellIds ?? []) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = false;
     cell.hidden = true;
-    removeActiveLeafCellId(session, cellId);
+    state.removeActiveLeaf(cellId);
   }
   for (const cellId of command.hiddenCellIds) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = true;
     cell.hidden = false;
-    addActiveLeafCellId(session, cellId);
+    state.addActiveLeaf(cellId);
   }
   mutable.redoStack.push(command);
   mutable.revision += 1;
@@ -5514,23 +5544,24 @@ export function redoRefinementSession(session: RefinementSession): RefinementSes
   if (!command) {
     return undefined;
   }
+  const state = createDirectRefinementSessionState(session, exactActiveMergeKey);
   for (const cellId of command.hiddenCellIds) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = false;
     cell.hidden = true;
-    removeActiveLeafCellId(session, cellId);
+    state.removeActiveLeaf(cellId);
   }
   for (const cellId of command.activeCreatedCellIds ?? command.createdCellIds) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = true;
     cell.hidden = false;
-    addActiveLeafCellId(session, cellId);
+    state.addActiveLeaf(cellId);
   }
   for (const cellId of command.reactivatedCellIds ?? []) {
-    const cell = requiredCell(session, cellId);
+    const cell = state.mutableCell(cellId);
     cell.active = true;
     cell.hidden = false;
-    addActiveLeafCellId(session, cellId);
+    state.addActiveLeaf(cellId);
   }
   mutable.undoStack.push(command);
   mutable.revision += 1;
@@ -5591,52 +5622,6 @@ function requiredCell(
     throw new Error(`cell ${cellId} does not exist`);
   }
   return mutableRefinementSessionCell(cell);
-}
-
-function addActiveLeafCellId(session: RefinementSession, cellId: CellId): void {
-  const mutable = mutableRefinementSession(session);
-  if (session.activeLeafIds.has(cellId)) {
-    return;
-  }
-  const cell = requiredCell(session, cellId);
-  mutable.activeLeafIds.add(cellId);
-  mutable.sortedActiveLeafIdsDirty = true;
-  for (const sessionNodeId of cell.element) {
-    const point = session.nodes[sessionNodeId - 1];
-    if (!point) {
-      throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
-    }
-    const key = exactActiveMergeKey(point);
-    const ownerIds = mutable.activeLeafIdsByNodeKey.get(key) ?? [];
-    ownerIds.push(cellId);
-    mutable.activeLeafIdsByNodeKey.set(key, ownerIds);
-  }
-}
-
-function removeActiveLeafCellId(session: RefinementSession, cellId: CellId): void {
-  const mutable = mutableRefinementSession(session);
-  const cell = requiredCell(session, cellId);
-  if (!mutable.activeLeafIds.delete(cellId)) {
-    return;
-  }
-  mutable.sortedActiveLeafIdsDirty = true;
-  for (const sessionNodeId of cell.element) {
-    const point = session.nodes[sessionNodeId - 1];
-    if (!point) {
-      throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
-    }
-    const key = exactActiveMergeKey(point);
-    const ownerIds = mutable.activeLeafIdsByNodeKey.get(key);
-    if (!ownerIds) {
-      continue;
-    }
-    const nextOwnerIds = ownerIds.filter((ownerId) => ownerId !== cellId);
-    if (nextOwnerIds.length === 0) {
-      mutable.activeLeafIdsByNodeKey.delete(key);
-    } else {
-      mutable.activeLeafIdsByNodeKey.set(key, nextOwnerIds);
-    }
-  }
 }
 
 function sortedActiveLeafIds(session: RefinementSession): readonly CellId[] {
