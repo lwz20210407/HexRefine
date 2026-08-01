@@ -69,8 +69,32 @@ test("history reversal mutates through explicit session state", () => {
   assert.doesNotMatch(body, /requiredCell\(session,/);
   assert.match(
     source,
-    /function requiredStateMutableCell\([\s\S]*?state\.cell\(cellId\)[\s\S]*?state\.mutableCell\(cellId\)/
+    /function requiredStateMutableCell\([\s\S]*?requiredStateCell\(state, cellId\)[\s\S]*?state\.mutableCell\(cellId\)/
   );
+  assert.match(
+    source,
+    /function requiredStateCell\([\s\S]*?state\.cell\(cellId\)/
+  );
+  const preflightDeclaration = "function assertHistoryStateCellsExist(";
+  const preflightStart = source.indexOf(preflightDeclaration);
+  assert.notEqual(preflightStart, -1);
+  const preflightBodyStart = source.indexOf("{", preflightStart);
+  assert.notEqual(preflightBodyStart, -1);
+  let preflightDepth = 1;
+  let preflightBodyEnd = preflightBodyStart + 1;
+  while (preflightDepth > 0 && preflightBodyEnd < source.length) {
+    const character = source[preflightBodyEnd];
+    if (character === "{") preflightDepth += 1;
+    if (character === "}") preflightDepth -= 1;
+    preflightBodyEnd += 1;
+  }
+  assert.equal(preflightDepth, 0);
+  const preflightBody = source.slice(
+    preflightBodyStart + 1,
+    preflightBodyEnd - 1
+  );
+  assert.match(preflightBody, /requiredStateCell\(state, cellId\)/);
+  assert.doesNotMatch(preflightBody, /mutableCell\(/);
 });
 
 test("malformed history undo and redo preserve missing-cell errors atomically", () => {
@@ -81,12 +105,18 @@ test("malformed history undo and redo preserve missing-cell errors atomically", 
       assert.equal(undoRefinementSession(session)?.id, command.id);
       session.redoStack[0] = Object.freeze({
         ...command,
-        createdCellIds: Object.freeze(["missing"])
+        createdCellIds: Object.freeze([
+          command.createdCellIds[0],
+          "missing"
+        ])
       });
     } else {
       session.undoStack[0] = Object.freeze({
         ...command,
-        createdCellIds: Object.freeze(["missing"])
+        createdCellIds: Object.freeze([
+          command.createdCellIds[0],
+          "missing"
+        ])
       });
     }
     const before = structuredClone(session);

@@ -3500,22 +3500,31 @@ function requiredHierarchyCell(
   return cell;
 }
 
+function requiredStateCell(
+  state: Pick<RefinementSessionStateReader, "cell">,
+  cellId: CellId
+): RefinementSessionCell {
+  const cell = state.cell(cellId);
+  if (cell === undefined) {
+    throw new Error(`cell ${cellId} does not exist`);
+  }
+  return cell;
+}
+
 function requiredStateMutableCell(
   state: RefinementSessionStateWriter,
   cellId: CellId
 ): MutableRefinementSessionCell {
-  if (state.cell(cellId) === undefined) {
-    throw new Error(`cell ${cellId} does not exist`);
-  }
+  requiredStateCell(state, cellId);
   return state.mutableCell(cellId);
 }
 
 function assertHistoryStateCellsExist(
-  state: RefinementSessionStateWriter,
+  state: Pick<RefinementSessionStateReader, "cell">,
   cellIds: readonly CellId[]
 ): void {
   for (const cellId of cellIds) {
-    requiredStateMutableCell(state, cellId);
+    requiredStateCell(state, cellId);
   }
 }
 
