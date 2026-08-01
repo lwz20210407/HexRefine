@@ -78,18 +78,21 @@ function activeNodeKeys(
   storage: OverlayStorage,
   options: RefinementSessionOverlayOptions,
   cell: RefinementSessionCell
-): string[] {
+): { keys: string[]; referencedBaseNodeIds: Set<number> } {
   const keys = new Set<string>();
+  const referencedBaseNodeIds = new Set<number>();
   for (const nodeId of options.cellNodeIds(cell)) {
-    const point = nodeId >= 1 && nodeId <= baseSession.nodes.length
+    const isBaseNode = nodeId >= 1 && nodeId <= baseSession.nodes.length;
+    const point = isBaseNode
       ? baseSession.nodes[nodeId - 1]
       : storage.appendedNodes[nodeId - baseSession.nodes.length - 1];
     if (point === undefined) {
       throw new Error(`active cell ${cell.id} references missing node ${nodeId}`);
     }
+    if (isBaseNode) referencedBaseNodeIds.add(nodeId);
     keys.add(options.nodeKey(point));
   }
-  return [...keys];
+  return { keys: [...keys], referencedBaseNodeIds };
 }
 
 function requiredCell(
@@ -124,6 +127,22 @@ export function createRefinementSessionOverlay(
     nextCellOrdinal: baseSession.nextCellOrdinal ?? baseSession.cells.size + 1,
     referencedBaseCellIds: new Set(),
     referencedBaseNodeIds: new Set()
+  };
+  const hasActiveLeaf = (cellId: CellId): boolean => {
+    if (storage.activeLeafAdditions.has(cellId)) return true;
+    if (storage.activeLeafRemovals.has(cellId)) return false;
+    return baseSession.activeLeafIds.has(cellId);
+  };
+  const recordActiveReferences = (
+    cellId: CellId,
+    referencedBaseNodeIds: ReadonlySet<number>
+  ): void => {
+    if (baseSession.cells.has(cellId)) {
+      storage.referencedBaseCellIds.add(cellId);
+    }
+    for (const nodeId of referencedBaseNodeIds) {
+      storage.referencedBaseNodeIds.add(nodeId);
+    }
   };
 
   return {
@@ -203,15 +222,7 @@ export function createRefinementSessionOverlay(
       }
       storage.createdCells.set(cell.id, cell);
     },
-    hasActiveLeaf(cellId) {
-      if (storage.activeLeafAdditions.has(cellId)) {
-        return true;
-      }
-      if (storage.activeLeafRemovals.has(cellId)) {
-        return false;
-      }
-      return baseSession.activeLeafIds.has(cellId);
-    },
+    hasActiveLeaf,
     *activeLeafIds() {
       for (const cellId of baseSession.activeLeafIds) {
         if (!storage.activeLeafRemovals.has(cellId)) {
@@ -227,11 +238,11 @@ export function createRefinementSessionOverlay(
     },
     addActiveLeaf(cellId) {
       const cell = requiredCell(baseSession, storage, cellId);
-      const wasActive = this.hasActiveLeaf(cellId);
+      const wasActive = hasActiveLeaf(cellId);
       if (wasActive) return;
-      const keys = activeNodeKeys(baseSession, storage, options, cell);
+      const validation = activeNodeKeys(baseSession, storage, options, cell);
       const ownerUpdates = new Map<string, CellId[]>();
-      for (const key of keys) {
+      for (const key of validation.keys) {
         const owners = storage.ownerOverridesByNodeKey.get(key)
           ?? baseSession.activeLeafIdsByNodeKey.get(key)
           ?? [];
@@ -245,6 +256,7 @@ export function createRefinementSessionOverlay(
         );
       }
 
+      recordActiveReferences(cellId, validation.referencedBaseNodeIds);
       if (baseSession.activeLeafIds.has(cellId)) {
         storage.activeLeafRemovals.delete(cellId);
       } else {
@@ -263,11 +275,11 @@ export function createRefinementSessionOverlay(
     },
     removeActiveLeaf(cellId) {
       const cell = requiredCell(baseSession, storage, cellId);
-      const wasActive = this.hasActiveLeaf(cellId);
+      const wasActive = hasActiveLeaf(cellId);
       if (!wasActive) return;
-      const keys = activeNodeKeys(baseSession, storage, options, cell);
+      const validation = activeNodeKeys(baseSession, storage, options, cell);
       const ownerUpdates = new Map<string, CellId[]>();
-      for (const key of keys) {
+      for (const key of validation.keys) {
         const owners = storage.ownerOverridesByNodeKey.get(key)
           ?? baseSession.activeLeafIdsByNodeKey.get(key)
           ?? [];
@@ -281,6 +293,7 @@ export function createRefinementSessionOverlay(
         );
       }
 
+      recordActiveReferences(cellId, validation.referencedBaseNodeIds);
       if (baseSession.activeLeafIds.has(cellId)) {
         storage.activeLeafRemovals.add(cellId);
       } else {
