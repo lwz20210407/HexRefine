@@ -382,6 +382,26 @@ export function buildActiveMeshWithMap(
   return buildActiveMeshForCellIdsWithMap(session, sortedActiveLeafIds(session), options);
 }
 
+/** @internal Build an active mesh from a sparse session-state reader. */
+export function buildActiveMeshWithMapFromSessionStateInternal(
+  state: RefinementSessionStateReader,
+  options: BuildActiveMeshOptions = {}
+): ActiveMeshBuildResult {
+  assertValidSessionFaceTolerance(options.mergeTolerance);
+  return buildActiveMeshForSessionStateCellIdsWithMap(
+    state,
+    sortedActiveLeafIdsFromSessionState(state),
+    options,
+    undefined,
+    (result, mergeTolerance, measuredResolution) =>
+      finalizeActiveMeshBuildFromSessionState(
+        result,
+        mergeTolerance,
+        measuredResolution
+      )
+  );
+}
+
 function buildActiveMeshForCellIdsWithMap(
   session: RefinementSession,
   activeIds: readonly CellId[],
@@ -390,6 +410,39 @@ function buildActiveMeshForCellIdsWithMap(
   includeProvenance = true,
   includeGeometryResolution = true
 ): ActiveMeshBuildResult {
+  const state = createDirectRefinementSessionState(session, exactActiveMergeKey);
+  return buildActiveMeshForSessionStateCellIdsWithMap(
+    state,
+    activeIds,
+    options,
+    resolveDefaultMergeTolerance,
+    (result, mergeTolerance, measuredResolution) => finalizeActiveMeshBuild(
+      result,
+      session,
+      activeIds,
+      mergeTolerance,
+      measuredResolution,
+      includeProvenance,
+      includeGeometryResolution
+    )
+  );
+}
+
+type ActiveMeshBuildFinalizer = (
+  result: ActiveMeshBuildResult,
+  mergeTolerance?: number,
+  measuredResolution?: ActiveMeshGeometryResolution
+) => ActiveMeshBuildResult;
+
+function buildActiveMeshForSessionStateCellIdsWithMap(
+  state: RefinementSessionStateReader,
+  activeIds: readonly CellId[],
+  options: BuildActiveMeshOptions,
+  resolveDefaultMergeTolerance: (
+    (resolution: ActiveMeshGeometryResolution) => number
+  ) | undefined,
+  finalize: ActiveMeshBuildFinalizer
+): ActiveMeshBuildResult {
   const includeSessionNodeIdByNodeId = options.includeSessionNodeIdByNodeId ?? true;
   const includeSessionNodeIdsByNodeId = options.includeSessionNodeIdsByNodeId ?? true;
   const includeCellIdByElementId = options.includeCellIdByElementId ?? true;
@@ -397,15 +450,14 @@ function buildActiveMeshForCellIdsWithMap(
   const includeReverseNodeMaps = includeSessionNodeIdByNodeId || includeSessionNodeIdsByNodeId;
   if (options.mergeNodes && options.mergeTolerance !== undefined) {
     return buildMergedActiveMeshDirect(
-      session,
+      state,
       activeIds,
       options,
       includeSessionNodeIdByNodeId,
       includeSessionNodeIdsByNodeId,
       includeCellIdByElementId,
       includeElementIdByCellId,
-      includeProvenance,
-      includeGeometryResolution
+      finalize
     );
   }
   const compactNodeIdBySessionNodeId = new Map<number, number>();
@@ -417,10 +469,7 @@ function buildActiveMeshForCellIdsWithMap(
     if (mapped !== undefined) {
       return mapped;
     }
-    const node = session.nodes[sessionNodeId - 1];
-    if (!node) {
-      throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
-    }
+    const node = activeSessionStateNode(state, sessionNodeId, cellId);
     const nextNodeId = nodes.length + 1;
     compactNodeIdBySessionNodeId.set(sessionNodeId, nextNodeId);
     sessionNodeIdByCompactNodeId?.set(nextNodeId, sessionNodeId);
@@ -432,10 +481,10 @@ function buildActiveMeshForCellIdsWithMap(
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
   const cellIdsByElementIdArray: CellId[] = new Array(activeIds.length + 1);
-  const elementIdByCellOrdinalArray = new Int32Array(Math.max(session.nextCellOrdinal + 1, session.cells.size + 1));
+  const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
   const elements = activeIds.map((cellId, index) => {
     const elementId = index + 1;
-    const cell = requiredCell(session, cellId);
+    const cell = requiredSessionStateCell(state, cellId);
     if (includeCellIdByElementId) {
       cellIdByElementId.set(elementId, cellId);
     }
@@ -447,7 +496,7 @@ function buildActiveMeshForCellIdsWithMap(
     return cell.element.map((nodeId) => compactNodeId(nodeId, cellId));
   });
 
-  const mesh: Mesh = { kind: session.kind, nodes, elements };
+  const mesh: Mesh = { kind: state.kind, nodes, elements };
   if (!options.mergeNodes) {
     const result: ActiveMeshBuildResult = {
       mesh,
@@ -462,14 +511,10 @@ function buildActiveMeshForCellIdsWithMap(
     if (options.includeElementIdsByNodeId) {
       setElementIdsByNodeId(result, buildElementIdsByNodeId(mesh.elements));
     }
-    return finalizeActiveMeshBuild(
+    return finalize(
       result,
-      session,
-      activeIds,
       undefined,
-      undefined,
-      includeProvenance,
-      includeGeometryResolution
+      undefined
     );
   }
 
@@ -524,35 +569,47 @@ function buildActiveMeshForCellIdsWithMap(
   if (options.includeElementIdsByNodeId) {
     setElementIdsByNodeId(result, buildElementIdsByNodeId(merged.mesh.elements));
   }
-  return finalizeActiveMeshBuild(
+  return finalize(
     result,
-    session,
-    activeIds,
     mergeTolerance,
-    measuredResolution,
-    includeProvenance,
-    includeGeometryResolution
+    measuredResolution
   );
 }
 
 function buildMergedActiveMeshDirect(
-  session: RefinementSession,
+  state: RefinementSessionStateReader,
   activeIds: readonly CellId[],
   options: BuildActiveMeshOptions,
   includeSessionNodeIdByNodeId: boolean,
   includeSessionNodeIdsByNodeId: boolean,
   includeCellIdByElementId: boolean,
   includeElementIdByCellId: boolean,
-  includeProvenance: boolean,
-  includeGeometryResolution: boolean
+  finalize: ActiveMeshBuildFinalizer
 ): ActiveMeshBuildResult {
   const tolerance = options.mergeTolerance!;
-  const sessionNodes = session.nodes;
+  const auditNodes: Point[] = [];
+  const auditNodeIdBySessionNodeId = new Map<number, number>();
+  const activePointBySessionNodeId = new Map<number, Point>();
+  const auditElements = activeIds.map((cellId) => {
+    const cell = requiredSessionStateCell(state, cellId);
+    return cell.element.map((sessionNodeId) => {
+      const existing = auditNodeIdBySessionNodeId.get(sessionNodeId);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const point = activeSessionStateNode(state, sessionNodeId, cellId);
+      const auditNodeId = auditNodes.length + 1;
+      auditNodes.push(point);
+      auditNodeIdBySessionNodeId.set(sessionNodeId, auditNodeId);
+      activePointBySessionNodeId.set(sessionNodeId, point);
+      return auditNodeId;
+    });
+  });
   assertMergeToleranceBelowFinalEdgeLimit(
     {
-      kind: session.kind,
-      nodes: sessionNodes,
-      elements: activeIds.map((cellId) => [...requiredCell(session, cellId).element])
+      kind: state.kind,
+      nodes: auditNodes,
+      elements: auditElements
     },
     tolerance
   );
@@ -561,19 +618,18 @@ function buildMergedActiveMeshDirect(
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
   const cellIdsByElementIdArray: CellId[] = new Array(activeIds.length + 1);
-  const elementIdByCellOrdinalArray = new Int32Array(Math.max(session.nextCellOrdinal + 1, session.cells.size + 1));
-  const nodeIdBySessionNodeIdArray = new Int32Array(sessionNodes.length + 1);
-  const touchedSessionNodeIds: number[] = [];
+  const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
+  const nodeIdBySessionNodeId = new Map<number, number>();
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
   const sessionNodeIdsByNodeId = includeSessionNodeIdsByNodeId ? new Map<number, number[]>() : undefined;
   const exactNodeIndexByKey = tolerance === 0 ? new Map<string, number>() : undefined;
   const buckets = tolerance === 0 ? undefined : new Map<string, number[]>();
-  const bucketLayout = createMergeBucketLayout(sessionNodes, tolerance);
+  const bucketLayout = createMergeBucketLayout(auditNodes, tolerance);
 
   for (let index = 0; index < activeIds.length; index += 1) {
     const cellId = activeIds[index]!;
     const elementId = index + 1;
-    const cell = requiredCell(session, cellId);
+    const cell = requiredSessionStateCell(state, cellId);
     if (includeCellIdByElementId) {
       cellIdByElementId.set(elementId, cellId);
     }
@@ -586,12 +642,10 @@ function buildMergedActiveMeshDirect(
     const mappedElement = new Array<number>(sourceElement.length);
     for (let nodeOffset = 0; nodeOffset < sourceElement.length; nodeOffset += 1) {
       const sessionNodeId = sourceElement[nodeOffset]!;
-      let nodeId = nodeIdBySessionNodeIdArray[sessionNodeId];
-      if (nodeId === 0) {
-        const point = sessionNodes[sessionNodeId - 1];
-        if (!point) {
-          throw new Error(`active cell ${cellId} references missing node ${sessionNodeId}`);
-        }
+      let nodeId = nodeIdBySessionNodeId.get(sessionNodeId);
+      if (nodeId === undefined) {
+        const point = activePointBySessionNodeId.get(sessionNodeId)
+          ?? activeSessionStateNode(state, sessionNodeId, cellId);
         let nodeIndex: number | undefined;
         if (exactNodeIndexByKey) {
           const exactKey = exactActiveMergeKey(point);
@@ -629,8 +683,7 @@ function buildMergedActiveMeshDirect(
           nodes.push([...point]);
         }
         nodeId = nodeIndex! + 1;
-        nodeIdBySessionNodeIdArray[sessionNodeId] = nodeId;
-        touchedSessionNodeIds.push(sessionNodeId);
+        nodeIdBySessionNodeId.set(sessionNodeId, nodeId);
         if (sessionNodeIdByNodeId && !sessionNodeIdByNodeId.has(nodeId)) {
           sessionNodeIdByNodeId.set(nodeId, sessionNodeId);
         }
@@ -645,12 +698,7 @@ function buildMergedActiveMeshDirect(
     elements[index] = mappedElement;
   }
 
-  const nodeIdBySessionNodeId = new Map<number, number>();
-  for (const sessionNodeId of touchedSessionNodeIds) {
-    nodeIdBySessionNodeId.set(sessionNodeId, nodeIdBySessionNodeIdArray[sessionNodeId]!);
-  }
-
-  const mesh: Mesh = { kind: session.kind, nodes, elements };
+  const mesh: Mesh = { kind: state.kind, nodes, elements };
   const result: ActiveMeshBuildResult = {
     mesh,
     cellIdByElementId,
@@ -664,26 +712,26 @@ function buildMergedActiveMeshDirect(
   if (options.includeElementIdsByNodeId) {
     setElementIdsByNodeId(result, buildElementIdsByNodeId(elements));
   }
-  return finalizeActiveMeshBuild(
+  return finalize(
     result,
-    session,
-    activeIds,
     tolerance,
-    undefined,
-    includeProvenance,
-    includeGeometryResolution
+    undefined
   );
 }
 
-function finalizeActiveMeshBuild(
+interface PreparedActiveMeshBuild {
+  readonly mesh: ReadonlyMesh;
+  readonly geometryResolution?: ActiveMeshGeometryResolution;
+  readonly mappings: TrustedActiveMeshMappings;
+}
+
+function prepareActiveMeshBuild(
   result: ActiveMeshBuildResult,
-  session: RefinementSession,
-  activeIds: readonly CellId[],
   mergeTolerance?: number,
   measuredResolution?: ActiveMeshGeometryResolution,
   includeProvenance = true,
   includeGeometryResolution = true
-): ActiveMeshBuildResult {
+): PreparedActiveMeshBuild {
   const mesh = freezeActiveMesh(result.mesh);
   const geometryResolution = measuredResolution === undefined
     && !includeProvenance
@@ -708,8 +756,46 @@ function finalizeActiveMeshBuild(
     });
   }
   const mappings = snapshotTrustedActiveMeshMappings(result);
-  const sessionGuard = createTrustedSessionBuildGuard(session, activeIds);
   activeMeshBuildMappings.set(result, mappings);
+  return {
+    mesh,
+    ...(geometryResolution === undefined ? {} : { geometryResolution }),
+    mappings
+  };
+}
+
+function finalizeActiveMeshBuildFromSessionState(
+  result: ActiveMeshBuildResult,
+  mergeTolerance?: number,
+  measuredResolution?: ActiveMeshGeometryResolution
+): ActiveMeshBuildResult {
+  prepareActiveMeshBuild(
+    result,
+    mergeTolerance,
+    measuredResolution,
+    false,
+    true
+  );
+  return result;
+}
+
+function finalizeActiveMeshBuild(
+  result: ActiveMeshBuildResult,
+  session: RefinementSession,
+  activeIds: readonly CellId[],
+  mergeTolerance?: number,
+  measuredResolution?: ActiveMeshGeometryResolution,
+  includeProvenance = true,
+  includeGeometryResolution = true
+): ActiveMeshBuildResult {
+  const { mesh, geometryResolution, mappings } = prepareActiveMeshBuild(
+    result,
+    mergeTolerance,
+    measuredResolution,
+    includeProvenance,
+    includeGeometryResolution
+  );
+  const sessionGuard = createTrustedSessionBuildGuard(session, activeIds);
   if (!includeProvenance) {
     internalActiveMeshBuildTrust.set(result, Object.freeze({
       sessionToken: refinementSessionToken(session),
@@ -5724,6 +5810,48 @@ function requiredCell(
     throw new Error(`cell ${cellId} does not exist`);
   }
   return mutableRefinementSessionCell(cell);
+}
+
+function requiredSessionStateCell(
+  state: Pick<RefinementSessionStateReader, "cell">,
+  cellId: CellId
+): RefinementSessionCell {
+  const cell = state.cell(cellId);
+  if (cell === undefined) {
+    throw new Error(`cell ${cellId} does not exist`);
+  }
+  return cell;
+}
+
+function activeSessionStateNode(
+  state: Pick<RefinementSessionStateReader, "node" | "nodeCount">,
+  nodeId: number,
+  cellId: CellId
+): Point {
+  const node = Number.isSafeInteger(nodeId)
+    && nodeId > 0
+    && nodeId <= state.nodeCount
+      ? state.node(nodeId)
+      : undefined;
+  if (node === undefined) {
+    throw new Error(`active cell ${cellId} references missing node ${nodeId}`);
+  }
+  return node;
+}
+
+function sortedActiveLeafIdsFromSessionState(
+  state: Pick<RefinementSessionStateReader, "activeLeafIds" | "cell">
+): CellId[] {
+  return [...state.activeLeafIds()]
+    .map((cellId) => ({
+      cellId,
+      ordinal: state.cell(cellId)?.ordinal ?? Number.MAX_SAFE_INTEGER
+    }))
+    .sort((first, second) =>
+      first.ordinal - second.ordinal
+      || (first.cellId < second.cellId ? -1 : first.cellId > second.cellId ? 1 : 0)
+    )
+    .map(({ cellId }) => cellId);
 }
 
 function sortedActiveLeafIds(session: RefinementSession): readonly CellId[] {

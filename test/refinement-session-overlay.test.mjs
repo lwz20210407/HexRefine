@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createHexUnitCubeMesh, createRefinementSession } from "../dist/index.js";
+import {
+  activeBuildCellIdByElementId,
+  activeBuildElementIdByCellId,
+  buildActiveMeshWithMap,
+  createHexUnitCubeMesh,
+  createRefinementSession,
+  validateActiveBuildForSession
+} from "../dist/index.js";
+import * as publicApi from "../dist/index.js";
+import * as refinementSessionInternal from "../dist/refinement-session.js";
 import {
   commitRefinementSessionOverlay,
   createRefinementSessionOverlay,
@@ -44,6 +53,24 @@ function createTestOverlay(session) {
     nodeKey: exactNodeKey,
     cellNodeIds: (cell) => cell.element
   });
+}
+
+function activeBuildStructure(build) {
+  return {
+    mesh: build.mesh,
+    mergeTolerance: build.mergeTolerance,
+    geometryResolution: build.geometryResolution,
+    cellIdByElementId: [...build.cellIdByElementId],
+    elementIdByCellId: [...build.elementIdByCellId],
+    cellIdsByElementIdArray: [...build.cellIdsByElementIdArray],
+    elementIdByCellOrdinalArray: [...build.elementIdByCellOrdinalArray],
+    nodeIdBySessionNodeId: [...build.nodeIdBySessionNodeId],
+    sessionNodeIdByNodeId: [...build.sessionNodeIdByNodeId],
+    sessionNodeIdsByNodeId: [...build.sessionNodeIdsByNodeId],
+    elementIdsByNodeId: build.elementIdsByNodeId === undefined
+      ? undefined
+      : [...build.elementIdsByNodeId]
+  };
 }
 
 function sessionStateSnapshot(session) {
@@ -114,6 +141,203 @@ function populatedOverlay(session) {
   overlay.allocateCellOrdinal();
   return overlay;
 }
+
+test("reader active build matches concrete session without public provenance", () => {
+  const buildFromState = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal;
+  assert.equal(typeof buildFromState, "function");
+
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 2, 2));
+  const overlay = createTestOverlay(session);
+  const publicBuild = buildActiveMeshWithMap(session, {
+    includeElementIdsByNodeId: true
+  });
+  const overlayBuild = buildFromState(overlay, {
+    includeElementIdsByNodeId: true
+  });
+
+  assert.deepEqual(activeBuildStructure(overlayBuild), activeBuildStructure(publicBuild));
+  assert.equal(overlayBuild.provenance, undefined);
+  assert.equal(
+    "buildActiveMeshWithMapFromSessionStateInternal" in publicApi,
+    false
+  );
+});
+
+test("reader active build represents sparse overlay cells and appended nodes", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const before = sessionStateSnapshot(session);
+  const overlay = createTestOverlay(session);
+  const hidden = overlay.mutableCell("e1");
+  hidden.active = false;
+  hidden.hidden = true;
+  const appendedNodeId = overlay.appendNode([0.75, 0.75, 0.75]);
+  const created = cloneCell(hidden, "overlay-cell", overlay.allocateCellOrdinal());
+  created.active = true;
+  created.hidden = false;
+  created.element = [...created.element.slice(0, -1), appendedNodeId];
+  const laterCreated = cloneCell(
+    created,
+    "later-overlay-cell",
+    overlay.allocateCellOrdinal()
+  );
+  overlay.setCell(created);
+  overlay.setCell(laterCreated);
+  overlay.removeActiveLeaf("e1");
+  overlay.addActiveLeaf("later-overlay-cell");
+  overlay.addActiveLeaf("overlay-cell");
+
+  const build = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal(overlay);
+
+  assert.deepEqual(
+    build.cellIdsByElementIdArray.slice(1),
+    ["overlay-cell", "later-overlay-cell"]
+  );
+  assert.equal(build.elementIdByCellId.get("e1"), undefined);
+  assert.equal(build.elementIdByCellId.get("overlay-cell"), 1);
+  assert.equal(build.elementIdByCellId.get("later-overlay-cell"), 2);
+  assert.ok(build.nodeIdBySessionNodeId.has(appendedNodeId));
+  assert.ok(build.mesh.nodes.some((point) =>
+    point[0] === 0.75 && point[1] === 0.75 && point[2] === 0.75
+  ));
+  assertSessionStateUnchanged(session, before);
+});
+
+test("reader active build matches both merged concrete-session paths", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+
+  for (const options of [
+    { mergeNodes: true },
+    { mergeNodes: true, mergeTolerance: 1e-9 }
+  ]) {
+    const publicBuild = buildActiveMeshWithMap(session, options);
+    const overlayBuild = refinementSessionInternal
+      .buildActiveMeshWithMapFromSessionStateInternal(overlay, options);
+    assert.deepEqual(activeBuildStructure(overlayBuild), activeBuildStructure(publicBuild));
+  }
+});
+
+test("reader active build exposes trusted mappings without concrete-session trust", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlayBuild = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal(createTestOverlay(session), {
+      includeCellIdByElementId: false,
+      includeElementIdByCellId: false
+    });
+
+  assert.equal(overlayBuild.cellIdByElementId.size, 0);
+  assert.equal(overlayBuild.elementIdByCellId.size, 0);
+  assert.equal(activeBuildCellIdByElementId(overlayBuild, 1), "e1");
+  assert.throws(
+    () => validateActiveBuildForSession(session, overlayBuild),
+    /metadata|provenance|tampered/i
+  );
+  assert.throws(
+    () => activeBuildElementIdByCellId(session, overlayBuild, "e1"),
+    /metadata|provenance|tampered/i
+  );
+
+  const publicBuild = buildActiveMeshWithMap(session);
+  assert.strictEqual(validateActiveBuildForSession(session, publicBuild), publicBuild);
+  assert.equal(activeBuildElementIdByCellId(session, publicBuild, "e1"), 1);
+});
+
+test("explicit reader merge visits only unique active nodes", () => {
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  for (let index = 0; index < 4096; index += 1) {
+    mesh.nodes.push([1000 + index, -1000 - index, 2000 + index]);
+  }
+  const session = createRefinementSession(mesh);
+  const overlay = createTestOverlay(session);
+  const nodeCalls = [];
+  const countedState = new Proxy(overlay, {
+    get(target, property, receiver) {
+      if (property === "node") {
+        return (nodeId) => {
+          nodeCalls.push(nodeId);
+          return target.node(nodeId);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+
+  refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
+    countedState,
+    { mergeNodes: true, mergeTolerance: 1e-9 }
+  );
+
+  const activeNodeIds = [...new Set(session.cells.get("e1").element)];
+  assert.ok(countedState.nodeCount > 4000);
+  assert.deepEqual(nodeCalls, activeNodeIds);
+});
+
+test("explicit reader merge matches an independent tolerance-boundary golden", () => {
+  const tolerance = 0.125;
+  const insideShift = tolerance - 1e-9;
+  const outsideShift = tolerance + 1e-9;
+  const mesh = createHexUnitCubeMesh(1, 1, 1);
+  mesh.nodes.push([1e200, -1e200, 1e200], [-1e200, 1e200, -1e200]);
+  const firstInactiveNodeId = mesh.nodes.length - 1;
+  const session = createRefinementSession(mesh);
+  const overlay = createTestOverlay(session);
+  const baseCell = overlay.cell("e1");
+  assert.ok(baseCell);
+  const created = cloneCell(
+    baseCell,
+    "tolerance-boundary-cell",
+    overlay.allocateCellOrdinal()
+  );
+  const appendedNodeIds = baseCell.element.map((nodeId, index) => {
+    const point = overlay.node(nodeId);
+    assert.ok(point);
+    const shift = index === baseCell.element.length - 1
+      ? outsideShift
+      : insideShift;
+    return overlay.appendNode([point[0] + shift, point[1], point[2]]);
+  });
+  created.element = appendedNodeIds;
+  overlay.setCell(created);
+  overlay.addActiveLeaf(created.id);
+
+  const build = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal(overlay, {
+      mergeNodes: true,
+      mergeTolerance: tolerance
+    });
+  const firstElement = baseCell.element.map((_, index) => index + 1);
+  const secondElement = baseCell.element.map((_, index) =>
+    index === baseCell.element.length - 1 ? baseCell.element.length + 1 : index + 1
+  );
+  const expectedNodes = baseCell.element.map((nodeId) => [...session.nodes[nodeId - 1]]);
+  const outsideBasePoint = session.nodes[baseCell.element.at(-1) - 1];
+  expectedNodes.push([
+    outsideBasePoint[0] + outsideShift,
+    outsideBasePoint[1],
+    outsideBasePoint[2]
+  ]);
+
+  assert.deepEqual(build.mesh, {
+    kind: "H1",
+    nodes: expectedNodes,
+    elements: [firstElement, secondElement]
+  });
+  assert.deepEqual(build.cellIdsByElementIdArray.slice(1), [
+    "e1",
+    "tolerance-boundary-cell"
+  ]);
+  for (let index = 0; index < appendedNodeIds.length; index += 1) {
+    assert.equal(
+      build.nodeIdBySessionNodeId.get(appendedNodeIds[index]),
+      secondElement[index]
+    );
+  }
+  assert.equal(build.nodeIdBySessionNodeId.has(firstInactiveNodeId), false);
+  assert.equal(build.nodeIdBySessionNodeId.has(firstInactiveNodeId + 1), false);
+  assert.ok(build.geometryResolution.coordinateScale < 2);
+});
 
 test("overlay pure reads copy nothing and first write clones one base cell", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(3, 3, 3));
