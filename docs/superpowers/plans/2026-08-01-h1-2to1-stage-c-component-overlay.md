@@ -292,7 +292,9 @@ export function createDirectRefinementSessionState(
     get cellCount() { return session.cells.size; },
     get activeLeafCount() { return session.activeLeafIds.size; },
     get nextCommandId() { return session.nextCommandId; },
-    get nextCellOrdinal() { return session.nextCellOrdinal; },
+    get nextCellOrdinal() {
+      return mutable.nextCellOrdinal ?? session.cells.size + 1;
+    },
     get sortedActiveLeafIdsDirty() { return session.sortedActiveLeafIdsDirty; },
     node: (nodeId) => session.nodes[nodeId - 1],
     cell: (cellId) => session.cells.get(cellId),
@@ -347,8 +349,8 @@ export function createDirectRefinementSessionState(
       }
     },
     allocateCellOrdinal() {
-      const ordinal = mutable.nextCellOrdinal;
-      mutable.nextCellOrdinal += 1;
+      const ordinal = mutable.nextCellOrdinal ?? session.cells.size + 1;
+      mutable.nextCellOrdinal = ordinal + 1;
       return ordinal;
     },
     setNextCommandId(value) { mutable.nextCommandId = value; },
