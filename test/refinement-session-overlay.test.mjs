@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createHexUnitCubeMesh, createRefinementSession } from "../dist/index.js";
+import {
+  createRefinementSessionOverlay,
+  refinementSessionOverlayStats
+} from "../dist/refinement-session-overlay-internal.js";
 import { createDirectRefinementSessionState } from "../dist/refinement-session-state-internal.js";
 
 function exactNodeKey(point) {
@@ -31,6 +35,85 @@ function cloneCell(cell, id, ordinal) {
     children: [...cell.children]
   };
 }
+
+function createTestOverlay(session) {
+  return createRefinementSessionOverlay(session, {
+    nodeKey: exactNodeKey,
+    cellNodeIds: (cell) => cell.element
+  });
+}
+
+test("overlay pure reads copy nothing and first write clones one base cell", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(3, 3, 3));
+  const overlay = createTestOverlay(session);
+  const baseCell = session.cells.get("e14");
+
+  assert.ok(baseCell);
+  assert.strictEqual(overlay.cell("e14"), baseCell);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), {
+    copiedBaseCellCount: 0,
+    createdCellCount: 0,
+    appendedNodeCount: 0,
+    activeLeafAdditionCount: 0,
+    activeLeafRemovalCount: 0,
+    copiedNodeOwnerKeyCount: 0,
+    referencedBaseCellCount: 1,
+    referencedBaseNodeCount: 0
+  });
+
+  const mutable = overlay.mutableCell("e14");
+  assert.notStrictEqual(mutable, baseCell);
+  assert.notStrictEqual(mutable.element, baseCell.element);
+  assert.notStrictEqual(mutable.children, baseCell.children);
+  mutable.hidden = true;
+  assert.equal(overlay.cell("e14")?.hidden, true);
+  assert.equal(session.cells.get("e14")?.hidden, false);
+  assert.strictEqual(overlay.mutableCell("e14"), mutable);
+  assert.equal(refinementSessionOverlayStats(overlay).copiedBaseCellCount, 1);
+});
+
+test("overlay appends deterministic nodes without copying base points", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const first = overlay.appendNode([0.25, 0.25, 0.25]);
+  const second = overlay.appendNode([0.75, 0.75, 0.75]);
+
+  assert.equal(first, session.nodes.length + 1);
+  assert.equal(second, session.nodes.length + 2);
+  assert.deepEqual(overlay.node(second), [0.75, 0.75, 0.75]);
+  assert.strictEqual(overlay.node(1), session.nodes[0]);
+});
+
+test("overlay appendNode isolates retained mutable input", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const point = [0.25, 0.5, 0.75];
+  const nodeId = overlay.appendNode(point);
+
+  point[0] = 99;
+  assert.deepEqual(overlay.node(nodeId), [0.25, 0.5, 0.75]);
+  assert.notStrictEqual(overlay.node(nodeId), point);
+});
+
+test("overlay setCell rejects duplicate base and created ids", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const baseCell = session.cells.get("e1");
+  assert.ok(baseCell);
+
+  assert.throws(
+    () => overlay.setCell(cloneCell(baseCell, "e1", 2)),
+    /overlay cannot create duplicate cell e1/
+  );
+
+  const created = cloneCell(baseCell, "new", 2);
+  overlay.setCell(created);
+  assert.throws(
+    () => overlay.setCell(cloneCell(baseCell, "new", 3)),
+    /overlay cannot create duplicate cell new/
+  );
+  assert.strictEqual(overlay.cell("new"), created);
+});
 
 test("direct session state reads and writes through explicit accessors", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
