@@ -78,6 +78,7 @@ import {
   RefinementCellGeometryMatchError,
   snapshotRefinementCellGeometry
 } from "./refinement-cell-geometry.js";
+import type { MutableRefinementSessionCell } from "./refinement-session-state-internal.js";
 
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
@@ -130,21 +131,6 @@ export interface RefinementSession {
   readonly redoStack: readonly RefinementSessionCommand[];
   readonly nextCommandId: number;
   readonly nextCellOrdinal: number;
-}
-
-interface MutableRefinementSessionCell {
-  id: CellId;
-  ordinal: number;
-  parentId?: CellId;
-  level: number;
-  role: RefinementSessionCellRole;
-  kind: ElementKind;
-  element: Element;
-  children: CellId[];
-  active: boolean;
-  hidden: boolean;
-  sourceElementId?: number;
-  template?: string;
 }
 
 interface MutableRefinementSession {
