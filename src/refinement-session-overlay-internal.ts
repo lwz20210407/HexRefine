@@ -11,6 +11,10 @@ import type {
 } from "./refinement-session-state-internal.js";
 
 const TRUSTED_ARRAY_PUSH = Array.prototype.push;
+const TRUSTED_FUNCTION_CALL = Function.prototype.call;
+const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
+const TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
 const TRUSTED_MAP_GET = Map.prototype.get;
 const TRUSTED_MAP_HAS = Map.prototype.has;
 const TRUSTED_MAP_SET = Map.prototype.set;
@@ -206,7 +210,7 @@ function ownDataProperty<T>(
   key: string,
   label: string
 ): T {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
   if (descriptor === undefined || !("value" in descriptor)) {
     overlayDeltaError(`${label}.${key} must be an own data property`);
   }
@@ -214,21 +218,21 @@ function ownDataProperty<T>(
 }
 
 function assertWritableDataProperty(value: object, key: string, label: string): void {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
   if (descriptor === undefined || !("value" in descriptor) || !descriptor.writable) {
     overlayDeltaError(`${label}.${key} must be a writable own data property`);
   }
 }
 
 function assertPlainObject(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+  if (value === null || typeof value !== "object" || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Object.prototype) {
     overlayDeltaError(`${label} must use the ordinary Object prototype`);
   }
   if (Object.getOwnPropertySymbols(value).length !== 0) {
     overlayDeltaError(`${label} must not contain symbol properties`);
   }
   for (const key of Object.getOwnPropertyNames(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
       overlayDeltaError(`${label}.${key} must be an enumerable data property`);
     }
@@ -237,7 +241,7 @@ function assertPlainObject(value: unknown, label: string): Record<string, unknow
 }
 
 function assertOrdinaryArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+  if (!Array.isArray(value) || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Array.prototype) {
     overlayDeltaError(`${label} must use the ordinary Array prototype`);
   }
   if (Object.getOwnPropertySymbols(value).length !== 0) {
@@ -249,7 +253,7 @@ function assertOrdinaryArray(value: unknown, label: string): readonly unknown[] 
     overlayDeltaError(`${label} must not contain holes or extra properties`);
   }
   for (let index = 0; index < length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, String(index));
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
       overlayDeltaError(`${label}[${index}] must be an enumerable data property`);
     }
@@ -258,14 +262,14 @@ function assertOrdinaryArray(value: unknown, label: string): readonly unknown[] 
 }
 
 function assertOrdinaryMap(value: unknown, label: string): Map<unknown, unknown> {
-  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Map.prototype) {
+  if (value === null || typeof value !== "object" || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Map.prototype) {
     overlayDeltaError(`${label} must use the ordinary Map prototype`);
   }
   return value as Map<unknown, unknown>;
 }
 
 function assertOrdinarySet(value: unknown, label: string): Set<unknown> {
-  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Set.prototype) {
+  if (value === null || typeof value !== "object" || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Set.prototype) {
     overlayDeltaError(`${label} must use the ordinary Set prototype`);
   }
   return value as Set<unknown>;
@@ -280,15 +284,15 @@ function setSize(set: Set<unknown>): number {
 }
 
 function mapGet(map: Map<unknown, unknown>, key: unknown): unknown {
-  return TRUSTED_MAP_GET.call(map, key);
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_GET, map, [key]);
 }
 
 function mapHas(map: Map<unknown, unknown>, key: unknown): boolean {
-  return TRUSTED_MAP_HAS.call(map, key);
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_HAS, map, [key]) as boolean;
 }
 
 function setHas(set: Set<unknown>, value: unknown): boolean {
-  return TRUSTED_SET_HAS.call(set, value);
+  return TRUSTED_REFLECT_APPLY(TRUSTED_SET_HAS, set, [value]) as boolean;
 }
 
 function isPlainPrimitive(value: unknown): value is PlainPrimitive {
@@ -520,7 +524,7 @@ function readSessionForOverlay(
       if (!Object.isExtensible(collection)) {
         overlayDeltaError(`${collectionLabel} must be extensible`);
       }
-      const length = Object.getOwnPropertyDescriptor(collection, "length");
+      const length = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(collection, "length");
       if (length === undefined || !("value" in length) || !length.writable) {
         overlayDeltaError(`${collectionLabel}.length must be writable`);
       }
@@ -539,7 +543,11 @@ function readSessionForOverlay(
 }
 
 function assertTrustedCommitIntrinsics(): void {
-  if (Array.prototype.push !== TRUSTED_ARRAY_PUSH
+  if (Function.prototype.call !== TRUSTED_FUNCTION_CALL
+    || Reflect.apply !== TRUSTED_REFLECT_APPLY
+    || Object.getPrototypeOf !== TRUSTED_OBJECT_GET_PROTOTYPE_OF
+    || Object.getOwnPropertyDescriptor !== TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR
+    || Array.prototype.push !== TRUSTED_ARRAY_PUSH
     || Map.prototype.get !== TRUSTED_MAP_GET
     || Map.prototype.has !== TRUSTED_MAP_HAS
     || Map.prototype.set !== TRUSTED_MAP_SET
@@ -555,23 +563,29 @@ function assertAppendTarget(array: readonly unknown[], appendCount: number, labe
   if (!Object.isExtensible(array)) {
     overlayDeltaError(`${label} must be extensible`);
   }
-  const length = Object.getOwnPropertyDescriptor(array, "length");
+  const length = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(array, "length");
   if (length === undefined || !("value" in length) || !length.writable) {
     overlayDeltaError(`${label}.length must be writable`);
   }
   const initialLength = array.length;
   for (let offset = 0; offset < appendCount; offset += 1) {
     const key = String(initialLength + offset);
-    if (Object.getOwnPropertyDescriptor(array, key) !== undefined
-      || Object.getOwnPropertyDescriptor(Array.prototype, key) !== undefined) {
-      overlayDeltaError(`${label}[${key}] is not a safe append target`);
+    if (TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(array, key) !== undefined) {
+      overlayDeltaError(`${label}[${key}] already exists`);
+    }
+    let prototype = TRUSTED_OBJECT_GET_PROTOTYPE_OF(array) as object | null;
+    while (prototype !== null) {
+      if (TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(prototype, key) !== undefined) {
+        overlayDeltaError(`${label}[${key}] has an unsafe inherited descriptor`);
+      }
+      prototype = TRUSTED_OBJECT_GET_PROTOTYPE_OF(prototype) as object | null;
     }
   }
 }
 
 function sortedMapEntries(map: Map<unknown, unknown>, label: string): [string, unknown][] {
   const entries: [string, unknown][] = [];
-  for (const entry of TRUSTED_MAP_ENTRIES.call(map)) {
+  for (const entry of TRUSTED_REFLECT_APPLY(TRUSTED_MAP_ENTRIES, map, []) as Iterable<[unknown, unknown]>) {
     const [key, value] = entry;
     if (typeof key !== "string") {
       overlayDeltaError(`${label} keys must be strings`);
@@ -584,7 +598,7 @@ function sortedMapEntries(map: Map<unknown, unknown>, label: string): [string, u
 
 function sortedCellIds(set: Set<unknown>, label: string): CellId[] {
   const values: CellId[] = [];
-  for (const value of TRUSTED_SET_VALUES.call(set)) {
+  for (const value of TRUSTED_REFLECT_APPLY(TRUSTED_SET_VALUES, set, []) as Iterable<unknown>) {
     if (typeof value !== "string" || value.length === 0) {
       overlayDeltaError(`${label} must contain non-empty string cell ids`);
     }
@@ -726,7 +740,7 @@ export function snapshotRefinementSessionOverlayDelta(
   }
   const maximumNodeId = baseNodes.length + frozenNodes.length;
   const referencedNodeIds = new Set<number>();
-  for (const nodeId of TRUSTED_SET_VALUES.call(referencedBaseNodeIds)) {
+  for (const nodeId of TRUSTED_REFLECT_APPLY(TRUSTED_SET_VALUES, referencedBaseNodeIds, []) as Iterable<number>) {
     if (!Number.isSafeInteger(nodeId) || nodeId < 1 || nodeId > baseNodes.length) {
       overlayDeltaError(`overlay storage references invalid base node ${String(nodeId)}`);
     }
@@ -788,7 +802,7 @@ export function snapshotRefinementSessionOverlayDelta(
   }
 
   const baseCellIds = new Set<string>();
-  for (const cellId of TRUSTED_SET_VALUES.call(referencedBaseCellIds)) {
+  for (const cellId of TRUSTED_REFLECT_APPLY(TRUSTED_SET_VALUES, referencedBaseCellIds, []) as Iterable<CellId>) {
     if (typeof cellId !== "string" || cellId.length === 0) {
       overlayDeltaError("overlay storage has an invalid referenced base cell id");
     }
@@ -1259,28 +1273,28 @@ export function commitRefinementSessionOverlay(
   const prepared = prepareOverlayCommit(session, delta);
   const target = prepared.session;
   for (let index = 0; index < prepared.appendedNodes.length; index += 1) {
-    TRUSTED_ARRAY_PUSH.call(prepared.nodes, prepared.appendedNodes[index]!);
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, prepared.nodes, [prepared.appendedNodes[index]!]);
   }
   for (let index = 0; index < prepared.cellOverrides.length; index += 1) {
     const entry = prepared.cellOverrides[index]!;
-    TRUSTED_MAP_SET.call(prepared.cells, entry[0], entry[1]);
+    TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SET, prepared.cells, [entry[0], entry[1]]);
   }
   for (let index = 0; index < prepared.createdCells.length; index += 1) {
     const entry = prepared.createdCells[index]!;
-    TRUSTED_MAP_SET.call(prepared.cells, entry[0], entry[1]);
+    TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SET, prepared.cells, [entry[0], entry[1]]);
   }
   for (let index = 0; index < prepared.activeLeafRemovals.length; index += 1) {
-    TRUSTED_SET_DELETE.call(prepared.activeLeafIds, prepared.activeLeafRemovals[index]!);
+    TRUSTED_REFLECT_APPLY(TRUSTED_SET_DELETE, prepared.activeLeafIds, [prepared.activeLeafRemovals[index]!]);
   }
   for (let index = 0; index < prepared.activeLeafAdditions.length; index += 1) {
-    TRUSTED_SET_ADD.call(prepared.activeLeafIds, prepared.activeLeafAdditions[index]!);
+    TRUSTED_REFLECT_APPLY(TRUSTED_SET_ADD, prepared.activeLeafIds, [prepared.activeLeafAdditions[index]!]);
   }
   for (let index = 0; index < prepared.ownerOverrides.length; index += 1) {
     const entry = prepared.ownerOverrides[index]!;
     if (entry[1].length === 0) {
-      TRUSTED_MAP_DELETE.call(prepared.activeLeafIdsByNodeKey, entry[0]);
+      TRUSTED_REFLECT_APPLY(TRUSTED_MAP_DELETE, prepared.activeLeafIdsByNodeKey, [entry[0]]);
     } else {
-      TRUSTED_MAP_SET.call(prepared.activeLeafIdsByNodeKey, entry[0], entry[1]);
+      TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SET, prepared.activeLeafIdsByNodeKey, [entry[0], entry[1]]);
     }
   }
   target.sortedActiveLeafIdsDirty = prepared.sortedActiveLeafIdsDirty;
@@ -1288,7 +1302,7 @@ export function commitRefinementSessionOverlay(
     target.redoStack = prepared.replacementRedoStack;
   }
   for (let index = 0; index < prepared.appendedUndoCommands.length; index += 1) {
-    TRUSTED_ARRAY_PUSH.call(prepared.undoStack, prepared.appendedUndoCommands[index]!);
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, prepared.undoStack, [prepared.appendedUndoCommands[index]!]);
   }
   target.nextCommandId = prepared.nextCommandId;
   target.nextCellOrdinal = prepared.nextCellOrdinal;

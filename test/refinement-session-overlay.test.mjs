@@ -754,3 +754,42 @@ test("overlay delta rejects changed base history slots and nested command conten
     assertSessionStateUnchanged(session, before);
   }
 });
+
+test("overlay delta rejects poisoned Function.prototype.call before any mutation", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+  const before = sessionStateSnapshot(session);
+  const originalCall = Function.prototype.call;
+  const originalMapSet = Map.prototype.set;
+
+  Function.prototype.call = function poisonedFunctionCall(receiver, ...args) {
+    if (this === originalMapSet) throw new Error("poisoned Map.set call");
+    return Reflect.apply(originalCall, this, [receiver, ...args]);
+  };
+  try {
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /intrinsic|call|prototype/i);
+  } finally {
+    Function.prototype.call = originalCall;
+  }
+  assertSessionStateUnchanged(session, before);
+});
+
+test("overlay delta rejects inherited append setters before any mutation", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const baseCommand = { id: "base", kind: "refine", hiddenCellIds: [], createdCellIds: [], createdNodeIds: [] };
+  while (session.undoStack.length < 32) session.undoStack.push(baseCommand);
+  const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+  const before = sessionStateSnapshot(session);
+  const appendIndex = String(session.undoStack.length);
+
+  Object.defineProperty(Object.prototype, appendIndex, {
+    configurable: true,
+    set() { throw new Error("poisoned inherited append setter"); }
+  });
+  try {
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /append|unsafe|setter/i);
+  } finally {
+    delete Object.prototype[appendIndex];
+  }
+  assertSessionStateUnchanged(session, before);
+});
