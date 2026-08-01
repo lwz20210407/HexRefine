@@ -3,9 +3,11 @@ import test from "node:test";
 
 import { createHexUnitCubeMesh, createRefinementSession } from "../dist/index.js";
 import {
+  commitRefinementSessionOverlay,
   createRefinementSessionOverlay,
   forkRefinementSessionOverlay,
-  refinementSessionOverlayStats
+  refinementSessionOverlayStats,
+  snapshotRefinementSessionOverlayDelta
 } from "../dist/refinement-session-overlay-internal.js";
 import { createDirectRefinementSessionState } from "../dist/refinement-session-state-internal.js";
 
@@ -42,6 +44,71 @@ function createTestOverlay(session) {
     nodeKey: exactNodeKey,
     cellNodeIds: (cell) => cell.element
   });
+}
+
+function sessionStateSnapshot(session) {
+  return {
+    revision: session.revision,
+    nodes: session.nodes,
+    nodeValues: session.nodes.map((point) => [...point]),
+    cells: session.cells,
+    cellValues: [...session.cells].map(([id, cell]) => [
+      id,
+      { ...cell, element: [...cell.element], children: [...cell.children] }
+    ]),
+    activeLeafIds: session.activeLeafIds,
+    activeLeafValues: [...session.activeLeafIds],
+    ownerMap: session.activeLeafIdsByNodeKey,
+    ownerValues: [...session.activeLeafIdsByNodeKey].map(([key, ids]) => [key, [...ids]]),
+    undoStack: session.undoStack,
+    undoValues: [...session.undoStack],
+    redoStack: session.redoStack,
+    redoValues: [...session.redoStack],
+    sortedActiveLeafIdsDirty: session.sortedActiveLeafIdsDirty,
+    nextCommandId: session.nextCommandId,
+    nextCellOrdinal: session.nextCellOrdinal
+  };
+}
+
+function assertSessionStateUnchanged(session, before) {
+  assert.equal(session.revision, before.revision);
+  assert.strictEqual(session.nodes, before.nodes);
+  assert.deepEqual(session.nodes, before.nodeValues);
+  assert.strictEqual(session.cells, before.cells);
+  assert.deepEqual([...session.cells], before.cellValues);
+  assert.strictEqual(session.activeLeafIds, before.activeLeafIds);
+  assert.deepEqual([...session.activeLeafIds], before.activeLeafValues);
+  assert.strictEqual(session.activeLeafIdsByNodeKey, before.ownerMap);
+  assert.deepEqual([...session.activeLeafIdsByNodeKey], before.ownerValues);
+  assert.strictEqual(session.undoStack, before.undoStack);
+  assert.deepEqual(session.undoStack, before.undoValues);
+  assert.strictEqual(session.redoStack, before.redoStack);
+  assert.deepEqual(session.redoStack, before.redoValues);
+  assert.equal(session.sortedActiveLeafIdsDirty, before.sortedActiveLeafIdsDirty);
+  assert.equal(session.nextCommandId, before.nextCommandId);
+  assert.equal(session.nextCellOrdinal, before.nextCellOrdinal);
+}
+
+function populatedOverlay(session) {
+  const overlay = createTestOverlay(session);
+  overlay.mutableCell("e1").hidden = true;
+  const created = cloneCell(overlay.cell("e1"), "created", session.nextCellOrdinal);
+  created.element = [...created.element.slice(0, -1), overlay.appendNode([0.5, 0.5, 0.5])];
+  overlay.setCell(created);
+  overlay.removeActiveLeaf("e1");
+  overlay.addActiveLeaf("created");
+  overlay.appendUndoCommand({
+    id: "r1",
+    kind: "refine",
+    hiddenCellIds: ["e1"],
+    createdCellIds: ["created"],
+    createdNodeIds: [session.nodes.length + 1],
+    recipe: { version: 1, nested: { ids: ["e1", "created"] } }
+  });
+  overlay.clearRedoCommands();
+  overlay.setNextCommandId(2);
+  overlay.allocateCellOrdinal();
+  return overlay;
 }
 
 test("overlay pure reads copy nothing and first write clones one base cell", () => {
@@ -501,4 +568,130 @@ test("fork isolates active sparse collections, references, flags, and counters",
   assert.equal(parent.storage.clearRedo, true);
   assert.equal(parent.storage.nextCellOrdinal, 4);
   assert.equal(parent.storage.nextCommandId, 42);
+});
+
+test("overlay delta snapshot is deeply frozen and detached from overlay and base state", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = populatedOverlay(session);
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  const baseCell = session.cells.get("e1");
+
+  assert.ok(Object.isFrozen(delta));
+  assert.ok(Object.isFrozen(delta.cellOverrides));
+  assert.ok(Object.isFrozen(delta.cellOverrides[0]));
+  assert.ok(Object.isFrozen(delta.cellOverrides[0].cell));
+  assert.ok(Object.isFrozen(delta.cellOverrides[0].cell.element));
+  assert.ok(Object.isFrozen(delta.appendedNodes[0]));
+  assert.ok(Object.isFrozen(delta.ownerOverrides[0].ownerIds));
+  assert.ok(Object.isFrozen(delta.appendedUndoCommands[0]));
+  assert.ok(Object.isFrozen(delta.appendedUndoCommands[0].recipe.nested.ids));
+  assert.notStrictEqual(delta.cellOverrides[0].cell, overlay.storage.cellOverrides.get("e1"));
+  assert.notStrictEqual(delta.cellOverrides[0].cell, baseCell);
+  assert.throws(() => { delta.cellOverrides[0].cell.element[0] = 999; }, TypeError);
+  assert.notEqual(delta.cellOverrides[0].cell.element[0], 999);
+  assert.notEqual(baseCell.element[0], 999);
+});
+
+test("overlay delta rejects stale revisions atomically and cannot be applied twice", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+  const beforeStale = sessionStateSnapshot(session);
+  session.revision += 1;
+
+  assert.throws(() => commitRefinementSessionOverlay(session, delta), /revision/i);
+  assertSessionStateUnchanged(session, { ...beforeStale, revision: beforeStale.revision + 1 });
+
+  const fresh = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const freshDelta = snapshotRefinementSessionOverlayDelta(populatedOverlay(fresh));
+  commitRefinementSessionOverlay(fresh, freshDelta);
+  const afterFirst = sessionStateSnapshot(fresh);
+  assert.throws(() => commitRefinementSessionOverlay(fresh, freshDelta), /revision|stale/i);
+  assertSessionStateUnchanged(fresh, afterFirst);
+});
+
+test("overlay delta guards replaced base collections and history atomically", () => {
+  const replacements = [
+    ["cells", (session) => { session.cells = new Map(session.cells); }],
+    ["nodes", (session) => { session.nodes = [...session.nodes]; }],
+    ["active leaves", (session) => { session.activeLeafIds = new Set(session.activeLeafIds); }],
+    ["owner map", (session) => { session.activeLeafIdsByNodeKey = new Map(session.activeLeafIdsByNodeKey); }],
+    ["undo history", (session) => { session.undoStack = [...session.undoStack]; }],
+    ["redo history", (session) => { session.redoStack = [...session.redoStack]; }]
+  ];
+
+  for (const [, replace] of replacements) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+    replace(session);
+    const before = sessionStateSnapshot(session);
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /changed|guard|base|stale/i);
+    assertSessionStateUnchanged(session, before);
+  }
+});
+
+test("overlay delta fingerprints touched base cells and referenced base nodes", () => {
+  for (const mutate of [
+    (session) => { session.cells.get("e1").hidden = true; },
+    (session) => { session.nodes[0][0] += 0.125; }
+  ]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+    mutate(session);
+    const before = sessionStateSnapshot(session);
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /fingerprint|base/i);
+    assertSessionStateUnchanged(session, before);
+  }
+});
+
+test("overlay delta rejects hostile target shapes before mutation", () => {
+  const hostileCases = [
+    (session) => { session.cells = new (class extends Map {})(session.cells); },
+    (session) => { session.activeLeafIds = new (class extends Set {})(session.activeLeafIds); },
+    (session) => { session.nodes = new (class extends Array {})(...session.nodes); },
+    (session) => Object.setPrototypeOf(session, { forged: true })
+  ];
+  for (const makeHostile of hostileCases) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+    makeHostile(session);
+    const before = sessionStateSnapshot(session);
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /plain|prototype|ordinary|guard/i);
+    assertSessionStateUnchanged(session, before);
+  }
+});
+
+test("overlay delta commits sparse changes to a 10x10x10 session without cloning far field", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(10, 10, 10));
+  session.redoStack.push({ id: "redo", kind: "refine", hiddenCellIds: [], createdCellIds: [], createdNodeIds: [] });
+  const overlay = populatedOverlay(session);
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  const farCell = session.cells.get("e1000");
+  const nodes = session.nodes;
+  const cells = session.cells;
+  const activeLeafIds = session.activeLeafIds;
+  const owners = session.activeLeafIdsByNodeKey;
+  const undo = session.undoStack;
+  const redo = session.redoStack;
+
+  commitRefinementSessionOverlay(session, delta);
+
+  assert.equal(session.revision, 1);
+  assert.strictEqual(session.nodes, nodes);
+  assert.strictEqual(session.cells, cells);
+  assert.strictEqual(session.activeLeafIds, activeLeafIds);
+  assert.strictEqual(session.activeLeafIdsByNodeKey, owners);
+  assert.strictEqual(session.undoStack, undo);
+  assert.strictEqual(session.redoStack, redo);
+  assert.strictEqual(session.cells.get("e1000"), farCell);
+  assert.equal(session.cells.get("e1").hidden, true);
+  assert.ok(session.cells.has("created"));
+  assert.equal(session.nodes.length, 1332);
+  assert.equal(session.activeLeafIds.has("e1"), false);
+  assert.equal(session.activeLeafIds.has("created"), true);
+  assert.deepEqual(session.activeLeafIdsByNodeKey.get(exactNodeKey(session.nodes[0])), ["created"]);
+  assert.equal(session.sortedActiveLeafIdsDirty, true);
+  assert.equal(session.undoStack.at(-1).id, "r1");
+  assert.deepEqual(session.redoStack, []);
+  assert.equal(session.nextCommandId, 2);
+  assert.equal(session.nextCellOrdinal, 1002);
 });
