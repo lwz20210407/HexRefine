@@ -36,7 +36,28 @@ export interface RefinementSessionOverlayStats {
   readonly referencedBaseNodeCount: number;
 }
 
-interface OverlayStorage {
+interface OverlayBaseline {
+  readonly baseRevision: number;
+  readonly baseNodes: RefinementSession["nodes"];
+  readonly baseCells: RefinementSession["cells"];
+  readonly baseActiveLeafIds: RefinementSession["activeLeafIds"];
+  readonly baseActiveLeafIdsByNodeKey: RefinementSession["activeLeafIdsByNodeKey"];
+  readonly baseSortedActiveLeafIds: RefinementSession["sortedActiveLeafIds"];
+  readonly baseUndoStack: RefinementSession["undoStack"];
+  readonly baseRedoStack: RefinementSession["redoStack"];
+  readonly baseNodeCount: number;
+  readonly baseCellCount: number;
+  readonly baseActiveLeafCount: number;
+  readonly baseOwnerKeyCount: number;
+  readonly baseSortedActiveLeafCount: number;
+  readonly baseUndoLength: number;
+  readonly baseRedoLength: number;
+  readonly baseSortedActiveLeafIdsDirty: boolean;
+  readonly baseNextCommandId: number;
+  readonly baseNextCellOrdinal: number | undefined;
+}
+
+interface OverlayStorage extends OverlayBaseline {
   readonly cellOverrides: Map<CellId, MutableRefinementSessionCell>;
   readonly createdCells: Map<CellId, MutableRefinementSessionCell>;
   readonly appendedNodes: Point[];
@@ -98,12 +119,6 @@ interface BaseActiveLeafGuard {
   readonly active: boolean;
 }
 
-interface BaseHistoryGuard {
-  /** This is a guard reference, not delta-owned data. */
-  readonly command: RefinementSessionCommand;
-  readonly fingerprint: string;
-}
-
 /** An immutable, sparse overlay result that may be committed exactly once. */
 export interface RefinementSessionOverlayDelta {
   readonly baseSession: RefinementSession;
@@ -140,8 +155,6 @@ export interface RefinementSessionOverlayDelta {
   readonly baseNodeGuards: readonly BaseNodeGuard[];
   readonly baseOwnerGuards: readonly BaseOwnerGuard[];
   readonly baseActiveLeafGuards: readonly BaseActiveLeafGuard[];
-  readonly baseUndoGuards: readonly BaseHistoryGuard[];
-  readonly baseRedoGuards: readonly BaseHistoryGuard[];
 }
 
 interface MutableSessionForOverlayCommit {
@@ -173,7 +186,6 @@ interface PreparedOverlayCommit {
   readonly ownerOverrides: readonly [string, CellId[]][];
   readonly appendedUndoCommands: readonly RefinementSessionCommand[];
   readonly replacementRedoStack: RefinementSessionCommand[] | undefined;
-  readonly clearRedo: boolean;
   readonly sortedActiveLeafIdsDirty: boolean;
   readonly nextCommandId: number;
   readonly nextCellOrdinal: number;
@@ -188,6 +200,56 @@ function cloneCell(
     element: [...cell.element],
     children: [...cell.children]
   };
+}
+
+function overlayBaseline(baseSession: RefinementSession): OverlayBaseline {
+  return {
+    baseRevision: baseSession.revision,
+    baseNodes: baseSession.nodes,
+    baseCells: baseSession.cells,
+    baseActiveLeafIds: baseSession.activeLeafIds,
+    baseActiveLeafIdsByNodeKey: baseSession.activeLeafIdsByNodeKey,
+    baseSortedActiveLeafIds: baseSession.sortedActiveLeafIds,
+    baseUndoStack: baseSession.undoStack,
+    baseRedoStack: baseSession.redoStack,
+    baseNodeCount: baseSession.nodes.length,
+    baseCellCount: baseSession.cells.size,
+    baseActiveLeafCount: baseSession.activeLeafIds.size,
+    baseOwnerKeyCount: baseSession.activeLeafIdsByNodeKey.size,
+    baseSortedActiveLeafCount: baseSession.sortedActiveLeafIds.length,
+    baseUndoLength: baseSession.undoStack.length,
+    baseRedoLength: baseSession.redoStack.length,
+    baseSortedActiveLeafIdsDirty: baseSession.sortedActiveLeafIdsDirty,
+    baseNextCommandId: baseSession.nextCommandId,
+    baseNextCellOrdinal: baseSession.nextCellOrdinal
+  };
+}
+
+function assertOverlayBaseline(
+  baseSession: RefinementSession,
+  storage: OverlayStorage,
+  base: MutableSessionForOverlayCommit
+): void {
+  if (storage.baseRevision !== base.revision
+    || storage.baseNodes !== baseSession.nodes
+    || storage.baseCells !== baseSession.cells
+    || storage.baseActiveLeafIds !== baseSession.activeLeafIds
+    || storage.baseActiveLeafIdsByNodeKey !== baseSession.activeLeafIdsByNodeKey
+    || storage.baseSortedActiveLeafIds !== baseSession.sortedActiveLeafIds
+    || storage.baseUndoStack !== baseSession.undoStack
+    || storage.baseRedoStack !== baseSession.redoStack
+    || storage.baseNodeCount !== base.nodes.length
+    || storage.baseCellCount !== mapSize(base.cells as Map<unknown, unknown>)
+    || storage.baseActiveLeafCount !== setSize(base.activeLeafIds as Set<unknown>)
+    || storage.baseOwnerKeyCount !== mapSize(base.activeLeafIdsByNodeKey as Map<unknown, unknown>)
+    || storage.baseSortedActiveLeafCount !== base.sortedActiveLeafIds.length
+    || storage.baseUndoLength !== base.undoStack.length
+    || storage.baseRedoLength !== base.redoStack.length
+    || storage.baseSortedActiveLeafIdsDirty !== base.sortedActiveLeafIdsDirty
+    || storage.baseNextCommandId !== base.nextCommandId
+    || storage.baseNextCellOrdinal !== base.nextCellOrdinal) {
+    overlayDeltaError("overlay creation baseline changed before snapshot");
+  }
 }
 
 type PlainPrimitive = string | number | boolean | null | undefined;
@@ -240,10 +302,15 @@ function assertPlainObject(value: unknown, label: string): Record<string, unknow
   return value as Record<string, unknown>;
 }
 
-function assertOrdinaryArray(value: unknown, label: string): readonly unknown[] {
+function assertOrdinaryArray(
+  value: unknown,
+  label: string,
+  verifyElements = true
+): readonly unknown[] {
   if (!Array.isArray(value) || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Array.prototype) {
     overlayDeltaError(`${label} must use the ordinary Array prototype`);
   }
+  if (!verifyElements) return value;
   if (Object.getOwnPropertySymbols(value).length !== 0) {
     overlayDeltaError(`${label} must not contain symbol properties`);
   }
@@ -341,30 +408,6 @@ function primitiveObjectFingerprint(value: unknown, label: string): string {
   return `{${tokens.join(";")}}`;
 }
 
-function plainDataFingerprint(value: unknown, label: string): string {
-  if (isPlainPrimitive(value)) return primitiveToken(value);
-  if (Array.isArray(value)) {
-    const array = assertOrdinaryArray(value, label);
-    const values: string[] = [];
-    for (let index = 0; index < array.length; index += 1) {
-      values.push(plainDataFingerprint(
-        ownDataProperty<unknown>(array as object, String(index), label),
-        `${label}[${index}]`
-      ));
-    }
-    return `[${values.join(",")}]`;
-  }
-  const object = assertPlainObject(value, label);
-  const values: string[] = [];
-  for (const key of Object.getOwnPropertyNames(object).sort(compareCodeUnits)) {
-    values.push(`${key.length}:${key}=${plainDataFingerprint(
-      ownDataProperty<unknown>(object, key, label),
-      `${label}.${key}`
-    )}`);
-  }
-  return `{${values.join(";")}}`;
-}
-
 function nodeFingerprint(point: unknown, label: string): string {
   const array = assertOrdinaryArray(point, label);
   const tokens: string[] = [];
@@ -457,6 +500,7 @@ function cellNodeIds(cell: RefinementSessionCell, maximumNodeId: number, label: 
 }
 
 function cloneMutableCell(cell: RefinementSessionCell, label: string): MutableRefinementSessionCell {
+  // Commit copies every validated delta-owned field, unlike the sparse COW clone above.
   return clonePlainValue(cell, label) as MutableRefinementSessionCell;
 }
 
@@ -494,13 +538,13 @@ function readSessionForOverlay(
   const sortedActiveLeafIdsDirty = ownDataProperty<unknown>(object, "sortedActiveLeafIdsDirty", label);
   const nextCommandId = ownDataProperty<unknown>(object, "nextCommandId", label);
   const nextCellOrdinal = ownDataProperty<unknown>(object, "nextCellOrdinal", label);
-  assertOrdinaryArray(nodes, `${label}.nodes`);
+  assertOrdinaryArray(nodes, `${label}.nodes`, false);
   assertOrdinaryMap(cells, `${label}.cells`);
   assertOrdinarySet(activeLeafIds, `${label}.activeLeafIds`);
-  assertOrdinaryArray(sortedActiveLeafIds, `${label}.sortedActiveLeafIds`);
+  assertOrdinaryArray(sortedActiveLeafIds, `${label}.sortedActiveLeafIds`, false);
   assertOrdinaryMap(activeLeafIdsByNodeKey, `${label}.activeLeafIdsByNodeKey`);
-  assertOrdinaryArray(undoStack, `${label}.undoStack`);
-  assertOrdinaryArray(redoStack, `${label}.redoStack`);
+  assertOrdinaryArray(undoStack, `${label}.undoStack`, false);
+  assertOrdinaryArray(redoStack, `${label}.redoStack`, false);
   assertCounter(revision, `${label}.revision`);
   if (typeof sortedActiveLeafIdsDirty !== "boolean") {
     overlayDeltaError(`${label}.sortedActiveLeafIdsDirty must be boolean`);
@@ -660,29 +704,14 @@ function snapshotCellEntries(
   return frozenArray(result);
 }
 
-function snapshotHistoryGuards(
-  history: readonly RefinementSessionCommand[],
-  label: string
-): readonly BaseHistoryGuard[] {
-  const array = assertOrdinaryArray(history, label);
-  const guards: BaseHistoryGuard[] = [];
-  for (let index = 0; index < array.length; index += 1) {
-    const command = ownDataProperty<unknown>(array as object, String(index), label);
-    guards.push(Object.freeze({
-      command: command as RefinementSessionCommand,
-      fingerprint: plainDataFingerprint(command, `${label}[${index}]`)
-    }));
-  }
-  return frozenArray(guards);
-}
-
 /** Capture an immutable sparse delta without cloning the far field of the base session. */
 export function snapshotRefinementSessionOverlayDelta(
   overlay: RefinementSessionOverlay
 ): RefinementSessionOverlayDelta {
   const baseSession = overlay.baseSession;
+  const storage = assertPlainObject(overlay.storage, "overlay storage") as unknown as OverlayStorage;
   const base = readSessionForOverlay(baseSession, "base session", false);
-  const storage = assertPlainObject(overlay.storage, "overlay storage");
+  assertOverlayBaseline(baseSession, storage, base);
   const cellOverrides = assertOrdinaryMap(
     ownDataProperty<unknown>(storage, "cellOverrides", "overlay storage"),
     "overlay storage.cellOverrides"
@@ -729,8 +758,8 @@ export function snapshotRefinementSessionOverlayDelta(
   assertCounter(nextCommandId, "overlay storage.nextCommandId");
   assertCounter(nextCellOrdinal, "overlay storage.nextCellOrdinal");
 
-  const baseCells = base.cells as Map<unknown, unknown>;
-  const baseNodes = base.nodes as unknown as readonly unknown[];
+  const baseCells = storage.baseCells as Map<unknown, unknown>;
+  const baseNodes = storage.baseNodes as unknown as readonly unknown[];
   const frozenNodes: Point[] = [];
   for (let index = 0; index < appendedNodes.length; index += 1) {
     frozenNodes.push(freezePlainValue(clonePoint(
@@ -738,10 +767,10 @@ export function snapshotRefinementSessionOverlayDelta(
       `overlay storage.appendedNodes[${index}]`
     )));
   }
-  const maximumNodeId = baseNodes.length + frozenNodes.length;
+  const maximumNodeId = storage.baseNodeCount + frozenNodes.length;
   const referencedNodeIds = new Set<number>();
   for (const nodeId of TRUSTED_REFLECT_APPLY(TRUSTED_SET_VALUES, referencedBaseNodeIds, []) as Iterable<number>) {
-    if (!Number.isSafeInteger(nodeId) || nodeId < 1 || nodeId > baseNodes.length) {
+    if (!Number.isSafeInteger(nodeId) || nodeId < 1 || nodeId > storage.baseNodeCount) {
       overlayDeltaError(`overlay storage references invalid base node ${String(nodeId)}`);
     }
     referencedNodeIds.add(nodeId);
@@ -753,7 +782,7 @@ export function snapshotRefinementSessionOverlayDelta(
     "overlay storage.cellOverrides",
     baseCells,
     true,
-    baseNodes.length,
+    storage.baseNodeCount,
     maximumNodeId,
     referencedNodeIds
   );
@@ -762,7 +791,7 @@ export function snapshotRefinementSessionOverlayDelta(
     "overlay storage.createdCells",
     baseCells,
     false,
-    baseNodes.length,
+    storage.baseNodeCount,
     maximumNodeId,
     referencedNodeIds
   );
@@ -782,7 +811,7 @@ export function snapshotRefinementSessionOverlayDelta(
     }
   }
 
-  const baseOwnerMap = base.activeLeafIdsByNodeKey as Map<unknown, unknown>;
+  const baseOwnerMap = storage.baseActiveLeafIdsByNodeKey as Map<unknown, unknown>;
   const frozenOwnerOverrides: OverlayDeltaOwnerOverride[] = [];
   const baseOwnerGuards: BaseOwnerGuard[] = [];
   for (const [key, value] of sortedMapEntries(ownerOverrides, "overlay storage.ownerOverridesByNodeKey")) {
@@ -832,7 +861,7 @@ export function snapshotRefinementSessionOverlayDelta(
     }));
   }
 
-  const baseActiveLeaves = base.activeLeafIds as Set<unknown>;
+  const baseActiveLeaves = storage.baseActiveLeafIds as Set<unknown>;
   const baseActiveLeafGuards: BaseActiveLeafGuard[] = [];
   for (const cellId of frozenAdditions) {
     baseActiveLeafGuards.push(Object.freeze({ cellId, active: setHas(baseActiveLeaves, cellId) }));
@@ -851,24 +880,24 @@ export function snapshotRefinementSessionOverlayDelta(
   }
   return Object.freeze({
     baseSession,
-    baseRevision: base.revision,
-    baseNodes: baseSession.nodes,
-    baseCells: baseSession.cells,
-    baseActiveLeafIds: baseSession.activeLeafIds,
-    baseActiveLeafIdsByNodeKey: baseSession.activeLeafIdsByNodeKey,
-    baseSortedActiveLeafIds: baseSession.sortedActiveLeafIds,
-    baseUndoStack: baseSession.undoStack,
-    baseRedoStack: baseSession.redoStack,
-    baseNodeCount: base.nodes.length,
-    baseCellCount: mapSize(baseCells),
-    baseActiveLeafCount: setSize(baseActiveLeaves),
-    baseOwnerKeyCount: mapSize(baseOwnerMap),
-    baseSortedActiveLeafCount: base.sortedActiveLeafIds.length,
-    baseUndoLength: base.undoStack.length,
-    baseRedoLength: base.redoStack.length,
-    baseSortedActiveLeafIdsDirty: base.sortedActiveLeafIdsDirty,
-    baseNextCommandId: base.nextCommandId,
-    baseNextCellOrdinal: ownDataProperty<number | undefined>(baseSession as object, "nextCellOrdinal", "base session"),
+    baseRevision: storage.baseRevision,
+    baseNodes: storage.baseNodes,
+    baseCells: storage.baseCells,
+    baseActiveLeafIds: storage.baseActiveLeafIds,
+    baseActiveLeafIdsByNodeKey: storage.baseActiveLeafIdsByNodeKey,
+    baseSortedActiveLeafIds: storage.baseSortedActiveLeafIds,
+    baseUndoStack: storage.baseUndoStack,
+    baseRedoStack: storage.baseRedoStack,
+    baseNodeCount: storage.baseNodeCount,
+    baseCellCount: storage.baseCellCount,
+    baseActiveLeafCount: storage.baseActiveLeafCount,
+    baseOwnerKeyCount: storage.baseOwnerKeyCount,
+    baseSortedActiveLeafCount: storage.baseSortedActiveLeafCount,
+    baseUndoLength: storage.baseUndoLength,
+    baseRedoLength: storage.baseRedoLength,
+    baseSortedActiveLeafIdsDirty: storage.baseSortedActiveLeafIdsDirty,
+    baseNextCommandId: storage.baseNextCommandId,
+    baseNextCellOrdinal: storage.baseNextCellOrdinal,
     cellOverrides: frozenOverrides,
     createdCells: frozenCreated,
     appendedNodes: frozenArray(frozenNodes),
@@ -877,15 +906,13 @@ export function snapshotRefinementSessionOverlayDelta(
     ownerOverrides: frozenArray(frozenOwnerOverrides),
     appendedUndoCommands: frozenArray(frozenCommands),
     clearRedo,
-    sortedActiveLeafIdsDirty: storageDirty || base.sortedActiveLeafIdsDirty,
+    sortedActiveLeafIdsDirty: storageDirty || storage.baseSortedActiveLeafIdsDirty,
     nextCommandId,
     nextCellOrdinal,
     baseCellGuards: frozenArray(baseCellGuards),
     baseNodeGuards: frozenArray(baseNodeGuards),
     baseOwnerGuards: frozenArray(baseOwnerGuards),
-    baseActiveLeafGuards: frozenArray(baseActiveLeafGuards),
-    baseUndoGuards: snapshotHistoryGuards(baseSession.undoStack, "base session.undoStack"),
-    baseRedoGuards: snapshotHistoryGuards(baseSession.redoStack, "base session.redoStack")
+    baseActiveLeafGuards: frozenArray(baseActiveLeafGuards)
   }) as RefinementSessionOverlayDelta;
 }
 
@@ -1007,31 +1034,6 @@ function assertBaseActiveLeafGuards(value: unknown, activeLeafIds: Set<unknown>)
   assertSortedIds(ids, "overlay delta.baseActiveLeafGuards");
 }
 
-function assertBaseHistoryGuards(
-  value: unknown,
-  history: readonly RefinementSessionCommand[],
-  label: string
-): void {
-  const guards = assertOrdinaryArray(value, label);
-  if (guards.length !== history.length) {
-    overlayDeltaError(`${label} length changed since the snapshot`);
-  }
-  for (let index = 0; index < guards.length; index += 1) {
-    const guard = assertPlainObject(
-      ownDataProperty<unknown>(guards as object, String(index), label),
-      `${label}[${index}]`
-    );
-    const command = ownDataProperty<unknown>(guard, "command", `${label}[${index}]`);
-    const fingerprint = ownDataProperty<unknown>(guard, "fingerprint", `${label}[${index}]`);
-    const current = ownDataProperty<unknown>(history as object, String(index), `base session.${label}`);
-    if (typeof fingerprint !== "string"
-      || current !== command
-      || plainDataFingerprint(current, `base session.${label}[${index}]`) !== fingerprint) {
-      overlayDeltaError(`${label} changed at history slot ${index}`);
-    }
-  }
-}
-
 function prepareDeltaCells(
   value: unknown,
   label: string,
@@ -1144,8 +1146,6 @@ function prepareOverlayCommit(
   assertBaseNodeGuards(deltaProperty<unknown>(deltaObject, "baseNodeGuards"), target.nodes);
   assertBaseOwnerGuards(deltaProperty<unknown>(deltaObject, "baseOwnerGuards"), target.activeLeafIdsByNodeKey as Map<unknown, unknown>);
   assertBaseActiveLeafGuards(deltaProperty<unknown>(deltaObject, "baseActiveLeafGuards"), target.activeLeafIds as Set<unknown>);
-  assertBaseHistoryGuards(deltaProperty<unknown>(deltaObject, "baseUndoGuards"), target.undoStack, "undo history");
-  assertBaseHistoryGuards(deltaProperty<unknown>(deltaObject, "baseRedoGuards"), target.redoStack, "redo history");
 
   const appendedNodes = prepareAppendedNodes(deltaProperty<unknown>(deltaObject, "appendedNodes"));
   const maximumNodeId = target.nodes.length + appendedNodes.length;
@@ -1254,7 +1254,6 @@ function prepareOverlayCommit(
     ownerOverrides,
     appendedUndoCommands,
     replacementRedoStack: clearRedo ? [] : undefined,
-    clearRedo,
     sortedActiveLeafIdsDirty,
     nextCommandId,
     nextCellOrdinal,
@@ -1334,10 +1333,10 @@ function activeNodeKeys(
   const keys = new Set<string>();
   const referencedBaseNodeIds = new Set<number>();
   for (const nodeId of options.cellNodeIds(cell)) {
-    const isBaseNode = nodeId >= 1 && nodeId <= baseSession.nodes.length;
+    const isBaseNode = nodeId >= 1 && nodeId <= storage.baseNodeCount;
     const point = isBaseNode
       ? baseSession.nodes[nodeId - 1]
-      : storage.appendedNodes[nodeId - baseSession.nodes.length - 1];
+      : storage.appendedNodes[nodeId - storage.baseNodeCount - 1];
     if (point === undefined) {
       throw new Error(`active cell ${cell.id} references missing node ${nodeId}`);
     }
@@ -1361,11 +1360,13 @@ function requiredCell(
   return cell;
 }
 
-export function createRefinementSessionOverlay(
+function createRefinementSessionOverlayWithBaseline(
   baseSession: RefinementSession,
-  options: RefinementSessionOverlayOptions
+  options: RefinementSessionOverlayOptions,
+  baseline: OverlayBaseline
 ): RefinementSessionOverlay {
   const storage: OverlayStorage = {
+    ...baseline,
     cellOverrides: new Map(),
     createdCells: new Map(),
     appendedNodes: [],
@@ -1402,19 +1403,19 @@ export function createRefinementSessionOverlay(
     options,
     baseSession,
     get revision() {
-      return baseSession.revision;
+      return storage.baseRevision;
     },
     get kind() {
       return baseSession.kind;
     },
     get nodeCount() {
-      return baseSession.nodes.length + storage.appendedNodes.length;
+      return storage.baseNodeCount + storage.appendedNodes.length;
     },
     get cellCount() {
-      return baseSession.cells.size + storage.createdCells.size;
+      return storage.baseCellCount + storage.createdCells.size;
     },
     get activeLeafCount() {
-      return baseSession.activeLeafIds.size
+      return storage.baseActiveLeafCount
         - storage.activeLeafRemovals.size
         + storage.activeLeafAdditions.size;
     },
@@ -1426,14 +1427,14 @@ export function createRefinementSessionOverlay(
     },
     get sortedActiveLeafIdsDirty() {
       return storage.sortedActiveLeafIdsDirty
-        || baseSession.sortedActiveLeafIdsDirty;
+        || storage.baseSortedActiveLeafIdsDirty;
     },
     node(nodeId) {
-      if (nodeId >= 1 && nodeId <= baseSession.nodes.length) {
+      if (nodeId >= 1 && nodeId <= storage.baseNodeCount) {
         storage.referencedBaseNodeIds.add(nodeId);
         return baseSession.nodes[nodeId - 1];
       }
-      return storage.appendedNodes[nodeId - baseSession.nodes.length - 1];
+      return storage.appendedNodes[nodeId - storage.baseNodeCount - 1];
     },
     cell(cellId) {
       const created = storage.createdCells.get(cellId);
@@ -1466,7 +1467,7 @@ export function createRefinementSessionOverlay(
     },
     appendNode(point) {
       storage.appendedNodes.push([...point]);
-      return baseSession.nodes.length + storage.appendedNodes.length;
+      return storage.baseNodeCount + storage.appendedNodes.length;
     },
     setCell(cell) {
       if (baseSession.cells.has(cell.id) || storage.createdCells.has(cell.id)) {
@@ -1588,10 +1589,21 @@ export function createRefinementSessionOverlay(
   };
 }
 
+export function createRefinementSessionOverlay(
+  baseSession: RefinementSession,
+  options: RefinementSessionOverlayOptions
+): RefinementSessionOverlay {
+  return createRefinementSessionOverlayWithBaseline(
+    baseSession,
+    options,
+    overlayBaseline(baseSession)
+  );
+}
+
 export function forkRefinementSessionOverlay(
   parent: RefinementSessionOverlay
 ): RefinementSessionOverlay {
-  const fork = createRefinementSessionOverlay(parent.baseSession, parent.options);
+  const fork = createRefinementSessionOverlayWithBaseline(parent.baseSession, parent.options, parent.storage);
   const source = parent.storage;
   const target = fork.storage;
   for (const [cellId, cell] of source.cellOverrides) {

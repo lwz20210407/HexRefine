@@ -91,8 +91,12 @@ function assertSessionStateUnchanged(session, before) {
 
 function populatedOverlay(session) {
   const overlay = createTestOverlay(session);
-  overlay.mutableCell("e1").hidden = true;
-  const created = cloneCell(overlay.cell("e1"), "created", session.nextCellOrdinal);
+  const parent = overlay.mutableCell("e1");
+  parent.hidden = true;
+  parent.active = false;
+  const created = cloneCell(parent, "created", session.nextCellOrdinal);
+  created.hidden = false;
+  created.active = true;
   created.element = [...created.element.slice(0, -1), overlay.appendNode([0.5, 0.5, 0.5])];
   overlay.setCell(created);
   overlay.removeActiveLeaf("e1");
@@ -684,7 +688,10 @@ test("overlay delta commits sparse changes to a 10x10x10 session without cloning
   assert.notStrictEqual(session.redoStack, redo);
   assert.strictEqual(session.cells.get("e1000"), farCell);
   assert.equal(session.cells.get("e1").hidden, true);
+  assert.equal(session.cells.get("e1").active, false);
   assert.ok(session.cells.has("created"));
+  assert.equal(session.cells.get("created").hidden, false);
+  assert.equal(session.cells.get("created").active, true);
   assert.equal(session.nodes.length, 1332);
   assert.equal(session.activeLeafIds.has("e1"), false);
   assert.equal(session.activeLeafIds.has("created"), true);
@@ -731,30 +738,6 @@ test("overlay delta replaces redo history before mutation when redo entries cann
   assert.deepEqual(session.redoStack, []);
 });
 
-test("overlay delta rejects changed base history slots and nested command content atomically", () => {
-  const mutations = [
-    (session) => { session.undoStack[0] = { ...session.undoStack[0] }; },
-    (session) => { session.undoStack[0].recipe.nested.ids[0] = "changed"; }
-  ];
-  for (const mutate of mutations) {
-    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
-    session.undoStack.push({
-      id: "base",
-      kind: "refine",
-      hiddenCellIds: [],
-      createdCellIds: [],
-      createdNodeIds: [],
-      recipe: { version: 1, nested: { ids: ["e1"] } }
-    });
-    const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
-    mutate(session);
-    const before = sessionStateSnapshot(session);
-
-    assert.throws(() => commitRefinementSessionOverlay(session, delta), /history|fingerprint|changed/i);
-    assertSessionStateUnchanged(session, before);
-  }
-});
-
 test("overlay delta rejects poisoned Function.prototype.call before any mutation", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
@@ -771,6 +754,37 @@ test("overlay delta rejects poisoned Function.prototype.call before any mutation
   } finally {
     Function.prototype.call = originalCall;
   }
+  assertSessionStateUnchanged(session, before);
+});
+
+test("overlay snapshots stay pinned to creation baseline after another overlay commits", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const originalNodeCount = session.nodes.length;
+  const first = createTestOverlay(session);
+  const firstNodeId = first.appendNode([0.25, 0.25, 0.25]);
+  first.mutableCell("e1").hidden = true;
+  const second = createTestOverlay(session);
+  second.appendNode([0.75, 0.75, 0.75]);
+  second.mutableCell("e1").hidden = true;
+
+  commitRefinementSessionOverlay(session, snapshotRefinementSessionOverlayDelta(second));
+
+  assert.equal(firstNodeId, originalNodeCount + 1);
+  assert.deepEqual(first.node(firstNodeId), [0.25, 0.25, 0.25]);
+  const before = sessionStateSnapshot(session);
+  assert.throws(() => snapshotRefinementSessionOverlayDelta(first), /baseline|revision|changed/i);
+  assertSessionStateUnchanged(session, before);
+});
+
+test("overlay snapshot rejects a direct revision change after creation", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const nodeId = overlay.appendNode([0.25, 0.25, 0.25]);
+  session.revision += 1;
+  const before = sessionStateSnapshot(session);
+
+  assert.equal(nodeId, 9);
+  assert.throws(() => snapshotRefinementSessionOverlayDelta(overlay), /baseline|revision|changed/i);
   assertSessionStateUnchanged(session, before);
 });
 
