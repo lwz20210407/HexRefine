@@ -3388,13 +3388,17 @@ function reverseRefinementHistoryCommands(
     }
   );
   for (const command of descendingCommands) {
-    assertHistoryStateCellsExist(
+    assertHistoryStateCellsReadyForActiveMutation(
       state,
       command.activeCreatedCellIds ?? command.createdCellIds
     );
-    assertHistoryStateCellsExist(state, command.reactivatedCellIds ?? []);
-    assertHistoryStateCellsExist(state, command.hiddenCellIds);
+    assertHistoryStateCellsReadyForActiveMutation(
+      state,
+      command.reactivatedCellIds ?? []
+    );
+    assertHistoryStateCellsReadyForActiveMutation(state, command.hiddenCellIds);
   }
+  assertReversedHistoryHierarchy(state, descendingCommands);
   for (const command of descendingCommands) {
     for (
       const cellId of
@@ -3417,10 +3421,6 @@ function reverseRefinementHistoryCommands(
       cell.hidden = false;
       state.addActiveLeaf(cellId);
     }
-    assertActivatedRefinementSessionCellsHaveNoActiveRelationsFromState(
-      state,
-      command.hiddenCellIds
-    );
   }
 }
 
@@ -3519,12 +3519,53 @@ function requiredStateMutableCell(
   return state.mutableCell(cellId);
 }
 
-function assertHistoryStateCellsExist(
-  state: Pick<RefinementSessionStateReader, "cell">,
+function assertHistoryStateCellsReadyForActiveMutation(
+  state: Pick<RefinementSessionStateReader, "cell" | "node">,
   cellIds: readonly CellId[]
 ): void {
   for (const cellId of cellIds) {
-    requiredStateCell(state, cellId);
+    const cell = requiredStateCell(state, cellId);
+    for (const nodeId of cell.element) {
+      const point = state.node(nodeId);
+      if (point === undefined) {
+        throw new Error(
+          `active cell ${cell.id} references missing node ${nodeId}`
+        );
+      }
+      exactActiveMergeKey(point);
+    }
+  }
+}
+
+function assertReversedHistoryHierarchy(
+  state: Pick<RefinementSessionStateReader, "cell">,
+  commands: readonly RefinementSessionCommand[]
+): void {
+  const overrides = new Map<CellId, { active: boolean; hidden: boolean }>();
+  const predictedState: Pick<RefinementSessionStateReader, "cell"> = {
+    cell(cellId) {
+      const cell = state.cell(cellId);
+      if (cell === undefined) {
+        return undefined;
+      }
+      const override = overrides.get(cellId);
+      return override === undefined ? cell : { ...cell, ...override };
+    }
+  };
+  for (const command of commands) {
+    for (const cellId of command.activeCreatedCellIds ?? command.createdCellIds) {
+      overrides.set(cellId, { active: false, hidden: true });
+    }
+    for (const cellId of command.reactivatedCellIds ?? []) {
+      overrides.set(cellId, { active: false, hidden: true });
+    }
+    for (const cellId of command.hiddenCellIds) {
+      overrides.set(cellId, { active: true, hidden: false });
+    }
+    assertActivatedRefinementSessionCellsHaveNoActiveRelationsFromState(
+      predictedState,
+      command.hiddenCellIds
+    );
   }
 }
 
@@ -5564,9 +5605,9 @@ export function undoRefinementSession(session: RefinementSession): RefinementSes
   const createdCellIds = command.createdCellIds;
   const reactivatedCellIds = command.reactivatedCellIds ?? [];
   const hiddenCellIds = command.hiddenCellIds;
-  assertHistoryStateCellsExist(state, createdCellIds);
-  assertHistoryStateCellsExist(state, reactivatedCellIds);
-  assertHistoryStateCellsExist(state, hiddenCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, createdCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, reactivatedCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, hiddenCellIds);
   mutable.undoStack.pop();
   for (const cellId of createdCellIds) {
     const cell = requiredStateMutableCell(state, cellId);
@@ -5602,9 +5643,9 @@ export function redoRefinementSession(session: RefinementSession): RefinementSes
   const activeCreatedCellIds =
     command.activeCreatedCellIds ?? command.createdCellIds;
   const reactivatedCellIds = command.reactivatedCellIds ?? [];
-  assertHistoryStateCellsExist(state, hiddenCellIds);
-  assertHistoryStateCellsExist(state, activeCreatedCellIds);
-  assertHistoryStateCellsExist(state, reactivatedCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, hiddenCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, activeCreatedCellIds);
+  assertHistoryStateCellsReadyForActiveMutation(state, reactivatedCellIds);
   mutable.redoStack.pop();
   for (const cellId of hiddenCellIds) {
     const cell = requiredStateMutableCell(state, cellId);

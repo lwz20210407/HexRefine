@@ -75,7 +75,14 @@ test("history reversal mutates through explicit session state", () => {
     source,
     /function requiredStateCell\([\s\S]*?state\.cell\(cellId\)/
   );
-  const preflightDeclaration = "function assertHistoryStateCellsExist(";
+  const hierarchyValidation =
+    "assertReversedHistoryHierarchy(state, descendingCommands);";
+  const hierarchyValidationIndex = body.indexOf(hierarchyValidation);
+  const firstMutationIndex = body.indexOf("requiredStateMutableCell(");
+  assert.notEqual(hierarchyValidationIndex, -1);
+  assert.ok(hierarchyValidationIndex < firstMutationIndex);
+  const preflightDeclaration =
+    "function assertHistoryStateCellsReadyForActiveMutation(";
   const preflightStart = source.indexOf(preflightDeclaration);
   assert.notEqual(preflightStart, -1);
   const preflightBodyStart = source.indexOf("{", preflightStart);
@@ -94,40 +101,93 @@ test("history reversal mutates through explicit session state", () => {
     preflightBodyEnd - 1
   );
   assert.match(preflightBody, /requiredStateCell\(state, cellId\)/);
+  assert.match(preflightBody, /state\.node\(nodeId\)/);
+  assert.match(preflightBody, /exactActiveMergeKey\(point\)/);
   assert.doesNotMatch(preflightBody, /mutableCell\(/);
+  assert.doesNotMatch(preflightBody, /addActiveLeaf\(/);
+  assert.doesNotMatch(preflightBody, /removeActiveLeaf\(/);
 });
 
 test("malformed history undo and redo preserve missing-cell errors atomically", () => {
-  for (const operation of ["undo", "redo"]) {
-    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
-    const command = refineSessionCell(session, "e1", refineHexTo27Hex);
-    if (operation === "redo") {
-      assert.equal(undoRefinementSession(session)?.id, command.id);
-      session.redoStack[0] = Object.freeze({
-        ...command,
-        createdCellIds: Object.freeze([
-          command.createdCellIds[0],
-          "missing"
-        ])
-      });
-    } else {
-      session.undoStack[0] = Object.freeze({
-        ...command,
-        createdCellIds: Object.freeze([
-          command.createdCellIds[0],
-          "missing"
-        ])
-      });
+  for (const [kind, expectedError] of [
+    ["missing-cell", "cell missing does not exist"],
+    ["missing-node", undefined]
+  ]) {
+    for (const operation of ["undo", "redo"]) {
+      const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+      const command = refineSessionCell(session, "e1", refineHexTo27Hex);
+      if (operation === "redo") {
+        assert.equal(undoRefinementSession(session)?.id, command.id);
+        if (kind === "missing-cell") {
+          session.redoStack[0] = Object.freeze({
+            ...command,
+            createdCellIds: Object.freeze([
+              command.createdCellIds[0],
+              "missing"
+            ])
+          });
+        }
+      } else if (kind === "missing-cell") {
+        session.undoStack[0] = Object.freeze({
+          ...command,
+          createdCellIds: Object.freeze([
+            command.createdCellIds[0],
+            "missing"
+          ])
+        });
+      }
+      if (kind === "missing-node") {
+        const cell = session.cells.get(command.createdCellIds[0]);
+        assert.ok(cell);
+        cell.element[0] = 999;
+      }
+      const before = structuredClone(session);
+
+      const error = captureError(() => operation === "undo"
+        ? undoRefinementSession(session)
+        : redoRefinementSession(session));
+
+      assert.equal(
+        error.message,
+        expectedError ?? `active cell ${command.createdCellIds[0]} references missing node 999`,
+        `${kind} ${operation}`
+      );
+      assert.deepEqual(session, before, `${kind} ${operation}`);
     }
-    const before = structuredClone(session);
-
-    const error = captureError(() => operation === "undo"
-      ? undoRefinementSession(session)
-      : redoRefinementSession(session));
-
-    assert.equal(error.message, "cell missing does not exist", operation);
-    assert.deepEqual(session, before, operation);
   }
+});
+
+test("history transaction hierarchy preflight preserves the reusable source session", () => {
+  const {
+    session,
+    boundaryCellId,
+    supportCommand,
+    resolvedOptions,
+    faceResolution
+  } = createConsumedSupportHistoryFixture();
+  const parent = session.cells.get(supportCommand.hiddenCellIds[0]);
+  assert.ok(parent);
+  const activeDescendantId = [...session.activeLeafIds].find(
+    (cellId) => !supportCommand.createdCellIds.includes(cellId)
+  );
+  assert.ok(activeDescendantId);
+  parent.children.push(activeDescendantId);
+  const before = structuredClone(session);
+
+  const error = captureError(() =>
+    planRefinementSessionHistoryTransaction(
+      session,
+      [boundaryCellId],
+      resolvedOptions,
+      faceResolution
+    )
+  );
+
+  assert.equal(
+    error.message,
+    `active cell ${parent.id} has active descendant ${activeDescendantId}`
+  );
+  assert.deepEqual(session, before);
 });
 
 const {
