@@ -681,7 +681,7 @@ test("overlay delta commits sparse changes to a 10x10x10 session without cloning
   assert.strictEqual(session.activeLeafIds, activeLeafIds);
   assert.strictEqual(session.activeLeafIdsByNodeKey, owners);
   assert.strictEqual(session.undoStack, undo);
-  assert.strictEqual(session.redoStack, redo);
+  assert.notStrictEqual(session.redoStack, redo);
   assert.strictEqual(session.cells.get("e1000"), farCell);
   assert.equal(session.cells.get("e1").hidden, true);
   assert.ok(session.cells.has("created"));
@@ -694,4 +694,63 @@ test("overlay delta commits sparse changes to a 10x10x10 session without cloning
   assert.deepEqual(session.redoStack, []);
   assert.equal(session.nextCommandId, 2);
   assert.equal(session.nextCellOrdinal, 1002);
+});
+
+test("overlay delta rejects mutable built-in Map prototypes before any mutation", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+  const before = sessionStateSnapshot(session);
+  const originalSet = Map.prototype.set;
+
+  Map.prototype.set = function poisonedMapSet() {
+    throw new Error("poisoned Map.set");
+  };
+  try {
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /prototype|intrinsic|poisoned/i);
+  } finally {
+    Map.prototype.set = originalSet;
+  }
+  assertSessionStateUnchanged(session, before);
+});
+
+test("overlay delta replaces redo history before mutation when redo entries cannot be truncated", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const redo = { id: "redo", kind: "refine", hiddenCellIds: [], createdCellIds: [], createdNodeIds: [] };
+  session.redoStack.push(redo);
+  Object.defineProperty(session.redoStack, "0", {
+    configurable: false,
+    enumerable: true,
+    writable: true,
+    value: redo
+  });
+  const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+  const before = sessionStateSnapshot(session);
+
+  assert.doesNotThrow(() => commitRefinementSessionOverlay(session, delta));
+  assert.notStrictEqual(session.redoStack, before.redoStack);
+  assert.deepEqual(session.redoStack, []);
+});
+
+test("overlay delta rejects changed base history slots and nested command content atomically", () => {
+  const mutations = [
+    (session) => { session.undoStack[0] = { ...session.undoStack[0] }; },
+    (session) => { session.undoStack[0].recipe.nested.ids[0] = "changed"; }
+  ];
+  for (const mutate of mutations) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    session.undoStack.push({
+      id: "base",
+      kind: "refine",
+      hiddenCellIds: [],
+      createdCellIds: [],
+      createdNodeIds: [],
+      recipe: { version: 1, nested: { ids: ["e1"] } }
+    });
+    const delta = snapshotRefinementSessionOverlayDelta(populatedOverlay(session));
+    mutate(session);
+    const before = sessionStateSnapshot(session);
+
+    assert.throws(() => commitRefinementSessionOverlay(session, delta), /history|fingerprint|changed/i);
+    assertSessionStateUnchanged(session, before);
+  }
 });
