@@ -27,6 +27,12 @@ import {
   refinementSessionStateCellFingerprintInternal,
   refinementSessionStateNodeFingerprintInternal
 } from "../dist/refinement-session-state-internal.js";
+import {
+  certifyRefinementSessionBaseline,
+  ensureRefinementSessionBaselineConformanceCertificate,
+  publishRefinementSessionConformanceCertificate,
+  refinementSessionConformanceCertificate
+} from "../dist/refinement-conformance-certificate-internal.js";
 
 function exactNodeKey(point) {
   const coordinates = point.map((coordinate) =>
@@ -3002,4 +3008,96 @@ test("overlay delta rejects inherited append setters before any mutation", () =>
     delete Object.prototype[appendIndex];
   }
   assertSessionStateUnchanged(session, before);
+});
+
+test("conformance certificate is revision, tolerance, identity, and length scoped", () => {
+  const metadata = {
+    tolerance: 1e-9,
+    coordinateScale: 2,
+    minimumElementEdgeLength: 0.5
+  };
+
+  for (const invalidate of [
+    (session) => { session.revision += 1; },
+    (session) => { session.nodes = [...session.nodes]; },
+    (session) => { session.cells = new Map(session.cells); },
+    (session) => { session.activeLeafIds = new Set(session.activeLeafIds); },
+    (session) => { session.nodes.push([2, 2, 2]); },
+    (session) => { session.cells.delete("e1"); },
+    (session) => { session.activeLeafIds.delete("e1"); }
+  ]) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 2, 2));
+    const certificate = certifyRefinementSessionBaseline(session, metadata);
+    publishRefinementSessionConformanceCertificate(session, certificate);
+
+    assert.strictEqual(
+      refinementSessionConformanceCertificate(session, metadata.tolerance),
+      certificate
+    );
+    assert.equal(
+      refinementSessionConformanceCertificate(session, metadata.tolerance * 10),
+      undefined
+    );
+
+    invalidate(session);
+    assert.equal(
+      refinementSessionConformanceCertificate(session, metadata.tolerance),
+      undefined
+    );
+  }
+});
+
+test("baseline conformance wrapper audits once and rejects failing reports", () => {
+  const metadata = {
+    tolerance: 1e-9,
+    coordinateScale: 1,
+    minimumElementEdgeLength: 0.5
+  };
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 2, 2));
+  let auditCount = 0;
+  const buildAndCheck = () => {
+    auditCount += 1;
+    return { ok: true, hanging: [], unmatchedInteriorBoundaryCount: 0 };
+  };
+
+  const first = ensureRefinementSessionBaselineConformanceCertificate(
+    session,
+    metadata,
+    buildAndCheck
+  );
+  const second = ensureRefinementSessionBaselineConformanceCertificate(
+    session,
+    metadata,
+    buildAndCheck
+  );
+
+  assert.strictEqual(second, first);
+  assert.equal(auditCount, 1);
+  assert.equal(Object.isFrozen(first), true);
+
+  const failingSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  assert.throws(
+    () => ensureRefinementSessionBaselineConformanceCertificate(
+      failingSession,
+      metadata,
+      () => ({
+        ok: false,
+        hanging: [{
+          kind: "node-on-edge",
+          nodeId: 9,
+          ownerElementId: 1,
+          otherElementId: 2,
+          boundary: [1, 2],
+          otherBoundary: [1, 9, 2],
+          message: "test hanging node"
+        }],
+        unmatchedInteriorBoundaryCount: 0
+      })
+    ),
+    /conform|hanging|audit/i
+  );
+  assert.equal(
+    refinementSessionConformanceCertificate(failingSession, metadata.tolerance),
+    undefined
+  );
 });
