@@ -10925,6 +10925,80 @@ test("history transaction preview returns a sparse delta and preserves the base"
   assert.deepEqual([...session.activeLeafIds], beforeLeaves);
 });
 
+test("history transaction output equivalence and preview preserves source identity", () => {
+  const previewFixture = createConsumedSupportHistoryFixture();
+  const executionFixture = createConsumedSupportHistoryFixture();
+  const rerunFixture = createConsumedSupportHistoryFixture();
+  const requestOptions = (fixture) => ({
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    includeTransitions: true,
+    mergeTolerance: 1e-9,
+    activeBuild: fixture.resolvedOptions.activeBuild
+  });
+  const previewSession = previewFixture.session;
+  const sourceIdentity = {
+    nodes: previewSession.nodes,
+    cells: previewSession.cells,
+    activeLeafIds: previewSession.activeLeafIds,
+    activeLeafIdsByNodeKey: previewSession.activeLeafIdsByNodeKey,
+    undoStack: previewSession.undoStack,
+    redoStack: previewSession.redoStack,
+    revision: previewSession.revision,
+    nextCommandId: previewSession.nextCommandId,
+    nextCellOrdinal: previewSession.nextCellOrdinal
+  };
+
+  const preview = previewSessionPatch(
+    previewSession,
+    [previewFixture.boundaryCellId],
+    requestOptions(previewFixture)
+  );
+  const command = refineSessionPatch(
+    executionFixture.session,
+    [executionFixture.boundaryCellId],
+    requestOptions(executionFixture)
+  );
+  const rerunCommand = refineSessionPatch(
+    rerunFixture.session,
+    [rerunFixture.boundaryCellId],
+    requestOptions(rerunFixture)
+  );
+
+  assert.strictEqual(previewSession.nodes, sourceIdentity.nodes);
+  assert.strictEqual(previewSession.cells, sourceIdentity.cells);
+  assert.strictEqual(
+    previewSession.activeLeafIds,
+    sourceIdentity.activeLeafIds
+  );
+  assert.strictEqual(
+    previewSession.activeLeafIdsByNodeKey,
+    sourceIdentity.activeLeafIdsByNodeKey
+  );
+  assert.strictEqual(previewSession.undoStack, sourceIdentity.undoStack);
+  assert.strictEqual(previewSession.redoStack, sourceIdentity.redoStack);
+  assert.equal(previewSession.revision, sourceIdentity.revision);
+  assert.equal(previewSession.nextCommandId, sourceIdentity.nextCommandId);
+  assert.equal(previewSession.nextCellOrdinal, sourceIdentity.nextCellOrdinal);
+  assert.deepEqual(command.recipe, rerunCommand.recipe);
+  assert.deepEqual(command.quality, preview.quality);
+  assert.deepEqual(command.twoToOne, preview.twoToOne);
+  assert.deepEqual(
+    snapshotActiveRefinementState(executionFixture.session),
+    snapshotActiveRefinementState(rerunFixture.session)
+  );
+  assert.deepEqual(
+    buildActiveMesh(executionFixture.session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    }),
+    buildActiveMesh(rerunFixture.session, {
+      mergeNodes: true,
+      mergeTolerance: 1e-9
+    })
+  );
+});
+
 test("Hex 2:1 history transaction planner replays a consumed support component atomically", () => {
   const mesh = createHexUnitCubeMesh(7, 7, 7);
   const session = createRefinementSession(mesh);
@@ -12988,6 +13062,12 @@ test("Hex 2:1 transition-shell rebuilding leaves a disjoint support component un
     .filter(({ center }) => center[0] > 0.5 && center[1] > 0.5)
     .map(({ cellId }) => cellId);
   assert.ok(untouchedRightCellIds.length > 0);
+  const untouchedRightCells = new Map(
+    untouchedRightCellIds.map((cellId) => [
+      cellId,
+      session.cells.get(cellId)
+    ])
+  );
 
 
   const command = refineSessionPatch(session, [leftCandidate.cellId], {
@@ -13003,6 +13083,9 @@ test("Hex 2:1 transition-shell rebuilding leaves a disjoint support component un
 
   assert.equal(untouchedRightCellIds.every((cellId) => session.activeLeafIds.has(cellId)), true);
   assert.equal(untouchedRightCellIds.every((cellId) => !command.hiddenCellIds.includes(cellId)), true);
+  for (const [cellId, cell] of untouchedRightCells) {
+    assert.strictEqual(session.cells.get(cellId), cell);
+  }
 
   assert.equal(checkNoHangingNodes(refined, 1e-9).ok, true);
   assert.ok(Math.abs(hexMeshVolume(refined) - 1) < 1e-10);
