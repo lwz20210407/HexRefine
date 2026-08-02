@@ -52,6 +52,130 @@ export interface RefinementSessionStateReader {
   redoCommands(): Iterable<RefinementSessionCommand>;
 }
 
+export interface RefinementSessionStateReferenceBatchInternal {
+  readonly cellIds: readonly CellId[];
+  readonly nodeIds: readonly number[];
+}
+
+export interface RefinementSessionStateReferencePublisherInternal {
+  prepare(batch: RefinementSessionStateReferenceBatchInternal): unknown;
+  commit(prepared: unknown): void;
+}
+
+declare const PREPARED_STATE_REFERENCE_BATCH_INTERNAL: unique symbol;
+
+export interface PreparedRefinementSessionStateReferenceBatchInternal {
+  readonly [PREPARED_STATE_REFERENCE_BATCH_INTERNAL]: true;
+}
+
+interface RegisteredStateReferencePublisher {
+  readonly prepare: RefinementSessionStateReferencePublisherInternal["prepare"];
+  readonly commit: RefinementSessionStateReferencePublisherInternal["commit"];
+}
+
+interface PreparedStateReferenceBatch {
+  readonly state: RefinementSessionStateReader;
+  readonly publisher: RegisteredStateReferencePublisher;
+  readonly prepared: unknown;
+}
+
+const stateReferencePublishers =
+  new WeakMap<RefinementSessionStateReader, RegisteredStateReferencePublisher>();
+const preparedStateReferenceBatches =
+  new WeakMap<object, PreparedStateReferenceBatch>();
+
+export function registerRefinementSessionStateReferencePublisherInternal(
+  state: RefinementSessionStateReader,
+  publisher: RefinementSessionStateReferencePublisherInternal
+): void {
+  if (TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    stateReferencePublishers,
+    [state]
+  ) !== undefined) {
+    throw new TypeError("refinement session state reference publisher is already registered");
+  }
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_SET,
+    stateReferencePublishers,
+    [state, Object.freeze({
+      prepare: publisher.prepare,
+      commit: publisher.commit
+    })]
+  );
+}
+
+export function assertRefinementSessionStateReferencePublisherInternal(
+  state: RefinementSessionStateReader
+): void {
+  if (TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    stateReferencePublishers,
+    [state]
+  ) === undefined) {
+    throw new TypeError(
+      "unsupported refinement session state reader: no registered reference publisher"
+    );
+  }
+}
+
+export function prepareRefinementSessionStateReferenceBatchInternal(
+  state: RefinementSessionStateReader,
+  batch: RefinementSessionStateReferenceBatchInternal
+): PreparedRefinementSessionStateReferenceBatchInternal {
+  const publisher = TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    stateReferencePublishers,
+    [state]
+  ) as RegisteredStateReferencePublisher | undefined;
+  if (publisher === undefined) {
+    throw new TypeError(
+      "unsupported refinement session state reader: no registered reference publisher"
+    );
+  }
+  const snapshot = Object.freeze({
+    cellIds: Object.freeze([...batch.cellIds]),
+    nodeIds: Object.freeze([...batch.nodeIds])
+  });
+  const prepared = TRUSTED_REFLECT_APPLY(
+    publisher.prepare,
+    undefined,
+    [snapshot]
+  );
+  const token = Object.freeze({}) as
+    PreparedRefinementSessionStateReferenceBatchInternal;
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_SET,
+    preparedStateReferenceBatches,
+    [token, { state, publisher, prepared }]
+  );
+  return token;
+}
+
+export function commitRefinementSessionStateReferenceBatchInternal(
+  state: RefinementSessionStateReader,
+  token: PreparedRefinementSessionStateReferenceBatchInternal
+): void {
+  const prepared = TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    preparedStateReferenceBatches,
+    [token]
+  ) as PreparedStateReferenceBatch | undefined;
+  if (prepared === undefined || prepared.state !== state) {
+    throw new TypeError("invalid or consumed refinement session state reference batch");
+  }
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_DELETE,
+    preparedStateReferenceBatches,
+    [token]
+  );
+  TRUSTED_REFLECT_APPLY(
+    prepared.publisher.commit,
+    undefined,
+    [prepared.prepared]
+  );
+}
+
 export interface RefinementSessionActiveLeafBatchInternal {
   readonly additions: readonly RefinementSessionCell[];
   readonly removals: readonly CellId[];
@@ -143,7 +267,7 @@ export function createDirectRefinementSessionState(
   const mutable = mutableSession(session);
   const preparedActiveLeafBatches =
     new WeakMap<object, DirectPreparedActiveLeafBatch>();
-  return {
+  const state: RefinementSessionStateWriter = {
     baseSession: session,
     get revision() { return session.revision; },
     get kind() { return session.kind; },
@@ -327,4 +451,11 @@ export function createDirectRefinementSessionState(
       mutable.redoStack = [];
     }
   };
+  registerRefinementSessionStateReferencePublisherInternal(state, {
+    prepare() {
+      return undefined;
+    },
+    commit() {}
+  });
+  return state;
 }

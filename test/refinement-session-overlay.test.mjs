@@ -20,7 +20,11 @@ import {
   refinementSessionOverlayStats,
   snapshotRefinementSessionOverlayDelta
 } from "../dist/refinement-session-overlay-internal.js";
-import { createDirectRefinementSessionState } from "../dist/refinement-session-state-internal.js";
+import {
+  commitRefinementSessionStateReferenceBatchInternal,
+  createDirectRefinementSessionState,
+  prepareRefinementSessionStateReferenceBatchInternal
+} from "../dist/refinement-session-state-internal.js";
 
 function exactNodeKey(point) {
   const coordinates = point.map((coordinate) =>
@@ -694,6 +698,184 @@ test("successful reader patch planning publishes references for delta guards", (
     () => commitRefinementSessionOverlay(session, delta),
     /base node fingerprint changed for 1/i
   );
+});
+
+test("official reference batches reject late target corruption atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const prepared = prepareRefinementSessionStateReferenceBatchInternal(
+    overlay,
+    { cellIds: ["e1"], nodeIds: [1] }
+  );
+  const references = overlay.storage.referencedBaseCellIds;
+  const originalPrototype = Object.getPrototypeOf(references);
+
+  try {
+    Object.setPrototypeOf(references, {});
+    assert.throws(
+      () => commitRefinementSessionStateReferenceBatchInternal(
+        overlay,
+        prepared
+      ),
+      /reference|ordinary Set|prototype/i
+    );
+  } finally {
+    Object.setPrototypeOf(references, originalPrototype);
+  }
+  assert.deepEqual(refinementSessionOverlayStats(overlay), {
+    copiedBaseCellCount: 0,
+    createdCellCount: 0,
+    appendedNodeCount: 0,
+    activeLeafAdditionCount: 0,
+    activeLeafRemovalCount: 0,
+    copiedNodeOwnerKeyCount: 0,
+    referencedBaseCellCount: 0,
+    referencedBaseNodeCount: 0
+  });
+});
+
+test("official reference batches ignore late Set.add poisoning atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const prepared = prepareRefinementSessionStateReferenceBatchInternal(
+    overlay,
+    { cellIds: ["e1"], nodeIds: [1] }
+  );
+  const originalSetAdd = Set.prototype.add;
+
+  try {
+    Set.prototype.add = function poisonedSetAdd() {
+      throw new Error("poisoned Set.add");
+    };
+    commitRefinementSessionStateReferenceBatchInternal(overlay, prepared);
+  } finally {
+    Set.prototype.add = originalSetAdd;
+  }
+  assert.equal(refinementSessionOverlayStats(overlay).referencedBaseCellCount, 1);
+  assert.equal(refinementSessionOverlayStats(overlay).referencedBaseNodeCount, 1);
+});
+
+test("reader patch planning fails closed for unregistered reader wrappers", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+  const wrapped = new Proxy(overlay, {});
+  const beforeStats = refinementSessionOverlayStats(overlay);
+
+  assert.throws(
+    () => refinementSessionInternal
+      .buildRefinementSessionPatchPlanFromStateInternal(wrapped, ["e1"], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local"
+      }),
+    /registered|official|unsupported.*reader/i
+  );
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+});
+
+test("reader patch planning rejects in-place state mutation before publication", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const cases = [
+    {
+      label: "coordinate",
+      install(session, overlay) {
+        const original = overlay.peekNode;
+        let reads = 0;
+        overlay.peekNode = (nodeId) => {
+          const point = original(nodeId);
+          if (nodeId === 1 && ++reads === 2) point[0] += 0.125;
+          return point;
+        };
+        return () => { session.nodes[0][0] -= 0.125; };
+      }
+    },
+    {
+      label: "connectivity",
+      install(session, overlay) {
+        const original = overlay.peekCell;
+        let reads = 0;
+        overlay.peekCell = (cellId) => {
+          const cell = original(cellId);
+          if (cellId === "e1" && ++reads === 2) {
+            [cell.element[0], cell.element[1]] = [cell.element[1], cell.element[0]];
+          }
+          return cell;
+        };
+        return () => {
+          const element = session.cells.get("e1").element;
+          [element[0], element[1]] = [element[1], element[0]];
+        };
+      }
+    },
+    {
+      label: "active membership",
+      install(session, overlay) {
+        const original = overlay.hasActiveLeaf;
+        let reads = 0;
+        overlay.hasActiveLeaf = (cellId) => {
+          if (cellId === "e1" && ++reads === 2) {
+            session.activeLeafIds.delete("e1");
+          }
+          return original(cellId);
+        };
+        return () => { session.activeLeafIds.add("e1"); };
+      }
+    },
+    {
+      label: "owner mapping",
+      install(session, overlay) {
+        const original = overlay.activeOwnersByNodeKey;
+        let key;
+        let owners;
+        let removedOwner;
+        let reads = 0;
+        overlay.activeOwnersByNodeKey = (candidateKey) => {
+          const result = original(candidateKey);
+          if (key === undefined && result.length > 0) {
+            key = candidateKey;
+            owners = session.activeLeafIdsByNodeKey.get(candidateKey);
+          }
+          if (candidateKey === key && ++reads === 2) {
+            removedOwner = owners.pop();
+          }
+          return original(candidateKey);
+        };
+        return () => {
+          if (owners !== undefined && removedOwner !== undefined) {
+            owners.push(removedOwner);
+          }
+        };
+      }
+    }
+  ];
+
+  for (const { label, install } of cases) {
+    const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+    const overlay = createTestOverlay(session);
+    const restore = install(session, overlay);
+    const beforeStats = refinementSessionOverlayStats(overlay);
+    try {
+      assert.throws(
+        () => refinementSessionInternal
+          .buildRefinementSessionPatchPlanFromStateInternal(
+            overlay,
+            ["e1"],
+            options
+          ),
+        /changed during planning/i,
+        label
+      );
+      assert.deepEqual(
+        refinementSessionOverlayStats(overlay),
+        beforeStats,
+        label
+      );
+    } finally {
+      restore();
+    }
+  }
 });
 
 test("reader patch planning rejects caller-supplied active builds", () => {

@@ -8,7 +8,11 @@ import type {
 import type {
   MutableRefinementSessionCell,
   PreparedRefinementSessionActiveLeafBatchInternal,
+  RefinementSessionStateReferenceBatchInternal,
   RefinementSessionStateWriter
+} from "./refinement-session-state-internal.js";
+import {
+  registerRefinementSessionStateReferencePublisherInternal
 } from "./refinement-session-state-internal.js";
 
 const TRUSTED_ARRAY = Array;
@@ -322,6 +326,13 @@ interface PreparedOverlayActiveLeafBatch {
   readonly referencedBaseCellIds: readonly CellId[];
   readonly referencedBaseNodeIds: readonly number[];
   readonly sortedActiveLeafIdsDirty: boolean;
+}
+
+interface PreparedOverlayReferenceBatch {
+  readonly referencedBaseCellIds: Set<CellId>;
+  readonly referencedBaseNodeIds: Set<number>;
+  readonly cellIds: readonly CellId[];
+  readonly nodeIds: readonly number[];
 }
 
 function cloneCell(
@@ -827,7 +838,7 @@ function assertOrdinaryMap(value: unknown, label: string): Map<unknown, unknown>
 }
 
 function assertOrdinarySet(value: unknown, label: string): Set<unknown> {
-  if (value === null || typeof value !== "object" || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== Set.prototype) {
+  if (value === null || typeof value !== "object" || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== TRUSTED_SET_PROTOTYPE) {
     overlayDeltaError(`${label} must use the ordinary Set prototype`);
   }
   return value as Set<unknown>;
@@ -1919,6 +1930,8 @@ function createRefinementSessionOverlayWithBaseline(
   };
   const preparedActiveLeafBatches =
     new WeakMap<object, PreparedOverlayActiveLeafBatch>();
+  const preparedReferenceBatches =
+    new WeakMap<object, PreparedOverlayReferenceBatch>();
   const prepareActiveLeafBatch = (
     batch: Parameters<RefinementSessionStateWriter["prepareActiveLeafBatch"]>[0]
   ): PreparedRefinementSessionActiveLeafBatchInternal => {
@@ -2321,6 +2334,99 @@ function createRefinementSessionOverlayWithBaseline(
       storage.clearRedo = true;
     }
   };
+  registerRefinementSessionStateReferencePublisherInternal(overlay, {
+    prepare(batch: RefinementSessionStateReferenceBatchInternal): object {
+      const referencedBaseCellIds = assertOrdinarySet(
+        storage.referencedBaseCellIds,
+        "overlay referenced base cell ids"
+      ) as Set<CellId>;
+      const referencedBaseNodeIds = assertOrdinarySet(
+        storage.referencedBaseNodeIds,
+        "overlay referenced base node ids"
+      ) as Set<number>;
+      const cellIds: CellId[] = [];
+      const nodeIds: number[] = [];
+      for (let index = 0; index < batch.cellIds.length; index += 1) {
+        const cellId = batch.cellIds[index]!;
+        if (
+          mapHas(baseSession.cells as Map<unknown, unknown>, cellId)
+          && !setHas(referencedBaseCellIds, cellId)
+        ) {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, cellIds, [cellId]);
+        }
+      }
+      for (let index = 0; index < batch.nodeIds.length; index += 1) {
+        const nodeId = batch.nodeIds[index]!;
+        if (
+          TRUSTED_NUMBER_IS_SAFE_INTEGER(nodeId)
+          && nodeId >= 1
+          && nodeId <= storage.baseNodeCount
+          && !setHas(referencedBaseNodeIds, nodeId)
+        ) {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodeIds, [nodeId]);
+        }
+      }
+      const prepared: PreparedOverlayReferenceBatch = {
+        referencedBaseCellIds,
+        referencedBaseNodeIds,
+        cellIds: TRUSTED_OBJECT_FREEZE(cellIds),
+        nodeIds: TRUSTED_OBJECT_FREEZE(nodeIds)
+      };
+      const token = TRUSTED_OBJECT_FREEZE({});
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_SET,
+        preparedReferenceBatches,
+        [token, prepared]
+      );
+      return token;
+    },
+    commit(token: unknown): void {
+      if (token === null || typeof token !== "object") {
+        throw new TypeError("invalid or consumed overlay reference batch token");
+      }
+      const prepared = TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_GET,
+        preparedReferenceBatches,
+        [token]
+      ) as PreparedOverlayReferenceBatch | undefined;
+      if (prepared === undefined) {
+        throw new TypeError("invalid or consumed overlay reference batch token");
+      }
+      const referencedBaseCellIds = assertOrdinarySet(
+        storage.referencedBaseCellIds,
+        "overlay referenced base cell ids"
+      );
+      const referencedBaseNodeIds = assertOrdinarySet(
+        storage.referencedBaseNodeIds,
+        "overlay referenced base node ids"
+      );
+      if (
+        referencedBaseCellIds !== prepared.referencedBaseCellIds
+        || referencedBaseNodeIds !== prepared.referencedBaseNodeIds
+      ) {
+        throw new Error("overlay reference batch target changed before commit");
+      }
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_DELETE,
+        preparedReferenceBatches,
+        [token]
+      );
+      for (let index = 0; index < prepared.cellIds.length; index += 1) {
+        TRUSTED_REFLECT_APPLY(
+          TRUSTED_SET_ADD,
+          referencedBaseCellIds,
+          [prepared.cellIds[index]!]
+        );
+      }
+      for (let index = 0; index < prepared.nodeIds.length; index += 1) {
+        TRUSTED_REFLECT_APPLY(
+          TRUSTED_SET_ADD,
+          referencedBaseNodeIds,
+          [prepared.nodeIds[index]!]
+        );
+      }
+    }
+  });
   registerOverlayHistoryCheckpointOwner(
     overlay,
     storage,
