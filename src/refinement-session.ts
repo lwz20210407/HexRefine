@@ -306,7 +306,8 @@ export interface RefinementSessionPatchOptions {
   activeBuild?: ActiveMeshBuildResult;
 }
 
-interface RefinementSessionPatchPlan {
+/** @internal An already-validated patch plan consumed by session-state writers. */
+export interface RefinementSessionPatchPlanInternal {
   sourceActive: ActiveMeshBuildResult;
   planningActive: ActiveMeshBuildResult;
   replacements: ClassifiedReplacement[];
@@ -1055,6 +1056,40 @@ function refinementSessionCellFingerprint(
   return fingerprint.digest();
 }
 
+function refinementSessionStateCellFingerprint(
+  state: RefinementSessionStateReader,
+  cellId: CellId,
+  cell: RefinementSessionCell
+): string {
+  const fingerprint = new StableFingerprint();
+  addStableValue(fingerprint, cellId);
+  addStableValue(fingerprint, cell.id);
+  addStableValue(fingerprint, cell.ordinal);
+  addStableValue(fingerprint, cell.parentId);
+  addStableValue(fingerprint, cell.level);
+  addStableValue(fingerprint, cell.role);
+  addStableValue(fingerprint, cell.kind);
+  addStableValue(fingerprint, cell.element);
+  addStableValue(fingerprint, cell.children);
+  addStableValue(fingerprint, cell.active);
+  addStableValue(fingerprint, cell.hidden);
+  addStableValue(fingerprint, cell.sourceElementId);
+  addStableValue(fingerprint, cell.template);
+  addStableValue(fingerprint, state.hasActiveLeaf(cellId));
+  for (const nodeId of cell.element) {
+    const point = Number.isSafeInteger(nodeId)
+      && nodeId > 0
+      && nodeId <= state.nodeCount
+        ? state.node(nodeId)
+        : undefined;
+    if (point === undefined) {
+      throw new RangeError(`cell ${cellId} references missing node ${nodeId}`);
+    }
+    addStableValue(fingerprint, point);
+  }
+  return fingerprint.digest();
+}
+
 function createTrustedSessionBuildGuard(
   session: RefinementSession,
   cellIdsByElementId: readonly CellId[]
@@ -1687,17 +1722,17 @@ function refineSessionPatchInternal(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions,
   internalOptions: RefinementSessionPatchInternalOptions,
-  prebuiltPlan?: RefinementSessionPatchPlan
+  prebuiltPlan?: RefinementSessionPatchPlanInternal
 ): RefinementSessionCommand {
   if (prebuiltPlan !== undefined) {
-    return applyRefinementSessionPatchPlan(
+    return applyRefinementSessionPatchPlanInternal(
       session,
       prebuiltPlan
     );
   }
   const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
   try {
-    let plan: RefinementSessionPatchPlan;
+    let plan: RefinementSessionPatchPlanInternal;
     try {
       plan = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
     } catch (error) {
@@ -1727,7 +1762,7 @@ function refineSessionPatchInternal(
       }
       throw error;
     }
-    return applyRefinementSessionPatchPlan(session, plan);
+    return applyRefinementSessionPatchPlanInternal(session, plan);
   } catch (error) {
     throw asTwoToOneSessionPlanningError(
       error,
@@ -1892,9 +1927,10 @@ function resolveSessionPatchOptions(
   };
 }
 
-function applyRefinementSessionPatchPlan(
+/** @internal Applies a prebuilt plan to a concrete session transaction. */
+export function applyRefinementSessionPatchPlanInternal(
   session: RefinementSession,
-  plan: RefinementSessionPatchPlan
+  plan: RefinementSessionPatchPlanInternal
 ): RefinementSessionCommand {
   assertRefinementSessionPatchPlanParents(session, plan);
   const mutable = mutableRefinementSession(session);
@@ -1902,6 +1938,17 @@ function applyRefinementSessionPatchPlan(
     session,
     exactActiveMergeKey
   );
+  const command = applyRefinementSessionPatchPlanToStateInternal(state, plan);
+  mutable.revision += 1;
+  return command;
+}
+
+/** @internal Applies a prebuilt plan without advancing state revision. */
+export function applyRefinementSessionPatchPlanToStateInternal(
+  state: RefinementSessionStateWriter,
+  plan: RefinementSessionPatchPlanInternal
+): RefinementSessionCommand {
+  assertRefinementSessionStatePatchPlanParents(state, plan);
   const {
     planningActive: active,
     replacements,
@@ -1911,12 +1958,16 @@ function applyRefinementSessionPatchPlan(
   const createdNodeIds: number[] = [];
 
   for (const replacement of replacements) {
-    const parentId = activeBuildCellIdByElementId(active, replacement.elementId)!;
-    const parent = requiredCell(session, parentId);
-    const nodeOffset = mutable.nodes.length;
-    for (const [index, point] of replacement.refinement.nodes.entries()) {
-      mutable.nodes.push([...point]);
-      createdNodeIds.push(nodeOffset + index + 1);
+    const parentId = activeBuildCellIdByElementIdFromState(
+      state,
+      active,
+      replacement.elementId,
+      hiddenCellIds
+    );
+    const parent = requiredStateMutableCell(state, parentId);
+    const nodeOffset = state.nodeCount;
+    for (const point of replacement.refinement.nodes) {
+      createdNodeIds.push(state.appendNode(point));
     }
 
     const parentCreatedCellIds: CellId[] = [];
@@ -1927,7 +1978,7 @@ function applyRefinementSessionPatchPlan(
       createdCellIds.push(childId);
       const child: MutableRefinementSessionCell = {
         id: childId,
-        ordinal: nextCellOrdinal(session),
+        ordinal: state.allocateCellOrdinal(),
         parentId,
         level: parent.level + 1,
         role: replacement.role,
@@ -1941,21 +1992,21 @@ function applyRefinementSessionPatchPlan(
       if (parent.sourceElementId !== undefined) {
         child.sourceElementId = parent.sourceElementId;
       }
-      mutable.cells.set(childId, child);
+      state.setCell(child);
       state.addActiveLeaf(childId);
     });
     parent.children.push(...parentCreatedCellIds);
   }
 
   for (const parentId of hiddenCellIds) {
-    const parent = requiredCell(session, parentId);
+    const parent = requiredStateMutableCell(state, parentId);
     parent.active = false;
     parent.hidden = true;
     state.removeActiveLeaf(parentId);
   }
 
   const command = freezeRefinementSessionCommand({
-    id: `cmd-${mutable.nextCommandId}`,
+    id: `cmd-${state.nextCommandId}`,
     kind: "refine",
     hiddenCellIds,
     createdCellIds,
@@ -1966,10 +2017,9 @@ function applyRefinementSessionPatchPlan(
       : {}),
     recipe: plan.recipe
   });
-  mutable.nextCommandId += 1;
-  mutable.undoStack.push(command);
-  mutable.redoStack = [];
-  mutable.revision += 1;
+  state.setNextCommandId(state.nextCommandId + 1);
+  state.appendUndoCommand(command);
+  state.clearRedoCommands();
   return command;
 }
 
@@ -3733,11 +3783,11 @@ function sameCellIdSet(
 
 function rebaseRefinementSessionPatchPlan(
   session: RefinementSession,
-  plan: RefinementSessionPatchPlan,
+  plan: RefinementSessionPatchPlanInternal,
   level: number,
   options: RefinementSessionPatchOptions,
   historyCommandIds: readonly string[]
-): RefinementSessionPatchPlan {
+): RefinementSessionPatchPlanInternal {
   const parentCellIds = replacementParentCellIds(
     plan.planningActive,
     plan.replacements
@@ -3926,7 +3976,7 @@ function buildCompletedRebuiltSupportPlan(
   authorizedCompletionParentIds: ReadonlySet<CellId>,
   historyCommandIds: readonly string[],
   options: RefinementSessionPatchOptions
-): RefinementSessionPatchPlan {
+): RefinementSessionPatchPlanInternal {
   const selectedCellIds = [...initialCoreParentIds].sort(compareCellIds);
   try {
     return buildRefinementSessionPatchPlan(session, selectedCellIds, options);
@@ -4832,7 +4882,7 @@ export function previewSessionPatch(
   const resolvedOptions = resolveSessionPatchOptions(session, cellIds, options);
   const sourceActive = resolvedOptions.activeBuild;
   try {
-    let patch: RefinementSessionPatchPlan;
+    let patch: RefinementSessionPatchPlanInternal;
     try {
       patch = buildRefinementSessionPatchPlan(session, cellIds, resolvedOptions);
     } catch (error) {
@@ -4945,11 +4995,24 @@ function cloneRefinementPreview(
   };
 }
 
+/** @internal Builds a reusable patch plan without applying it. */
+export function buildRefinementSessionPatchPlanInternal(
+  session: RefinementSession,
+  cellIds: CellId[],
+  options: RefinementSessionPatchOptions = {}
+): RefinementSessionPatchPlanInternal {
+  return buildRefinementSessionPatchPlan(
+    session,
+    cellIds,
+    resolveSessionPatchOptions(session, cellIds, options)
+  );
+}
+
 function buildRefinementSessionPatchPlan(
   session: RefinementSession,
   cellIds: CellId[],
   options: RefinementSessionPatchOptions
-): RefinementSessionPatchPlan {
+): RefinementSessionPatchPlanInternal {
   const validation = validateRefinementSessionSelection(session, cellIds);
   if (!validation.ok) {
     throw new Error(validation.errors.join("; "));
@@ -5235,7 +5298,7 @@ function replacementParentCellIds(
 
 function assertRefinementSessionPatchPlanParents(
   session: RefinementSession,
-  plan: RefinementSessionPatchPlan
+  plan: RefinementSessionPatchPlanInternal
 ): void {
   const planningParentIds =
     replacementParentCellIds(plan.planningActive, plan.replacements);
@@ -5248,6 +5311,200 @@ function assertRefinementSessionPatchPlanParents(
     const sourceParentIds =
       replacementParentCellIds(plan.sourceActive, plan.sourceReplacements);
     assertActiveBuildCoversSessionCells(session, plan.sourceActive, sourceParentIds);
+  }
+}
+
+function trustedActiveBuildCellFingerprint(
+  build: ActiveMeshBuildResult,
+  elementId: number
+): string | undefined {
+  return internalActiveMeshBuildTrust.get(build)
+    ?.sessionGuard.cellFingerprintByElementId[elementId]
+    ?? activeMeshBuildTrust.get(build)
+      ?.sessionGuard.cellFingerprintByElementId[elementId];
+}
+
+function activeBuildCellIdByElementIdFromState(
+  state: RefinementSessionStateReader,
+  build: ActiveMeshBuildResult,
+  elementId: number,
+  diagnosticCellIds: readonly CellId[]
+): CellId {
+  const mappings = ensureTrustedActiveMeshMappings(build, diagnosticCellIds);
+  const cellId = mappings.cellIdsByElementIdArray[elementId];
+  if (
+    !Number.isSafeInteger(elementId)
+    || elementId <= 0
+    || cellId === undefined
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because element ${elementId} is outside the active mesh`
+    );
+  }
+  const cell = state.cell(cellId);
+  if (cell === undefined) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because parent cell ${cellId} no longer exists`
+    );
+  }
+  if (
+    cell.id !== cellId
+    || !isValidCellOrdinal(cell.ordinal)
+    || cell.ordinal >= mappings.elementIdByCellOrdinalArray.length
+    || mappings.elementIdByCellOrdinalArray[cell.ordinal] !== elementId
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because parent cell ${cellId} has changed ordinal or mapping`
+    );
+  }
+  if (
+    mappings.cellIdByElementId.get(elementId) !== cellId
+    || mappings.elementIdByCellId.get(cellId) !== elementId
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because forward or reverse mapping changed for parent cell ${cellId}`
+    );
+  }
+  if (!cell.active || cell.hidden || !state.hasActiveLeaf(cellId)) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because parent cell ${cellId} is not an active leaf`
+    );
+  }
+
+  const expectedFingerprint = trustedActiveBuildCellFingerprint(build, elementId);
+  if (
+    expectedFingerprint !== undefined
+    && expectedFingerprint !== refinementSessionStateCellFingerprint(state, cellId, cell)
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because parent cell ${cellId} changed`
+    );
+  }
+
+  const activeElement = build.mesh.elements[elementId - 1];
+  if (
+    activeElement === undefined
+    || activeElement.length !== cell.element.length
+    || cell.kind !== state.kind
+    || build.mesh.kind !== state.kind
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      `refinement patch plan is stale because parent cell ${cellId} connectivity changed`
+    );
+  }
+  const tolerance = build.mergeTolerance ?? 0;
+  for (let index = 0; index < cell.element.length; index += 1) {
+    const sessionNodeId = cell.element[index]!;
+    const activeNodeId = mappings.nodeIdBySessionNodeId.get(sessionNodeId);
+    const statePoint = Number.isSafeInteger(sessionNodeId)
+      && sessionNodeId > 0
+      && sessionNodeId <= state.nodeCount
+        ? state.node(sessionNodeId)
+        : undefined;
+    const activePoint = activeNodeId === undefined
+      ? undefined
+      : build.mesh.nodes[activeNodeId - 1];
+    if (
+      activeNodeId === undefined
+      || activeElement[index] !== activeNodeId
+      || statePoint === undefined
+      || activePoint === undefined
+    ) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `refinement patch plan is stale because parent cell ${cellId} connectivity changed`
+      );
+    }
+    if (!pointEquals(statePoint, activePoint, tolerance)) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `refinement patch plan is stale because parent cell ${cellId} geometry changed`
+      );
+    }
+  }
+  return cellId;
+}
+
+function assertRefinementSessionStatePatchPlanParents(
+  state: RefinementSessionStateReader,
+  plan: RefinementSessionPatchPlanInternal
+): void {
+  const diagnosticCellIds = plan.hiddenCellIds;
+  const planningParentIds = plan.replacements.map((replacement) =>
+    activeBuildCellIdByElementIdFromState(
+      state,
+      plan.planningActive,
+      replacement.elementId,
+      diagnosticCellIds
+    )
+  );
+  if (new Set(planningParentIds).size !== planningParentIds.length) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "refinement patch plan is stale because a replacement parent is duplicated"
+    );
+  }
+  if (
+    planningParentIds.length !== plan.hiddenCellIds.length
+    || !sameCellIdSet(planningParentIds, plan.hiddenCellIds)
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "refinement patch plan is stale because replacement parents and hidden cells disagree"
+    );
+  }
+
+  const sourceParentIds = plan.sourceReplacements.map((replacement) =>
+    activeBuildCellIdByElementIdFromState(
+      state,
+      plan.sourceActive,
+      replacement.elementId,
+      diagnosticCellIds
+    )
+  );
+  if (
+    sourceParentIds.length !== planningParentIds.length
+    || sourceParentIds.some((cellId, index) => cellId !== planningParentIds[index])
+  ) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "refinement patch plan is stale because source and planning parents disagree"
+    );
+  }
+
+  const createdCellIds = new Set<CellId>();
+  for (let replacementIndex = 0; replacementIndex < plan.replacements.length; replacementIndex += 1) {
+    const replacement = plan.replacements[replacementIndex]!;
+    const parentId = planningParentIds[replacementIndex]!;
+    const parent = requiredStateCell(state, parentId);
+    const firstChildIndex = parent.children.length + 1;
+    for (const [elementIndex, element] of replacement.refinement.elements.entries()) {
+      const childId = `${parentId}/${firstChildIndex + elementIndex}`;
+      if (createdCellIds.has(childId) || state.cell(childId) !== undefined) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          `refinement patch plan is stale because child cell ${childId} already exists`
+        );
+      }
+      createdCellIds.add(childId);
+      if (element.some((nodeId) =>
+        !Number.isSafeInteger(nodeId)
+        || nodeId <= 0
+        || nodeId > replacement.refinement.nodes.length
+      )) {
+        throw sessionFaceResolutionError(
+          diagnosticCellIds,
+          `refinement patch plan has invalid child connectivity for ${childId}`
+        );
+      }
+    }
   }
 }
 

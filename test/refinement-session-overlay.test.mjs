@@ -7,6 +7,7 @@ import {
   buildActiveMeshWithMap,
   createHexUnitCubeMesh,
   createRefinementSession,
+  refineSessionPatch,
   validateActiveBuildForSession
 } from "../dist/index.js";
 import * as publicApi from "../dist/index.js";
@@ -114,6 +115,25 @@ function assertSessionStateUnchanged(session, before) {
   assert.equal(session.sortedActiveLeafIdsDirty, before.sortedActiveLeafIdsDirty);
   assert.equal(session.nextCommandId, before.nextCommandId);
   assert.equal(session.nextCellOrdinal, before.nextCellOrdinal);
+}
+
+function comparableSessionState(session) {
+  return {
+    nodes: session.nodes.map((point) => [...point]),
+    cells: [...session.cells].map(([cellId, cell]) => [
+      cellId,
+      { ...cell, element: [...cell.element], children: [...cell.children] }
+    ]),
+    activeLeafIds: [...session.activeLeafIds],
+    activeLeafIdsByNodeKey: [...session.activeLeafIdsByNodeKey]
+      .map(([key, ownerIds]) => [key, [...ownerIds]])
+      .sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey)),
+    undoStack: session.undoStack,
+    redoStack: session.redoStack,
+    sortedActiveLeafIdsDirty: session.sortedActiveLeafIdsDirty,
+    nextCommandId: session.nextCommandId,
+    nextCellOrdinal: session.nextCellOrdinal
+  };
 }
 
 function populatedOverlay(session) {
@@ -269,6 +289,161 @@ test("reader active build cannot forge concrete-session trust from public proven
     /mapping-only|session-state/i
   );
   assert.equal(activeBuildCellIdByElementId(overlayBuild, 1), "e1");
+});
+
+test("patch plans apply identically through direct and overlay state writers", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const publicSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const publicCommand = refineSessionPatch(publicSession, ["e1"], options);
+  assert.equal(publicSession.revision, 1);
+
+  const prebuiltSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const prebuiltPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(prebuiltSession, ["e1"], options);
+  const prebuiltCommand = refinementSessionInternal
+    .applyRefinementSessionPatchPlanInternal(prebuiltSession, prebuiltPlan);
+  assert.equal(prebuiltSession.revision, 1);
+  assert.deepEqual(prebuiltCommand, publicCommand);
+  assert.deepEqual(
+    comparableSessionState(prebuiltSession),
+    comparableSessionState(publicSession)
+  );
+
+  const stateSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const statePlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(stateSession, ["e1"], options);
+  const stateCommand = refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(
+      createDirectRefinementSessionState(stateSession, exactNodeKey),
+      statePlan
+    );
+  assert.equal(stateSession.revision, 0);
+  assert.deepEqual(stateCommand, publicCommand);
+  assert.deepEqual(
+    comparableSessionState(stateSession),
+    comparableSessionState(publicSession)
+  );
+
+  const overlaySession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlayPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(overlaySession, ["e1"], options);
+  const overlay = createTestOverlay(overlaySession);
+  const beforeOverlay = sessionStateSnapshot(overlaySession);
+  const overlayCommand = refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, overlayPlan);
+
+  assert.equal(overlay.revision, 0);
+  assert.equal(overlaySession.revision, 0);
+  assertSessionStateUnchanged(overlaySession, beforeOverlay);
+  assert.deepEqual(overlayCommand, publicCommand);
+  assert.ok(Object.isFrozen(overlayCommand));
+  assert.ok(Object.isFrozen(overlayCommand.hiddenCellIds));
+  assert.ok(Object.isFrozen(overlayCommand.createdCellIds));
+  assert.ok(Object.isFrozen(overlayCommand.createdNodeIds));
+  assert.ok(Object.isFrozen(overlayCommand.recipe));
+  assert.deepEqual(
+    activeBuildStructure(
+      refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(overlay)
+    ),
+    activeBuildStructure(
+      refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
+        createDirectRefinementSessionState(publicSession, exactNodeKey)
+      )
+    )
+  );
+
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  commitRefinementSessionOverlay(overlaySession, delta);
+  assert.equal(overlaySession.revision, 1);
+  assert.deepEqual(
+    comparableSessionState(overlaySession),
+    comparableSessionState(publicSession)
+  );
+  assert.equal(
+    Object.hasOwn(publicApi, "applyRefinementSessionPatchPlanToStateInternal"),
+    false
+  );
+  assert.equal(
+    Object.hasOwn(publicApi, "buildRefinementSessionPatchPlanInternal"),
+    false
+  );
+});
+
+test("patch plan state preflight rejects stale parents before writer mutation", () => {
+  const planSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(planSession, ["e1"], {
+      hexRefinementRatio: 2
+    });
+  const staleCases = [
+    ["ordinal", (session) => { session.cells.get("e1").ordinal = 2; }],
+    ["active leaf", (session) => { session.cells.get("e1").active = false; }],
+    ["connectivity", (session) => {
+      const cell = session.cells.get("e1");
+      [cell.element[0], cell.element[1]] = [cell.element[1], cell.element[0]];
+    }],
+    ["geometry", (session) => { session.nodes[0][0] += 0.125; }]
+  ];
+
+  for (const [label, makeStale] of staleCases) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    makeStale(session);
+    const before = sessionStateSnapshot(session);
+    const overlay = createTestOverlay(session);
+    const writerCalls = [];
+    const countedState = new Proxy(overlay, {
+      get(target, property, receiver) {
+        if ([
+          "mutableCell",
+          "appendNode",
+          "setCell",
+          "addActiveLeaf",
+          "removeActiveLeaf",
+          "allocateCellOrdinal",
+          "appendUndoCommand",
+          "clearRedoCommands",
+          "setNextCommandId"
+        ].includes(property)) {
+          return (...args) => {
+            writerCalls.push(property);
+            return target[property](...args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      }
+    });
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(countedState, plan),
+      /stale|changed|mapping|active|connectivity|geometry|ordinal/i,
+      label
+    );
+    assert.deepEqual(writerCalls, [], label);
+    assertSessionStateUnchanged(session, before);
+    assert.deepEqual(
+      {
+        copiedBaseCellCount: refinementSessionOverlayStats(overlay).copiedBaseCellCount,
+        createdCellCount: refinementSessionOverlayStats(overlay).createdCellCount,
+        appendedNodeCount: refinementSessionOverlayStats(overlay).appendedNodeCount,
+        activeLeafAdditionCount: refinementSessionOverlayStats(overlay).activeLeafAdditionCount,
+        activeLeafRemovalCount: refinementSessionOverlayStats(overlay).activeLeafRemovalCount,
+        copiedNodeOwnerKeyCount: refinementSessionOverlayStats(overlay).copiedNodeOwnerKeyCount
+      },
+      {
+        copiedBaseCellCount: 0,
+        createdCellCount: 0,
+        appendedNodeCount: 0,
+        activeLeafAdditionCount: 0,
+        activeLeafRemovalCount: 0,
+        copiedNodeOwnerKeyCount: 0
+      },
+      label
+    );
+  }
 });
 
 test("explicit reader merge visits only unique active nodes", () => {
