@@ -5430,10 +5430,16 @@ function stageRefinementSessionPlanningReferences(
   interface ObservedCell {
     readonly snapshot: RefinementSessionCell;
     readonly fingerprint: string;
+    readonly identity: RefinementSessionCell;
   }
   interface ObservedNode {
     readonly snapshot: Point;
     readonly fingerprint: string;
+    readonly identity: Point;
+  }
+  interface ObservedOwners {
+    readonly snapshot: readonly CellId[];
+    readonly identity: readonly CellId[];
   }
   const snapshotCell = (
     cell: RefinementSessionCell
@@ -5470,7 +5476,7 @@ function stageRefinementSessionPlanningReferences(
   const cells = new Map<CellId, ObservedCell>();
   const nodes = new Map<number, ObservedNode>();
   const activeMembership = new Map<CellId, boolean>();
-  const ownersByNodeKey = new Map<string, readonly CellId[]>();
+  const ownersByNodeKey = new Map<string, ObservedOwners>();
   const stagedCell = (
     cellId: CellId
   ): RefinementSessionCell | undefined => {
@@ -5488,7 +5494,8 @@ function stageRefinementSessionPlanningReferences(
       fingerprint: refinementSessionStateCellFingerprintInternal(
         cellId,
         snapshot
-      )
+      ),
+      identity: cell
     });
     return snapshot;
   };
@@ -5504,7 +5511,8 @@ function stageRefinementSessionPlanningReferences(
     const snapshot = Object.freeze([...point]) as unknown as Point;
     nodes.set(nodeId, {
       snapshot,
-      fingerprint: refinementSessionStateNodeFingerprintInternal(snapshot)
+      fingerprint: refinementSessionStateNodeFingerprintInternal(snapshot),
+      identity: point
     });
     stagedOwners(exactActiveMergeKey(snapshot));
     return snapshot;
@@ -5521,11 +5529,12 @@ function stageRefinementSessionPlanningReferences(
   const stagedOwners = (key: string): readonly CellId[] => {
     const observed = ownersByNodeKey.get(key);
     if (observed !== undefined) {
-      return observed;
+      return observed.snapshot;
     }
-    const owners = Object.freeze([...state.activeOwnersByNodeKey(key)]);
-    ownersByNodeKey.set(key, owners);
-    return owners;
+    const identity = state.activeOwnersByNodeKey(key);
+    const snapshot = Object.freeze([...identity]);
+    ownersByNodeKey.set(key, { snapshot, identity });
+    return snapshot;
   };
   const reader: RefinementSessionStateReader = {
     baseSession,
@@ -5559,19 +5568,22 @@ function stageRefinementSessionPlanningReferences(
           ...scalarSnapshot,
           cells: [...cells].map(([cellId, observed]) => ({
             cellId,
-            fingerprint: observed.fingerprint
+            fingerprint: observed.fingerprint,
+            identity: observed.identity
           })),
           nodes: [...nodes].map(([nodeId, observed]) => ({
             nodeId,
-            fingerprint: observed.fingerprint
+            fingerprint: observed.fingerprint,
+            identity: observed.identity
           })),
           activeMembership: [...activeMembership].map(
             ([cellId, active]) => ({ cellId, active })
           ),
           activeLeafIds,
-          ownersByNodeKey: [...ownersByNodeKey].map(([key, owners]) => ({
+          ownersByNodeKey: [...ownersByNodeKey].map(([key, observed]) => ({
             key,
-            owners
+            owners: observed.snapshot,
+            identity: observed.identity
           }))
         }
       );

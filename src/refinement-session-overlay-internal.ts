@@ -12,8 +12,12 @@ import type {
 } from "./refinement-session-state-internal.js";
 import {
   assertRefinementSessionStateCellIdsEqualInternal,
+  assertRefinementSessionStateOwnDataIdentityInternal,
+  refinementSessionStateOrdinaryArrayLengthInternal,
+  refinementSessionStateOrdinaryArrayValueInternal,
   refinementSessionStateCellFingerprintInternal,
   refinementSessionStateNodeFingerprintInternal,
+  refinementSessionStateOwnDataValueInternal,
   registerRefinementSessionStateReferencePublisherInternal
 } from "./refinement-session-state-internal.js";
 
@@ -1928,6 +1932,80 @@ function createRefinementSessionOverlayWithBaseline(
     referencedBaseCellIds: new Set(),
     referencedBaseNodeIds: new Set()
   };
+  const registeredPlanningStorage = Object.freeze({
+    cellOverrides: storage.cellOverrides,
+    createdCells: storage.createdCells,
+    appendedNodes: storage.appendedNodes,
+    activeLeafAdditions: storage.activeLeafAdditions,
+    activeLeafRemovals: storage.activeLeafRemovals,
+    ownerOverridesByNodeKey: storage.ownerOverridesByNodeKey,
+    referencedBaseCellIds: storage.referencedBaseCellIds,
+    referencedBaseNodeIds: storage.referencedBaseNodeIds,
+    baseNodes: baseSession.nodes,
+    baseCells: baseSession.cells,
+    baseActiveLeafIds: baseSession.activeLeafIds,
+    baseActiveLeafIdsByNodeKey: baseSession.activeLeafIdsByNodeKey
+  });
+  const assertRegisteredPlanningStorage = (): void => {
+    if (
+      TRUSTED_OBJECT_GET_PROTOTYPE_OF(storage) !== TRUSTED_OBJECT_PROTOTYPE
+      || TRUSTED_OBJECT_GET_PROTOTYPE_OF(baseSession)
+        !== TRUSTED_OBJECT_PROTOTYPE
+    ) {
+      throw new TypeError(
+        "refinement session state registered storage prototype changed during planning"
+      );
+    }
+    for (const key of [
+      "cellOverrides",
+      "createdCells",
+      "appendedNodes",
+      "activeLeafAdditions",
+      "activeLeafRemovals",
+      "ownerOverridesByNodeKey",
+      "referencedBaseCellIds",
+      "referencedBaseNodeIds",
+      "baseNodes",
+      "baseCells",
+      "baseActiveLeafIds",
+      "baseActiveLeafIdsByNodeKey"
+    ] as const) {
+      assertRefinementSessionStateOwnDataIdentityInternal(
+        storage,
+        key,
+        registeredPlanningStorage[key],
+        `overlay storage.${key}`
+      );
+    }
+    for (const [key, expected] of [
+      ["nodes", registeredPlanningStorage.baseNodes],
+      ["cells", registeredPlanningStorage.baseCells],
+      ["activeLeafIds", registeredPlanningStorage.baseActiveLeafIds],
+      [
+        "activeLeafIdsByNodeKey",
+        registeredPlanningStorage.baseActiveLeafIdsByNodeKey
+      ]
+    ] as const) {
+      assertRefinementSessionStateOwnDataIdentityInternal(
+        baseSession,
+        key,
+        expected,
+        `overlay base session.${key}`
+      );
+    }
+  };
+  const storageData = (key: keyof OverlayStorage): unknown =>
+    refinementSessionStateOwnDataValueInternal(
+      storage,
+      key,
+      `overlay storage.${String(key)}`
+    );
+  const baseSessionData = (key: keyof RefinementSession): unknown =>
+    refinementSessionStateOwnDataValueInternal(
+      baseSession,
+      key,
+      `overlay base session.${String(key)}`
+    );
   const hasActiveLeaf = (cellId: CellId): boolean => {
     if (storage.activeLeafAdditions.has(cellId)) return true;
     if (storage.activeLeafRemovals.has(cellId)) return false;
@@ -2350,63 +2428,69 @@ function createRefinementSessionOverlayWithBaseline(
   };
   registerRefinementSessionStateReferencePublisherInternal(overlay, {
     validateAndPublish(batch) {
+      assertRegisteredPlanningStorage();
       const referencedBaseCellIds = assertOrdinarySet(
-        storage.referencedBaseCellIds,
+        registeredPlanningStorage.referencedBaseCellIds,
         "overlay referenced base cell ids"
       ) as Set<CellId>;
       const referencedBaseNodeIds = assertOrdinarySet(
-        storage.referencedBaseNodeIds,
+        registeredPlanningStorage.referencedBaseNodeIds,
         "overlay referenced base node ids"
       ) as Set<number>;
       const createdCells = assertOrdinaryMap(
-        storage.createdCells,
+        registeredPlanningStorage.createdCells,
         "overlay created cells"
       );
       const cellOverrides = assertOrdinaryMap(
-        storage.cellOverrides,
+        registeredPlanningStorage.cellOverrides,
         "overlay cell overrides"
       );
       const activeLeafAdditions = assertOrdinarySet(
-        storage.activeLeafAdditions,
+        registeredPlanningStorage.activeLeafAdditions,
         "overlay active leaf additions"
       ) as Set<CellId>;
       const activeLeafRemovals = assertOrdinarySet(
-        storage.activeLeafRemovals,
+        registeredPlanningStorage.activeLeafRemovals,
         "overlay active leaf removals"
       ) as Set<CellId>;
       const ownerOverridesByNodeKey = assertOrdinaryMap(
-        storage.ownerOverridesByNodeKey,
+        registeredPlanningStorage.ownerOverridesByNodeKey,
         "overlay owner overrides"
       );
       const baseCells = assertOrdinaryMap(
-        baseSession.cells,
+        registeredPlanningStorage.baseCells,
         "overlay base cells"
       );
       const baseActiveLeafIds = assertOrdinarySet(
-        baseSession.activeLeafIds,
+        registeredPlanningStorage.baseActiveLeafIds,
         "overlay base active leaf ids"
       ) as Set<CellId>;
       const baseOwnersByNodeKey = assertOrdinaryMap(
-        baseSession.activeLeafIdsByNodeKey,
+        registeredPlanningStorage.baseActiveLeafIdsByNodeKey,
         "overlay base active owners"
       );
+      const appendedNodeCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          registeredPlanningStorage.appendedNodes,
+          "overlay appended nodes"
+        );
       if (
         batch.baseSession !== baseSession
-        || batch.revision !== storage.baseRevision
-        || batch.kind !== baseSession.kind
+        || batch.revision !== storageData("baseRevision")
+        || batch.kind !== baseSessionData("kind")
         || batch.nodeCount
-          !== storage.baseNodeCount + storage.appendedNodes.length
+          !== (storageData("baseNodeCount") as number) + appendedNodeCount
         || batch.cellCount
-          !== storage.baseCellCount + mapSize(createdCells)
+          !== (storageData("baseCellCount") as number) + mapSize(createdCells)
         || batch.activeLeafCount
-          !== storage.baseActiveLeafCount
+          !== (storageData("baseActiveLeafCount") as number)
             - setSize(activeLeafRemovals)
             + setSize(activeLeafAdditions)
-        || batch.nextCommandId !== storage.nextCommandId
-        || batch.nextCellOrdinal !== storage.nextCellOrdinal
+        || batch.nextCommandId !== storageData("nextCommandId")
+        || batch.nextCellOrdinal !== storageData("nextCellOrdinal")
         || batch.sortedActiveLeafIdsDirty
-          !== (storage.sortedActiveLeafIdsDirty
-            || storage.baseSortedActiveLeafIdsDirty)
+          !== ((storageData("sortedActiveLeafIdsDirty") as boolean)
+            || (storageData("baseSortedActiveLeafIdsDirty") as boolean))
       ) {
         throw new Error(
           "refinement session state counters changed during planning"
@@ -2422,6 +2506,7 @@ function createRefinementSessionOverlayWithBaseline(
             RefinementSessionCell | undefined;
         if (
           cell === undefined
+          || cell !== expected.identity
           || refinementSessionStateCellFingerprintInternal(
             expected.cellId,
             cell
@@ -2444,15 +2529,23 @@ function createRefinementSessionOverlayWithBaseline(
       }
       for (let index = 0; index < batch.nodes.length; index += 1) {
         const expected = batch.nodes[index]!;
+        const baseNodeCount = storageData("baseNodeCount") as number;
         const point = expected.nodeId >= 1
-          && expected.nodeId <= storage.baseNodeCount
-          ? baseSession.nodes[expected.nodeId - 1]
-          : storage.appendedNodes[
-            expected.nodeId - storage.baseNodeCount - 1
-          ];
+          && expected.nodeId <= baseNodeCount
+          ? refinementSessionStateOrdinaryArrayValueInternal(
+            registeredPlanningStorage.baseNodes,
+            expected.nodeId - 1,
+            "overlay base nodes"
+          )
+          : refinementSessionStateOrdinaryArrayValueInternal(
+            registeredPlanningStorage.appendedNodes,
+            expected.nodeId - baseNodeCount - 1,
+            "overlay appended nodes"
+          );
         if (
           point === undefined
-          || refinementSessionStateNodeFingerprintInternal(point)
+          || point !== expected.identity
+          || refinementSessionStateNodeFingerprintInternal(point as Point)
             !== expected.fingerprint
         ) {
           throw new Error(
@@ -2462,7 +2555,7 @@ function createRefinementSessionOverlayWithBaseline(
         if (
           TRUSTED_NUMBER_IS_SAFE_INTEGER(expected.nodeId)
           && expected.nodeId >= 1
-          && expected.nodeId <= storage.baseNodeCount
+          && expected.nodeId <= baseNodeCount
           && !setHas(referencedBaseNodeIds, expected.nodeId)
         ) {
           TRUSTED_REFLECT_APPLY(
@@ -2501,24 +2594,46 @@ function createRefinementSessionOverlayWithBaseline(
         const expected = batch.ownersByNodeKey[index]!;
         const owners = (mapGet(ownerOverridesByNodeKey, expected.key)
           ?? mapGet(baseOwnersByNodeKey, expected.key)
-          ?? []) as readonly CellId[];
+          ?? undefined) as readonly CellId[] | undefined;
+        if (owners !== undefined && owners !== expected.identity) {
+          throw new Error(
+            `refinement session state owner mapping ${expected.key} changed during planning`
+          );
+        }
         assertRefinementSessionStateCellIdsEqualInternal(
-          owners,
+          owners ?? [],
           expected.owners,
           `owner mapping ${expected.key}`
+        );
+      }
+      assertRegisteredPlanningStorage();
+      const publishCellReferences = assertOrdinarySet(
+        registeredPlanningStorage.referencedBaseCellIds,
+        "overlay referenced base cell ids"
+      );
+      const publishNodeReferences = assertOrdinarySet(
+        registeredPlanningStorage.referencedBaseNodeIds,
+        "overlay referenced base node ids"
+      );
+      if (
+        publishCellReferences !== referencedBaseCellIds
+        || publishNodeReferences !== referencedBaseNodeIds
+      ) {
+        throw new Error(
+          "refinement session state reference targets changed during planning"
         );
       }
       for (let index = 0; index < cellIds.length; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
-          referencedBaseCellIds,
+          publishCellReferences,
           [cellIds[index]!]
         );
       }
       for (let index = 0; index < nodeIds.length; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
-          referencedBaseNodeIds,
+          publishNodeReferences,
           [nodeIds[index]!]
         );
       }

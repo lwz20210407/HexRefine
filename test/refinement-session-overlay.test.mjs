@@ -74,19 +74,25 @@ function planningReferenceBatch(session, overlay, cellIds, nodeIds) {
     nextCommandId: overlay.nextCommandId,
     nextCellOrdinal: overlay.nextCellOrdinal,
     sortedActiveLeafIdsDirty: overlay.sortedActiveLeafIdsDirty,
-    cells: cellIds.map((cellId) => ({
-      cellId,
-      fingerprint: refinementSessionStateCellFingerprintInternal(
+    cells: cellIds.map((cellId) => {
+      const identity = overlay.peekCell(cellId);
+      return {
         cellId,
-        overlay.peekCell(cellId)
-      )
-    })),
-    nodes: nodeIds.map((nodeId) => ({
-      nodeId,
-      fingerprint: refinementSessionStateNodeFingerprintInternal(
-        overlay.peekNode(nodeId)
-      )
-    })),
+        fingerprint: refinementSessionStateCellFingerprintInternal(
+          cellId,
+          identity
+        ),
+        identity
+      };
+    }),
+    nodes: nodeIds.map((nodeId) => {
+      const identity = overlay.peekNode(nodeId);
+      return {
+        nodeId,
+        fingerprint: refinementSessionStateNodeFingerprintInternal(identity),
+        identity
+      };
+    }),
     activeMembership: cellIds.map((cellId) => ({
       cellId,
       active: overlay.hasActiveLeaf(cellId)
@@ -94,7 +100,8 @@ function planningReferenceBatch(session, overlay, cellIds, nodeIds) {
     activeLeafIds: [...overlay.activeLeafIds()],
     ownersByNodeKey: nodeIds.map((nodeId) => {
       const key = exactNodeKey(overlay.peekNode(nodeId));
-      return { key, owners: [...overlay.activeOwnersByNodeKey(key)] };
+      const identity = overlay.activeOwnersByNodeKey(key);
+      return { key, owners: [...identity], identity };
     })
   };
 }
@@ -949,6 +956,104 @@ test("reader patch planning rejects in-place state mutation before publication",
     } finally {
       restore();
     }
+  }
+});
+
+test("trusted planning validation rejects a later cell accessor mutating an earlier cell", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+  const firstCell = session.cells.get("e1");
+  const laterCell = session.cells.get("e2");
+  const originalId = Object.getOwnPropertyDescriptor(laterCell, "id");
+  const originalLevel = firstCell.level;
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  let accessorReads = 0;
+  let plan;
+
+  Object.defineProperty(laterCell, "id", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      firstCell.level = originalLevel + 1;
+      return "e2";
+    }
+  });
+  try {
+    assert.throws(
+      () => {
+        plan = refinementSessionInternal
+          .buildRefinementSessionPatchPlanFromStateInternal(
+            overlay,
+            ["e1"],
+            {
+              hexRefinementRatio: 2,
+              hexTwoToOneSelectionMode: "local"
+            }
+          );
+      },
+      /changed during planning|own data property/i
+    );
+    assert.ok(accessorReads > 0);
+    assert.equal(plan, undefined);
+    assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  } finally {
+    firstCell.level = originalLevel;
+    Object.defineProperty(laterCell, "id", originalId);
+  }
+});
+
+test("trusted planning validation rejects replacement reference targets atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+  const laterCell = session.cells.get("e2");
+  const originalId = Object.getOwnPropertyDescriptor(laterCell, "id");
+  const originalTarget = overlay.storage.referencedBaseCellIds;
+  const originalTargetDescriptor = Object.getOwnPropertyDescriptor(
+    overlay.storage,
+    "referencedBaseCellIds"
+  );
+  const replacementTarget = new Set();
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  let accessorReads = 0;
+  let plan;
+
+  Object.defineProperty(laterCell, "id", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      overlay.storage.referencedBaseCellIds = replacementTarget;
+      return "e2";
+    }
+  });
+  try {
+    assert.throws(
+      () => {
+        plan = refinementSessionInternal
+          .buildRefinementSessionPatchPlanFromStateInternal(
+            overlay,
+            ["e1"],
+            {
+              hexRefinementRatio: 2,
+              hexTwoToOneSelectionMode: "local"
+            }
+          );
+      },
+      /reference|storage|changed during planning/i
+    );
+    assert.ok(accessorReads > 0);
+    assert.equal(plan, undefined);
+    assert.equal(originalTarget.size, 0);
+    assert.equal(replacementTarget.size, 0);
+    assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  } finally {
+    Object.defineProperty(laterCell, "id", originalId);
+    Object.defineProperty(
+      overlay.storage,
+      "referencedBaseCellIds",
+      originalTargetDescriptor
+    );
   }
 });
 
