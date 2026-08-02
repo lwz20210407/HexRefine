@@ -1057,6 +1057,78 @@ test("trusted planning validation rejects replacement reference targets atomical
   }
 });
 
+test("trusted reference publication does not invoke late Array iterator poisoning", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+  const firstCell = session.cells.get("e1");
+  const originalLevel = firstCell.level;
+  const batch = planningReferenceBatch(session, overlay, ["e1"], [1]);
+  const originalIteratorDescriptor = Object.getOwnPropertyDescriptor(
+    Array.prototype,
+    Symbol.iterator
+  );
+  const originalIterator = originalIteratorDescriptor.value;
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  let phase = "prepare";
+  let snapshotIteratorCalls = 0;
+  let validationIteratorCalls = 0;
+  let mutated = false;
+  let publicationError;
+  let observedLevel;
+  let afterStats;
+
+  Object.defineProperty(Array.prototype, Symbol.iterator, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: function poisonedArrayIterator() {
+      if (phase === "prepare") {
+        snapshotIteratorCalls += 1;
+      } else {
+        validationIteratorCalls += 1;
+        if (validationIteratorCalls === 2) {
+          firstCell.level = originalLevel + 1;
+          mutated = true;
+        }
+      }
+      return Reflect.apply(originalIterator, this, []);
+    }
+  });
+  try {
+    try {
+      const prepared = prepareRefinementSessionStateReferenceBatchInternal(
+        overlay,
+        batch
+      );
+      phase = "validate";
+      commitRefinementSessionStateReferenceBatchInternal(overlay, prepared);
+    } catch (error) {
+      publicationError = error;
+    }
+  } finally {
+    observedLevel = firstCell.level;
+    Object.defineProperty(
+      Array.prototype,
+      Symbol.iterator,
+      originalIteratorDescriptor
+    );
+    firstCell.level = originalLevel;
+  }
+  afterStats = refinementSessionOverlayStats(overlay);
+
+  assert.ifError(publicationError);
+  assert.equal(snapshotIteratorCalls, 0);
+  assert.equal(validationIteratorCalls, 0);
+  assert.equal(mutated, false);
+  assert.equal(observedLevel, originalLevel);
+  assert.ok(
+    afterStats.referencedBaseCellCount > beforeStats.referencedBaseCellCount
+  );
+  assert.ok(
+    afterStats.referencedBaseNodeCount > beforeStats.referencedBaseNodeCount
+  );
+});
+
 test("reader patch planning rejects caller-supplied active builds", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const overlay = createTestOverlay(session);

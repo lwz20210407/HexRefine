@@ -83,6 +83,8 @@ import {
   commitRefinementSessionStateReferenceBatchInternal,
   createDirectRefinementSessionState,
   prepareRefinementSessionStateReferenceBatchInternal,
+  refinementSessionStateOrdinaryArraySnapshotInternal,
+  refinementSessionStateSetValuesInternal,
   refinementSessionStateCellFingerprintInternal,
   refinementSessionStateNodeFingerprintInternal
 } from "./refinement-session-state-internal.js";
@@ -92,7 +94,17 @@ import type {
   RefinementSessionStateWriter
 } from "./refinement-session-state-internal.js";
 
+const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
+const TRUSTED_ARRAY_PUSH = Array.prototype.push;
+const TRUSTED_MAP = Map;
+const TRUSTED_MAP_FOR_EACH = Map.prototype.forEach;
+const TRUSTED_MAP_GET = Map.prototype.get;
+const TRUSTED_MAP_HAS = Map.prototype.has;
+const TRUSTED_MAP_SET = Map.prototype.set;
+const TRUSTED_OBJECT_FREEZE = Object.freeze;
+const TRUSTED_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
 const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_SET_PROTOTYPE = Set.prototype;
 const TRUSTED_WEAK_SET_ADD = WeakSet.prototype.add;
 const TRUSTED_WEAK_SET_HAS = WeakSet.prototype.has;
 
@@ -5419,6 +5431,45 @@ export function buildRefinementSessionPatchPlanFromStateInternal(
   return plan;
 }
 
+function snapshotPlanningArray<T>(value: unknown, label: string): T[] {
+  return refinementSessionStateOrdinaryArraySnapshotInternal(
+    value,
+    label
+  ) as T[];
+}
+
+function snapshotPlanningArrayOrSet<T>(value: unknown, label: string): T[] {
+  if (TRUSTED_ARRAY_IS_ARRAY(value)) {
+    return snapshotPlanningArray<T>(value, label);
+  }
+  if (
+    value === null
+    || typeof value !== "object"
+    || TRUSTED_REFLECT_APPLY(
+      TRUSTED_OBJECT_GET_PROTOTYPE_OF,
+      undefined,
+      [value]
+    ) !== TRUSTED_SET_PROTOTYPE
+  ) {
+    throw new TypeError(
+      `refinement session state ${label} must be an ordinary Array or Set`
+    );
+  }
+  return refinementSessionStateSetValuesInternal(value as Set<T>);
+}
+
+function planningMapGet<K, V>(map: Map<K, V>, key: K): V | undefined {
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_GET, map, [key]) as V | undefined;
+}
+
+function planningMapHas<K, V>(map: Map<K, V>, key: K): boolean {
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_HAS, map, [key]) as boolean;
+}
+
+function planningMapSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SET, map, [key, value]);
+}
+
 interface StagedRefinementSessionPlanningReferences {
   readonly reader: RefinementSessionStateReader;
   commit(): void;
@@ -5443,24 +5494,30 @@ function stageRefinementSessionPlanningReferences(
   }
   const snapshotCell = (
     cell: RefinementSessionCell
-  ): RefinementSessionCell => Object.freeze({
-    id: cell.id,
-    ordinal: cell.ordinal,
-    ...(cell.parentId === undefined ? {} : { parentId: cell.parentId }),
-    level: cell.level,
-    role: cell.role,
-    kind: cell.kind,
-    element: Object.freeze([...cell.element]) as unknown as Element,
-    children: Object.freeze([...cell.children]) as unknown as CellId[],
-    active: cell.active,
-    hidden: cell.hidden,
-    ...(cell.sourceElementId === undefined
-      ? {}
-      : { sourceElementId: cell.sourceElementId }),
-    ...(cell.template === undefined ? {} : { template: cell.template })
-  });
+  ): RefinementSessionCell => TRUSTED_OBJECT_FREEZE({
+      id: cell.id,
+      ordinal: cell.ordinal,
+      ...(cell.parentId === undefined ? {} : { parentId: cell.parentId }),
+      level: cell.level,
+      role: cell.role,
+      kind: cell.kind,
+      element: TRUSTED_OBJECT_FREEZE(snapshotPlanningArray<number>(
+        cell.element,
+        `cell ${cell.id}.element`
+      )) as unknown as Element,
+      children: TRUSTED_OBJECT_FREEZE(snapshotPlanningArray<CellId>(
+        cell.children,
+        `cell ${cell.id}.children`
+      )),
+      active: cell.active,
+      hidden: cell.hidden,
+      ...(cell.sourceElementId === undefined
+        ? {}
+        : { sourceElementId: cell.sourceElementId }),
+      ...(cell.template === undefined ? {} : { template: cell.template })
+    });
   const baseSession = state.baseSession;
-  const scalarSnapshot = Object.freeze({
+  const scalarSnapshot = TRUSTED_OBJECT_FREEZE({
     revision: state.revision,
     kind: state.kind,
     nodeCount: state.nodeCount,
@@ -5470,17 +5527,30 @@ function stageRefinementSessionPlanningReferences(
     nextCellOrdinal: state.nextCellOrdinal,
     sortedActiveLeafIdsDirty: state.sortedActiveLeafIdsDirty
   });
-  const activeLeafIds = Object.freeze([...state.activeLeafIds()]);
-  const undoCommands = Object.freeze([...state.undoCommands()]);
-  const redoCommands = Object.freeze([...state.redoCommands()]);
-  const cells = new Map<CellId, ObservedCell>();
-  const nodes = new Map<number, ObservedNode>();
-  const activeMembership = new Map<CellId, boolean>();
-  const ownersByNodeKey = new Map<string, ObservedOwners>();
+  const activeLeafIds = TRUSTED_OBJECT_FREEZE(snapshotPlanningArrayOrSet<CellId>(
+    state.activeLeafIds(),
+    "active leaf ids"
+  ));
+  const undoCommands = TRUSTED_OBJECT_FREEZE(
+    snapshotPlanningArray<RefinementSessionCommand>(
+      state.undoCommands(),
+      "undo commands"
+    )
+  );
+  const redoCommands = TRUSTED_OBJECT_FREEZE(
+    snapshotPlanningArray<RefinementSessionCommand>(
+      state.redoCommands(),
+      "redo commands"
+    )
+  );
+  const cells = new TRUSTED_MAP<CellId, ObservedCell>();
+  const nodes = new TRUSTED_MAP<number, ObservedNode>();
+  const activeMembership = new TRUSTED_MAP<CellId, boolean>();
+  const ownersByNodeKey = new TRUSTED_MAP<string, ObservedOwners>();
   const stagedCell = (
     cellId: CellId
   ): RefinementSessionCell | undefined => {
-    const observed = cells.get(cellId);
+    const observed = planningMapGet(cells, cellId);
     if (observed !== undefined) {
       return observed.snapshot;
     }
@@ -5489,7 +5559,7 @@ function stageRefinementSessionPlanningReferences(
       return undefined;
     }
     const snapshot = snapshotCell(cell);
-    cells.set(cellId, {
+    planningMapSet(cells, cellId, {
       snapshot,
       fingerprint: refinementSessionStateCellFingerprintInternal(
         cellId,
@@ -5500,7 +5570,7 @@ function stageRefinementSessionPlanningReferences(
     return snapshot;
   };
   const stagedNode = (nodeId: number): Point | undefined => {
-    const observed = nodes.get(nodeId);
+    const observed = planningMapGet(nodes, nodeId);
     if (observed !== undefined) {
       return observed.snapshot;
     }
@@ -5508,8 +5578,11 @@ function stageRefinementSessionPlanningReferences(
     if (point === undefined) {
       return undefined;
     }
-    const snapshot = Object.freeze([...point]) as unknown as Point;
-    nodes.set(nodeId, {
+    const snapshot = TRUSTED_OBJECT_FREEZE(snapshotPlanningArray<number>(
+      point,
+      `node ${nodeId}`
+    )) as unknown as Point;
+    planningMapSet(nodes, nodeId, {
       snapshot,
       fingerprint: refinementSessionStateNodeFingerprintInternal(snapshot),
       identity: point
@@ -5518,22 +5591,25 @@ function stageRefinementSessionPlanningReferences(
     return snapshot;
   };
   const stagedActiveMembership = (cellId: CellId): boolean => {
-    const observed = activeMembership.get(cellId);
-    if (observed !== undefined || activeMembership.has(cellId)) {
+    const observed = planningMapGet(activeMembership, cellId);
+    if (observed !== undefined || planningMapHas(activeMembership, cellId)) {
       return observed!;
     }
     const active = state.hasActiveLeaf(cellId);
-    activeMembership.set(cellId, active);
+    planningMapSet(activeMembership, cellId, active);
     return active;
   };
   const stagedOwners = (key: string): readonly CellId[] => {
-    const observed = ownersByNodeKey.get(key);
+    const observed = planningMapGet(ownersByNodeKey, key);
     if (observed !== undefined) {
       return observed.snapshot;
     }
     const identity = state.activeOwnersByNodeKey(key);
-    const snapshot = Object.freeze([...identity]);
-    ownersByNodeKey.set(key, { snapshot, identity });
+    const snapshot = TRUSTED_OBJECT_FREEZE(snapshotPlanningArray<CellId>(
+      identity,
+      `owner mapping ${key}`
+    ));
+    planningMapSet(ownersByNodeKey, key, { snapshot, identity });
     return snapshot;
   };
   const reader: RefinementSessionStateReader = {
@@ -5561,30 +5637,86 @@ function stageRefinementSessionPlanningReferences(
   return {
     reader,
     commit() {
+      const cellEntries: {
+        cellId: CellId;
+        fingerprint: string;
+        identity: RefinementSessionCell;
+      }[] = [];
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_MAP_FOR_EACH,
+        cells,
+        [(observed: ObservedCell, cellId: CellId) => {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, cellEntries, [{
+            cellId,
+            fingerprint: observed.fingerprint,
+            identity: observed.identity
+          }]);
+        }]
+      );
+      const nodeEntries: {
+        nodeId: number;
+        fingerprint: string;
+        identity: Point;
+      }[] = [];
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_MAP_FOR_EACH,
+        nodes,
+        [(observed: ObservedNode, nodeId: number) => {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodeEntries, [{
+            nodeId,
+            fingerprint: observed.fingerprint,
+            identity: observed.identity
+          }]);
+        }]
+      );
+      const activeMembershipEntries: {
+        cellId: CellId;
+        active: boolean;
+      }[] = [];
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_MAP_FOR_EACH,
+        activeMembership,
+        [(active: boolean, cellId: CellId) => {
+          TRUSTED_REFLECT_APPLY(
+            TRUSTED_ARRAY_PUSH,
+            activeMembershipEntries,
+            [{ cellId, active }]
+          );
+        }]
+      );
+      const ownerEntries: {
+        key: string;
+        owners: readonly CellId[];
+        identity: readonly CellId[];
+      }[] = [];
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_MAP_FOR_EACH,
+        ownersByNodeKey,
+        [(observed: ObservedOwners, key: string) => {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, ownerEntries, [{
+            key,
+            owners: observed.snapshot,
+            identity: observed.identity
+          }]);
+        }]
+      );
       const prepared = prepareRefinementSessionStateReferenceBatchInternal(
         state,
         {
           baseSession,
-          ...scalarSnapshot,
-          cells: [...cells].map(([cellId, observed]) => ({
-            cellId,
-            fingerprint: observed.fingerprint,
-            identity: observed.identity
-          })),
-          nodes: [...nodes].map(([nodeId, observed]) => ({
-            nodeId,
-            fingerprint: observed.fingerprint,
-            identity: observed.identity
-          })),
-          activeMembership: [...activeMembership].map(
-            ([cellId, active]) => ({ cellId, active })
-          ),
+          revision: scalarSnapshot.revision,
+          kind: scalarSnapshot.kind,
+          nodeCount: scalarSnapshot.nodeCount,
+          cellCount: scalarSnapshot.cellCount,
+          activeLeafCount: scalarSnapshot.activeLeafCount,
+          nextCommandId: scalarSnapshot.nextCommandId,
+          nextCellOrdinal: scalarSnapshot.nextCellOrdinal,
+          sortedActiveLeafIdsDirty: scalarSnapshot.sortedActiveLeafIdsDirty,
+          cells: cellEntries,
+          nodes: nodeEntries,
+          activeMembership: activeMembershipEntries,
           activeLeafIds,
-          ownersByNodeKey: [...ownersByNodeKey].map(([key, observed]) => ({
-            key,
-            owners: observed.snapshot,
-            identity: observed.identity
-          }))
+          ownersByNodeKey: ownerEntries
         }
       );
       commitRefinementSessionStateReferenceBatchInternal(state, prepared);

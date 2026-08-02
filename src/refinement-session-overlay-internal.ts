@@ -1956,43 +1956,49 @@ function createRefinementSessionOverlayWithBaseline(
         "refinement session state registered storage prototype changed during planning"
       );
     }
-    for (const key of [
-      "cellOverrides",
-      "createdCells",
-      "appendedNodes",
-      "activeLeafAdditions",
-      "activeLeafRemovals",
-      "ownerOverridesByNodeKey",
-      "referencedBaseCellIds",
-      "referencedBaseNodeIds",
-      "baseNodes",
-      "baseCells",
-      "baseActiveLeafIds",
-      "baseActiveLeafIdsByNodeKey"
-    ] as const) {
+    const assertStorageIdentity = (
+      key: keyof typeof registeredPlanningStorage
+    ): void => {
       assertRefinementSessionStateOwnDataIdentityInternal(
         storage,
         key,
         registeredPlanningStorage[key],
         `overlay storage.${key}`
       );
-    }
-    for (const [key, expected] of [
-      ["nodes", registeredPlanningStorage.baseNodes],
-      ["cells", registeredPlanningStorage.baseCells],
-      ["activeLeafIds", registeredPlanningStorage.baseActiveLeafIds],
-      [
-        "activeLeafIdsByNodeKey",
-        registeredPlanningStorage.baseActiveLeafIdsByNodeKey
-      ]
-    ] as const) {
+    };
+    assertStorageIdentity("cellOverrides");
+    assertStorageIdentity("createdCells");
+    assertStorageIdentity("appendedNodes");
+    assertStorageIdentity("activeLeafAdditions");
+    assertStorageIdentity("activeLeafRemovals");
+    assertStorageIdentity("ownerOverridesByNodeKey");
+    assertStorageIdentity("referencedBaseCellIds");
+    assertStorageIdentity("referencedBaseNodeIds");
+    assertStorageIdentity("baseNodes");
+    assertStorageIdentity("baseCells");
+    assertStorageIdentity("baseActiveLeafIds");
+    assertStorageIdentity("baseActiveLeafIdsByNodeKey");
+    const assertBaseIdentity = (
+      key: "nodes" | "cells" | "activeLeafIds" | "activeLeafIdsByNodeKey",
+      expected: unknown
+    ): void => {
       assertRefinementSessionStateOwnDataIdentityInternal(
         baseSession,
         key,
         expected,
         `overlay base session.${key}`
       );
-    }
+    };
+    assertBaseIdentity("nodes", registeredPlanningStorage.baseNodes);
+    assertBaseIdentity("cells", registeredPlanningStorage.baseCells);
+    assertBaseIdentity(
+      "activeLeafIds",
+      registeredPlanningStorage.baseActiveLeafIds
+    );
+    assertBaseIdentity(
+      "activeLeafIdsByNodeKey",
+      registeredPlanningStorage.baseActiveLeafIdsByNodeKey
+    );
   };
   const storageData = (key: keyof OverlayStorage): unknown =>
     refinementSessionStateOwnDataValueInternal(
@@ -2312,13 +2318,42 @@ function createRefinementSessionOverlayWithBaseline(
       storage.createdCells.set(cell.id, cell);
     },
     hasActiveLeaf,
-    *activeLeafIds() {
-      for (const cellId of baseSession.activeLeafIds) {
-        if (!storage.activeLeafRemovals.has(cellId)) {
-          yield cellId;
+    activeLeafIds() {
+      const activeIds: CellId[] = [];
+      const baseActiveIds = setValues(
+        baseSession.activeLeafIds as Set<CellId>
+      );
+      const baseActiveIdCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          baseActiveIds,
+          "overlay reader base active ids"
+        );
+      for (let index = 0; index < baseActiveIdCount; index += 1) {
+        const cellId = refinementSessionStateOrdinaryArrayValueInternal(
+          baseActiveIds,
+          index,
+          "overlay reader base active ids"
+        ) as CellId;
+        if (!setHas(storage.activeLeafRemovals, cellId)) {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeIds, [cellId]);
         }
       }
-      yield* storage.activeLeafAdditions;
+      const addedActiveIds = setValues(storage.activeLeafAdditions);
+      const addedActiveIdCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          addedActiveIds,
+          "overlay reader added active ids"
+        );
+      for (let index = 0; index < addedActiveIdCount; index += 1) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeIds, [
+          refinementSessionStateOrdinaryArrayValueInternal(
+            addedActiveIds,
+            index,
+            "overlay reader added active ids"
+          )
+        ]);
+      }
+      return activeIds;
     },
     activeOwnersByNodeKey(key) {
       return storage.ownerOverridesByNodeKey.get(key)
@@ -2409,14 +2444,55 @@ function createRefinementSessionOverlayWithBaseline(
     setNextCommandId(value) {
       storage.nextCommandId = value;
     },
-    *undoCommands() {
-      yield* baseSession.undoStack;
-      yield* storage.appendedUndoCommands;
-    },
-    *redoCommands() {
-      if (!storage.clearRedo) {
-        yield* baseSession.redoStack;
+    undoCommands() {
+      const commands: RefinementSessionCommand[] = [];
+      const baseCommandCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          baseSession.undoStack,
+          "overlay reader base undo commands"
+        );
+      for (let index = 0; index < baseCommandCount; index += 1) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, commands, [
+          refinementSessionStateOrdinaryArrayValueInternal(
+            baseSession.undoStack,
+            index,
+            "overlay reader base undo commands"
+          )
+        ]);
       }
+      const appendedCommandCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          storage.appendedUndoCommands,
+          "overlay reader appended undo commands"
+        );
+      for (let index = 0; index < appendedCommandCount; index += 1) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, commands, [
+          refinementSessionStateOrdinaryArrayValueInternal(
+            storage.appendedUndoCommands,
+            index,
+            "overlay reader appended undo commands"
+          )
+        ]);
+      }
+      return commands;
+    },
+    redoCommands() {
+      const commands: RefinementSessionCommand[] = [];
+      if (storage.clearRedo) return commands;
+      const commandCount = refinementSessionStateOrdinaryArrayLengthInternal(
+        baseSession.redoStack,
+        "overlay reader redo commands"
+      );
+      for (let index = 0; index < commandCount; index += 1) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, commands, [
+          refinementSessionStateOrdinaryArrayValueInternal(
+            baseSession.redoStack,
+            index,
+            "overlay reader redo commands"
+          )
+        ]);
+      }
+      return commands;
     },
     appendUndoCommand(command) {
       const ownedCommand = cloneCommand(command, "overlay appended undo command");
@@ -2498,8 +2574,17 @@ function createRefinementSessionOverlayWithBaseline(
       }
       const cellIds: CellId[] = [];
       const nodeIds: number[] = [];
-      for (let index = 0; index < batch.cells.length; index += 1) {
-        const expected = batch.cells[index]!;
+      const cellExpectationCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          batch.cells,
+          "overlay planning cells"
+        );
+      for (let index = 0; index < cellExpectationCount; index += 1) {
+        const expected = refinementSessionStateOrdinaryArrayValueInternal(
+          batch.cells,
+          index,
+          "overlay planning cells"
+        ) as (typeof batch.cells)[number];
         const cell = (mapGet(createdCells, expected.cellId)
           ?? mapGet(cellOverrides, expected.cellId)
           ?? mapGet(baseCells, expected.cellId)) as
@@ -2527,8 +2612,17 @@ function createRefinementSessionOverlayWithBaseline(
           );
         }
       }
-      for (let index = 0; index < batch.nodes.length; index += 1) {
-        const expected = batch.nodes[index]!;
+      const nodeExpectationCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          batch.nodes,
+          "overlay planning nodes"
+        );
+      for (let index = 0; index < nodeExpectationCount; index += 1) {
+        const expected = refinementSessionStateOrdinaryArrayValueInternal(
+          batch.nodes,
+          index,
+          "overlay planning nodes"
+        ) as (typeof batch.nodes)[number];
         const baseNodeCount = storageData("baseNodeCount") as number;
         const point = expected.nodeId >= 1
           && expected.nodeId <= baseNodeCount
@@ -2565,8 +2659,17 @@ function createRefinementSessionOverlayWithBaseline(
           );
         }
       }
-      for (let index = 0; index < batch.activeMembership.length; index += 1) {
-        const expected = batch.activeMembership[index]!;
+      const membershipExpectationCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          batch.activeMembership,
+          "overlay planning active membership"
+        );
+      for (let index = 0; index < membershipExpectationCount; index += 1) {
+        const expected = refinementSessionStateOrdinaryArrayValueInternal(
+          batch.activeMembership,
+          index,
+          "overlay planning active membership"
+        ) as (typeof batch.activeMembership)[number];
         const active = setHas(activeLeafAdditions, expected.cellId)
           || (!setHas(activeLeafRemovals, expected.cellId)
             && setHas(baseActiveLeafIds, expected.cellId));
@@ -2577,12 +2680,34 @@ function createRefinementSessionOverlayWithBaseline(
         }
       }
       const activeLeafIds: CellId[] = [];
-      for (const cellId of setValues(baseActiveLeafIds)) {
+      const baseActiveIds = setValues(baseActiveLeafIds);
+      const baseActiveIdCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          baseActiveIds,
+          "overlay base active ids"
+        );
+      for (let index = 0; index < baseActiveIdCount; index += 1) {
+        const cellId = refinementSessionStateOrdinaryArrayValueInternal(
+          baseActiveIds,
+          index,
+          "overlay base active ids"
+        ) as CellId;
         if (!setHas(activeLeafRemovals, cellId)) {
           TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeLeafIds, [cellId]);
         }
       }
-      for (const cellId of setValues(activeLeafAdditions)) {
+      const addedActiveIds = setValues(activeLeafAdditions);
+      const addedActiveIdCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          addedActiveIds,
+          "overlay added active ids"
+        );
+      for (let index = 0; index < addedActiveIdCount; index += 1) {
+        const cellId = refinementSessionStateOrdinaryArrayValueInternal(
+          addedActiveIds,
+          index,
+          "overlay added active ids"
+        ) as CellId;
         TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeLeafIds, [cellId]);
       }
       assertRefinementSessionStateCellIdsEqualInternal(
@@ -2590,8 +2715,17 @@ function createRefinementSessionOverlayWithBaseline(
         batch.activeLeafIds,
         "active leaf iteration"
       );
-      for (let index = 0; index < batch.ownersByNodeKey.length; index += 1) {
-        const expected = batch.ownersByNodeKey[index]!;
+      const ownerExpectationCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          batch.ownersByNodeKey,
+          "overlay planning owners"
+        );
+      for (let index = 0; index < ownerExpectationCount; index += 1) {
+        const expected = refinementSessionStateOrdinaryArrayValueInternal(
+          batch.ownersByNodeKey,
+          index,
+          "overlay planning owners"
+        ) as (typeof batch.ownersByNodeKey)[number];
         const owners = (mapGet(ownerOverridesByNodeKey, expected.key)
           ?? mapGet(baseOwnersByNodeKey, expected.key)
           ?? undefined) as readonly CellId[] | undefined;
@@ -2623,18 +2757,36 @@ function createRefinementSessionOverlayWithBaseline(
           "refinement session state reference targets changed during planning"
         );
       }
-      for (let index = 0; index < cellIds.length; index += 1) {
+      const cellReferenceCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          cellIds,
+          "overlay cell references"
+        );
+      for (let index = 0; index < cellReferenceCount; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
           publishCellReferences,
-          [cellIds[index]!]
+          [refinementSessionStateOrdinaryArrayValueInternal(
+            cellIds,
+            index,
+            "overlay cell references"
+          )]
         );
       }
-      for (let index = 0; index < nodeIds.length; index += 1) {
+      const nodeReferenceCount =
+        refinementSessionStateOrdinaryArrayLengthInternal(
+          nodeIds,
+          "overlay node references"
+        );
+      for (let index = 0; index < nodeReferenceCount; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
           publishNodeReferences,
-          [nodeIds[index]!]
+          [refinementSessionStateOrdinaryArrayValueInternal(
+            nodeIds,
+            index,
+            "overlay node references"
+          )]
         );
       }
     }
