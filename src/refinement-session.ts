@@ -24,6 +24,9 @@ import {
 } from "./refinement-planner-internal.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 import {
+  currentRefinementSessionConformanceCertificate
+} from "./refinement-conformance-certificate-internal.js";
+import {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality
 } from "./hex-quality.js";
@@ -1932,11 +1935,65 @@ type ResolvedRefinementSessionPatchOptions = RefinementSessionPatchOptions & {
   normalizedTwoToOneCompensation?: Readonly<NormalizedTwoToOneCompensation>;
 };
 
+interface SessionPatchOptionSnapshot {
+  readonly includeTransitions: boolean;
+  readonly hexRefinementRatio: 2 | 3;
+  readonly hexTwoToOneSelectionMode: "section" | "local";
+  readonly rebuildExistingTransitions: boolean;
+  readonly transitionSupportCellIds: readonly CellId[];
+  readonly requestedMergeTolerance?: number;
+  readonly normalizedTwoToOneCompensation: Readonly<NormalizedTwoToOneCompensation>;
+  readonly suppliedHexTwoToOneCompensation?: Readonly<NormalizedTwoToOneCompensation>;
+  readonly suppliedActiveBuild?: ActiveMeshBuildResult;
+}
+
+interface SessionPatchGeometryResolution {
+  readonly activeBuild: ActiveMeshBuildResult;
+  readonly mergeTolerance: number;
+  readonly faceTolerance: number;
+  readonly coordinateScale: number;
+  readonly minimumElementEdgeLength: number;
+}
+
 function resolveSessionPatchOptions(
   session: RefinementSession,
   diagnosticCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): ResolvedRefinementSessionPatchOptions {
+  const snapshot = snapshotSessionPatchOptions(
+    session,
+    diagnosticCellIds,
+    options
+  );
+  const geometry = resolveSessionPatchGeometry(
+    session,
+    diagnosticCellIds,
+    snapshot
+  );
+  return {
+    includeTransitions: snapshot.includeTransitions,
+    hexRefinementRatio: snapshot.hexRefinementRatio,
+    hexTwoToOneSelectionMode: snapshot.hexTwoToOneSelectionMode,
+    rebuildExistingTransitions: snapshot.rebuildExistingTransitions,
+    transitionSupportCellIds: snapshot.transitionSupportCellIds,
+    ...(snapshot.suppliedHexTwoToOneCompensation === undefined
+      ? {}
+      : {
+          hexTwoToOneCompensation:
+            snapshot.suppliedHexTwoToOneCompensation
+        }),
+    activeBuild: geometry.activeBuild,
+    mergeTolerance: geometry.mergeTolerance,
+    normalizedTwoToOneCompensation:
+      snapshot.normalizedTwoToOneCompensation
+  };
+}
+
+function snapshotSessionPatchOptions(
+  session: RefinementSession,
+  diagnosticCellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions
+): SessionPatchOptionSnapshot {
   const recipeCompensationCarrier =
     snapshotRecipeCompensationCarrier(options);
   const optionDescriptors = Object.getOwnPropertyDescriptors(options);
@@ -1946,7 +2003,84 @@ function resolveSessionPatchOptions(
     ...Object.defineProperties({}, optionDescriptors)
   };
   assertValidSessionFaceTolerance(optionsSnapshot.mergeTolerance);
-  let activeBuild = optionsSnapshot.activeBuild;
+  const includeTransitions = optionsSnapshot.includeTransitions ?? true;
+  const hexRefinementRatio = optionsSnapshot.hexRefinementRatio ?? 3;
+  const hexTwoToOneSelectionMode =
+    optionsSnapshot.hexTwoToOneSelectionMode ?? "section";
+  const supportsLocalTwoToOneTransitions =
+    session.kind === "H1"
+    && hexRefinementRatio === 2
+    && hexTwoToOneSelectionMode === "local"
+    && includeTransitions;
+  let normalizedTwoToOneCompensation:
+    Readonly<NormalizedTwoToOneCompensation>;
+  let suppliedHexTwoToOneCompensation:
+    Readonly<NormalizedTwoToOneCompensation> | undefined;
+  if (supportsLocalTwoToOneTransitions) {
+    if (compensationDescriptor !== undefined) {
+      Object.defineProperty(
+        optionsSnapshot,
+        "hexTwoToOneCompensation",
+        {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: options.hexTwoToOneCompensation
+        }
+      );
+    }
+    normalizedTwoToOneCompensation = Object.freeze(
+      normalizeTwoToOneCompensation(
+        new Set(diagnosticCellIds).size,
+        optionsSnapshot
+      )
+    );
+    if (compensationDescriptor !== undefined) {
+      suppliedHexTwoToOneCompensation =
+        normalizedTwoToOneCompensation;
+    }
+  } else {
+    normalizedTwoToOneCompensation = Object.freeze(
+      normalizeTwoToOneCompensation(
+        new Set(diagnosticCellIds).size,
+        recipeCompensationCarrier
+      )
+    );
+  }
+  return Object.freeze({
+    includeTransitions,
+    hexRefinementRatio,
+    hexTwoToOneSelectionMode,
+    rebuildExistingTransitions:
+      normalizedTwoToOneCompensation.mode !== "none",
+    transitionSupportCellIds: Object.freeze(
+      stableCellIds(optionsSnapshot.transitionSupportCellIds ?? [])
+    ),
+    ...(optionsSnapshot.mergeTolerance === undefined
+      ? {}
+      : { requestedMergeTolerance: optionsSnapshot.mergeTolerance }),
+    normalizedTwoToOneCompensation,
+    ...(suppliedHexTwoToOneCompensation === undefined
+      ? {}
+      : { suppliedHexTwoToOneCompensation }),
+    ...(optionsSnapshot.activeBuild === undefined
+      ? {}
+      : { suppliedActiveBuild: optionsSnapshot.activeBuild })
+  });
+}
+
+function resolveSessionPatchGeometry(
+  session: RefinementSession,
+  diagnosticCellIds: readonly CellId[],
+  snapshot: SessionPatchOptionSnapshot
+): SessionPatchGeometryResolution {
+  let activeBuild = snapshot.suppliedActiveBuild;
+  let certifiedResolution:
+    | Pick<
+        SessionPatchGeometryResolution,
+        "coordinateScale" | "minimumElementEdgeLength"
+      >
+    | undefined;
   if (activeBuild !== undefined) {
     if (
       activeBuild.mergeTolerance !== undefined
@@ -1967,28 +2101,55 @@ function resolveSessionPatchOptions(
     );
     const recordedTolerance = activeBuild.mergeTolerance;
     if (
-      optionsSnapshot.mergeTolerance !== undefined
+      snapshot.requestedMergeTolerance !== undefined
       && (
         recordedTolerance === undefined
-        || optionsSnapshot.mergeTolerance !== recordedTolerance
+        || snapshot.requestedMergeTolerance !== recordedTolerance
       )
     ) {
       throw sessionFaceResolutionError(
         diagnosticCellIds,
         recordedTolerance === undefined
           ? "external activeBuild does not record a merge tolerance, so requested planning consistency cannot be proven"
-          : `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${optionsSnapshot.mergeTolerance}`
+          : `external activeBuild merge tolerance ${recordedTolerance} does not match requested merge tolerance ${snapshot.requestedMergeTolerance}`
       );
     }
   } else {
+    const certificate =
+      currentRefinementSessionConformanceCertificate(session);
+    if (certificate !== undefined) {
+      const certificateMergeTolerance =
+        snapshot.requestedMergeTolerance
+        ?? effectiveSessionFaceTolerance(
+          certificate.minimumElementEdgeLength,
+          certificate.coordinateScale
+        );
+      const certificateFaceTolerance = effectiveSessionFaceTolerance(
+        certificate.minimumElementEdgeLength,
+        certificate.coordinateScale,
+        certificateMergeTolerance
+      );
+      if (certificateFaceTolerance === certificate.tolerance) {
+        certifiedResolution = certificate;
+      }
+    }
     const activeCellIds = sortedActiveLeafIdsSnapshot(session);
+    const certificateMergeTolerance = certifiedResolution === undefined
+      ? undefined
+      : snapshot.requestedMergeTolerance
+        ?? effectiveSessionFaceTolerance(
+          certifiedResolution.minimumElementEdgeLength,
+          certifiedResolution.coordinateScale
+        );
     const buildOptions: BuildActiveMeshOptions = {
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
       includeSessionNodeIdsByNodeId: false,
-      ...(optionsSnapshot.mergeTolerance === undefined
-        ? {}
-        : { mergeTolerance: optionsSnapshot.mergeTolerance })
+      ...(certificateMergeTolerance !== undefined
+        ? { mergeTolerance: certificateMergeTolerance }
+        : snapshot.requestedMergeTolerance === undefined
+          ? {}
+          : { mergeTolerance: snapshot.requestedMergeTolerance })
     };
     try {
       activeBuild = buildActiveMeshForCellIdsWithMap(
@@ -2011,7 +2172,8 @@ function resolveSessionPatchOptions(
       throw error;
     }
   }
-  const geometryResolution = activeBuild.geometryResolution;
+  const geometryResolution = certifiedResolution
+    ?? activeBuild.geometryResolution;
   if (geometryResolution === undefined) {
     throw sessionFaceResolutionError(
       diagnosticCellIds,
@@ -2034,50 +2196,13 @@ function resolveSessionPatchOptions(
     geometryResolution.minimumElementEdgeLength,
     session.activeLeafIds.size > 0
   );
-  const supportsLocalTwoToOneTransitions =
-    session.kind === "H1"
-    && optionsSnapshot.hexRefinementRatio === 2
-    && optionsSnapshot.hexTwoToOneSelectionMode === "local"
-    && (optionsSnapshot.includeTransitions ?? true);
-  let normalizedTwoToOneCompensation:
-    | Readonly<NormalizedTwoToOneCompensation>
-    | undefined;
-  if (supportsLocalTwoToOneTransitions) {
-    if (compensationDescriptor !== undefined) {
-      Object.defineProperty(
-        optionsSnapshot,
-        "hexTwoToOneCompensation",
-        {
-          configurable: true,
-          enumerable: true,
-          writable: true,
-          value: options.hexTwoToOneCompensation
-        }
-      );
-    }
-    normalizedTwoToOneCompensation = Object.freeze(
-      normalizeTwoToOneCompensation(
-        new Set(diagnosticCellIds).size,
-        optionsSnapshot
-      )
-    );
-    optionsSnapshot.hexTwoToOneCompensation =
-      normalizedTwoToOneCompensation;
-  } else {
-    normalizedTwoToOneCompensation = Object.freeze(
-      normalizeTwoToOneCompensation(
-        new Set(diagnosticCellIds).size,
-        recipeCompensationCarrier
-      )
-    );
-  }
   return {
-    ...optionsSnapshot,
     activeBuild,
     mergeTolerance,
-    ...(normalizedTwoToOneCompensation === undefined
-      ? {}
-      : { normalizedTwoToOneCompensation })
+    faceTolerance,
+    coordinateScale: geometryResolution.coordinateScale,
+    minimumElementEdgeLength:
+      geometryResolution.minimumElementEdgeLength
   };
 }
 

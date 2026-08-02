@@ -65,15 +65,25 @@ export function refinementSessionConformanceCertificate(
   tolerance: number
 ): RefinementSessionConformanceCertificate | undefined {
   validateTolerance(tolerance);
-  const certificate = certificatesBySession.get(session);
+  const certificate = currentRefinementSessionConformanceCertificate(session);
   if (
     certificate === undefined
     || certificate.tolerance !== normalizedZero(tolerance)
-    || !certificateMatchesCurrentState(certificate)
   ) {
-    if (certificate !== undefined && !certificateMatchesCurrentState(certificate)) {
-      certificatesBySession.delete(session);
-    }
+    return undefined;
+  }
+  return certificate;
+}
+
+export function currentRefinementSessionConformanceCertificate(
+  session: RefinementSession
+): RefinementSessionConformanceCertificate | undefined {
+  const certificate = certificatesBySession.get(session);
+  if (certificate === undefined) {
+    return undefined;
+  }
+  if (!certificateMatchesCurrentState(certificate)) {
+    certificatesBySession.delete(session);
     return undefined;
   }
   return certificate;

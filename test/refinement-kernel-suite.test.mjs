@@ -16,6 +16,10 @@ import {
   commitRefinementSessionOverlay
 } from "../dist/refinement-session-overlay-internal.js";
 import {
+  certifyRefinementSessionBaseline,
+  publishRefinementSessionConformanceCertificate
+} from "../dist/refinement-conformance-certificate-internal.js";
+import {
   RefinementCellGeometryIndex
 } from "../dist/refinement-cell-geometry.js";
 import {
@@ -14209,6 +14213,95 @@ function createConsumedSupportHistoryFixture({
     ...transactionRequest
   };
 }
+
+test("nested history rebuild snapshots patch option getters once without activeBuild", () => {
+  const fixture = createConsumedSupportHistoryFixture();
+  const values = {
+    includeTransitions: true,
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    rebuildExistingTransitions: true,
+    transitionSupportCellIds: [],
+    mergeTolerance: 1e-9
+  };
+  const reads = Object.fromEntries(
+    Object.keys(values).map((key) => [key, 0])
+  );
+  const options = {};
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(options, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads[key] += 1;
+        return value;
+      }
+    });
+  }
+  let compensationReadCount = 0;
+  let modeReadCount = 0;
+  Object.defineProperty(options, "hexTwoToOneCompensation", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      compensationReadCount += 1;
+      return Object.defineProperty({}, "mode", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          modeReadCount += 1;
+          return "local-topology";
+        }
+      });
+    }
+  });
+
+  const preview = previewSessionPatch(
+    fixture.session,
+    [fixture.boundaryCellId],
+    options
+  );
+
+  assert.equal(preview.planMode, "aggregate");
+  assert.deepEqual(reads, {
+    includeTransitions: 1,
+    hexRefinementRatio: 1,
+    hexTwoToOneSelectionMode: 1,
+    rebuildExistingTransitions: 1,
+    transitionSupportCellIds: 1,
+    mergeTolerance: 1
+  });
+  assert.equal(compensationReadCount, 1);
+  assert.equal(modeReadCount, 1);
+});
+
+test("session patch geometry resolution accepts matching baseline certificate metadata", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 2, 2));
+  const active = buildActiveMeshWithMap(session, {
+    mergeNodes: true,
+    mergeTolerance: 1e-9
+  });
+  const resolution = active.geometryResolution;
+  assert.ok(resolution);
+  const tolerance = Math.max(
+    1e-9,
+    resolution.minimumElementEdgeLength * 1e-8,
+    resolution.coordinateScale * Number.EPSILON * 64
+  );
+  const certificate = certifyRefinementSessionBaseline(session, {
+    tolerance,
+    coordinateScale: resolution.coordinateScale,
+    minimumElementEdgeLength: resolution.minimumElementEdgeLength
+  });
+  publishRefinementSessionConformanceCertificate(session, certificate);
+
+  const preview = previewSessionPatch(session, ["e1"], {
+    mergeTolerance: 1e-9
+  });
+
+  assert.equal(preview.kind, "H1");
+  assert.equal(preview.summary.selectedElementCount, 1);
+});
 
 function createCrossComponentHistoryConflictFixture() {
   const dimension = 7;
