@@ -197,6 +197,41 @@ test("history transaction hierarchy preflight preserves the reusable source sess
   assert.deepEqual(session, before);
 });
 
+test("transition rebuild context is immutable and closure scoped", () => {
+  const fixture = createConsumedSupportHistoryFixture();
+  const plan = planRefinementSessionHistoryTransaction(
+    fixture.session,
+    [fixture.boundaryCellId],
+    fixture.resolvedOptions,
+    fixture.faceResolution
+  );
+  const context = plan.context;
+
+  assert.ok(context.activeComponentCellIds.length > 0);
+  assert.ok(context.boundaryCellIds.length > 0);
+  assert.ok(context.referencedNodeIds.length > 0);
+  assert.ok(context.boundaryFaces.length > 0);
+  assert.deepEqual(
+    context.supportCommandIds,
+    plan.historyClosure.supportCommandIds
+  );
+  assert.deepEqual(
+    context.downstreamCommandIds,
+    plan.historyClosure.downstreamCommandIds
+  );
+  assert.equal(Object.isFrozen(context), true);
+  assert.equal(Object.isFrozen(context.boundaryFaces), true);
+  assert.equal(Object.isFrozen(context.boundaryFaces[0]), true);
+  assert.equal(Object.isFrozen(context.boundaryFaces[0].points), true);
+  assert.equal(Object.isFrozen(context.boundaryFaces[0].points[0]), true);
+  assert.equal(
+    context.activeComponentCellIds.every(
+      (cellId) => fixture.session.cells.has(cellId)
+    ),
+    true
+  );
+});
+
 const {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality,

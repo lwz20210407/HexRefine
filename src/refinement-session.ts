@@ -111,6 +111,11 @@ import {
   type RefinementSessionOverlayDelta,
   type RefinementSessionOverlayStats
 } from "./refinement-session-overlay-internal.js";
+import {
+  createTransitionRebuildContextInternal,
+  type ImmutableBoundaryFacePartition,
+  type TransitionRebuildContext
+} from "./refinement-transition-context-internal.js";
 
 const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
 const TRUSTED_ARRAY_PUSH = Array.prototype.push;
@@ -2712,6 +2717,7 @@ export interface SessionFaceResolution {
 
 export interface RefinementSessionHistoryTransactionPlan {
   readonly historyClosure: RefinementHistoryClosure;
+  readonly context: TransitionRebuildContext;
   readonly command: RefinementSessionCommand;
   readonly delta: RefinementSessionOverlayDelta;
   readonly overlayStats: Readonly<RefinementSessionOverlayStats>;
@@ -2939,6 +2945,13 @@ export function planRefinementSessionHistoryTransaction(
   assertHistorySupportCommands(
     historyClosure,
     discovered
+  );
+  const context = buildTransitionRebuildContext(
+    session,
+    validation.cellIds,
+    discovered.component,
+    historyClosure,
+    faceResolution
   );
 
   const working = createRefinementSessionOverlay(
@@ -3387,6 +3400,7 @@ export function planRefinementSessionHistoryTransaction(
   );
   return {
     historyClosure,
+    context,
     command,
     delta,
     overlayStats,
@@ -3822,6 +3836,18 @@ function planUntouchedTransitionShellHistoryTransaction(
     ),
     boundaryCellIds: Object.freeze(boundaryCellIds)
   });
+  const contextComponent = completeTransitionHistoryComponent(
+    session,
+    discovered,
+    collidingTransitionParentIds
+  );
+  const context = buildTransitionRebuildContext(
+    session,
+    validation.cellIds,
+    contextComponent.component,
+    historyClosure,
+    faceResolution
+  );
   const inputElementCount = resolvedOptions.activeBuild.mesh.elements.length;
   const preview: RefinementPreview<CellId> = {
     kind: session.kind,
@@ -3842,6 +3868,7 @@ function planUntouchedTransitionShellHistoryTransaction(
   const delta = snapshotRefinementSessionOverlayDelta(working);
   return {
     historyClosure,
+    context,
     command,
     delta,
     overlayStats: Object.freeze(refinementSessionOverlayStats(working)),
@@ -3909,6 +3936,106 @@ interface TransitionHistoryComponent {
 interface DiscoveredTransitionHistoryComponent {
   readonly component: TransitionHistoryComponent;
   readonly supportCommands: readonly RefinementSessionCommand[];
+}
+
+function buildTransitionRebuildContext(
+  session: RefinementSession,
+  selectedCellIds: readonly CellId[],
+  component: TransitionHistoryComponent,
+  historyClosure: RefinementHistoryClosure,
+  faceResolution: SessionFaceResolution
+): TransitionRebuildContext {
+  const activeComponentCellIds = stableCellIds(
+    [...session.activeLeafIds].filter((cellId) =>
+      component.componentCellIds.has(cellId)
+    )
+  );
+  const componentFaceIndex = createSessionFaceIndex(
+    faceResolution.tolerance
+  );
+  for (const cellId of activeComponentCellIds) {
+    const cell = requiredCell(session, cellId);
+    for (const face of refinementCellFaces(session, cell)) {
+      componentFaceIndex.add(face);
+    }
+  }
+
+  const activeComponentCellIdSet = new Set(
+    activeComponentCellIds
+  );
+  const boundaryCellIdSet = new Set<CellId>();
+  const boundaryFaces: ImmutableBoundaryFacePartition[] = [];
+  for (const cellId of stableCellIds(session.activeLeafIds)) {
+    if (activeComponentCellIdSet.has(cellId)) {
+      continue;
+    }
+    const cell = requiredCell(session, cellId);
+    for (const face of refinementCellFaces(session, cell)) {
+      const match = componentFaceIndex.uniqueMatch(face);
+      if (match === undefined) {
+        continue;
+      }
+      boundaryCellIdSet.add(cellId);
+      boundaryFaces.push({
+        ownerCellId: cellId,
+        adjacentComponentCellId: match.owner,
+        nodeIds: [...face.nodeIds],
+        points: face.points.map((point) => [...point])
+      });
+    }
+  }
+  boundaryFaces.sort((first, second) =>
+    compareCellIds(first.ownerCellId, second.ownerCellId)
+    || compareCellIds(
+      first.adjacentComponentCellId,
+      second.adjacentComponentCellId
+    )
+    || first.nodeIds.join(":").localeCompare(
+      second.nodeIds.join(":")
+    )
+  );
+  const boundaryCellIds = stableCellIds(boundaryCellIdSet);
+  const ancestorCellIdSet = new Set<CellId>();
+  for (const cellId of stableCellIds([
+    ...selectedCellIds,
+    ...component.supportCellIds,
+    ...activeComponentCellIds,
+    ...boundaryCellIds
+  ])) {
+    let parentId = requiredCell(session, cellId).parentId;
+    while (parentId !== undefined) {
+      if (ancestorCellIdSet.has(parentId)) {
+        break;
+      }
+      ancestorCellIdSet.add(parentId);
+      parentId = requiredCell(session, parentId).parentId;
+    }
+  }
+  const ancestorCellIds = stableCellIds(ancestorCellIdSet);
+  const referencedNodeIdSet = new Set<number>();
+  for (const cellId of stableCellIds([
+    ...activeComponentCellIds,
+    ...boundaryCellIds,
+    ...ancestorCellIds
+  ])) {
+    for (const nodeId of requiredCell(session, cellId).element) {
+      referencedNodeIdSet.add(nodeId);
+    }
+  }
+  const referencedNodeIds = [...referencedNodeIdSet]
+    .sort((left, right) => left - right);
+  return createTransitionRebuildContextInternal({
+    selectedCellIds: stableCellIds(selectedCellIds),
+    supportCellIds: stableCellIds(component.supportCellIds),
+    ancestorCellIds,
+    boundaryCellIds,
+    activeComponentCellIds,
+    referencedNodeIds,
+    supportCommandIds: historyClosure.supportCommandIds,
+    downstreamCommandIds: historyClosure.downstreamCommandIds,
+    boundaryFaces,
+    faceResolution
+  });
 }
 
 function discoverTransitionHistorySupportComponent(
