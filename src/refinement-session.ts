@@ -85,6 +85,10 @@ import type {
   RefinementSessionStateWriter
 } from "./refinement-session-state-internal.js";
 
+const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_WEAK_SET_ADD = WeakSet.prototype.add;
+const TRUSTED_WEAK_SET_HAS = WeakSet.prototype.has;
+
 export type CellId = string;
 export type RefinementSessionCellRole = "base" | RefinementRole;
 
@@ -2064,14 +2068,22 @@ function finalizeRefinementSessionPatchPlan(
         }),
     recipe: freezeRefinementSessionCommandRecipe(plan.recipe)
   }) as RefinementSessionPatchPlanInternal;
-  trustedRefinementSessionPatchPlans.add(trusted);
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_SET_ADD,
+    trustedRefinementSessionPatchPlans,
+    [trusted]
+  );
   return trusted;
 }
 
 function assertTrustedRefinementSessionPatchPlan(
   plan: RefinementSessionPatchPlanInternal
 ): void {
-  if (!trustedRefinementSessionPatchPlans.has(plan)) {
+  if (!TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_SET_HAS,
+    trustedRefinementSessionPatchPlans,
+    [plan]
+  )) {
     invalidRefinementSessionPatchPlan(
       "plan is not an authentic trusted builder result"
     );

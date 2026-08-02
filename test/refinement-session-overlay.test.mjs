@@ -583,6 +583,72 @@ test("structured clones and hand-built patch plans are rejected before state acc
   }
 });
 
+test("patch plan branding resists WeakSet prototype poisoning", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    });
+  const forged = {
+    ...plan,
+    replacements: plan.replacements.map((replacement) => ({
+      ...replacement,
+      refinement: {
+        ...replacement.refinement,
+        nodes: replacement.refinement.nodes.map((point) => [...point])
+      }
+    }))
+  };
+  forged.replacements[0].refinement.nodes[0] = [99, 99, 99];
+
+  const overlay = createTestOverlay(session);
+  const beforeSession = sessionStateSnapshot(session);
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  const counted = countStateWriterCalls(overlay);
+  const originalWeakSetHas = WeakSet.prototype.has;
+  const originalWeakSetAdd = WeakSet.prototype.add;
+  let planBuiltWithPoisonedAdd;
+  let laterSession;
+
+  try {
+    WeakSet.prototype.has = () => true;
+    WeakSet.prototype.add = function () { return this; };
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(counted.state, forged),
+      /invalid refinement patch plan.*(authentic|trusted|brand)/i
+    );
+    assert.deepEqual(counted.calls, []);
+    assertFreshOverlayState(overlay, session, beforeSession, beforeStats);
+
+    const genuineOverlay = createTestOverlay(session);
+    refinementSessionInternal
+      .applyRefinementSessionPatchPlanToStateInternal(genuineOverlay, plan);
+    assert.equal(genuineOverlay.cellCount, 9);
+
+    WeakSet.prototype.has = originalWeakSetHas;
+    laterSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    planBuiltWithPoisonedAdd = refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(laterSession, ["e1"], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local"
+      });
+  } finally {
+    WeakSet.prototype.has = originalWeakSetHas;
+    WeakSet.prototype.add = originalWeakSetAdd;
+  }
+
+  const laterOverlay = createTestOverlay(laterSession);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(
+      laterOverlay,
+      planBuiltWithPoisonedAdd
+    );
+  assert.equal(laterOverlay.cellCount, 9);
+});
+
 test("finite geometry tampering cannot be applied", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const plan = refinementSessionInternal
