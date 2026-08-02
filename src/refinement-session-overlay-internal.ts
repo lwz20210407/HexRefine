@@ -11,9 +11,15 @@ import type {
   RefinementSessionStateWriter
 } from "./refinement-session-state-internal.js";
 
+const TRUSTED_ARRAY_PROTOTYPE = Array.prototype;
+const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
 const TRUSTED_ARRAY_PUSH = Array.prototype.push;
 const TRUSTED_FUNCTION_CALL = Function.prototype.call;
 const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_REFLECT_DEFINE_PROPERTY = Reflect.defineProperty;
+const TRUSTED_NUMBER_IS_SAFE_INTEGER = Number.isSafeInteger;
+const TRUSTED_OBJECT_PROTOTYPE = Object.prototype;
+const TRUSTED_OBJECT_FREEZE = Object.freeze;
 const TRUSTED_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
 const TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
 const TRUSTED_MAP_GET = Map.prototype.get;
@@ -86,6 +92,54 @@ export interface RefinementSessionOverlay extends RefinementSessionStateWriter {
   readonly storage: OverlayStorage;
   readonly options: RefinementSessionOverlayOptions;
 }
+
+declare const refinementSessionOverlayHistoryCheckpointBrand: unique symbol;
+
+/** An opaque, immutable, single-use overlay history checkpoint. */
+export interface RefinementSessionOverlayHistoryCheckpoint {
+  readonly [refinementSessionOverlayHistoryCheckpointBrand]: true;
+}
+
+interface OverlayHistoryCheckpointOwner {
+  readonly overlay: RefinementSessionOverlay;
+  readonly storage: OverlayStorage;
+  readonly baseSession: RefinementSession;
+  readonly baselineValues: readonly unknown[];
+  readonly appendedUndoCommands: RefinementSessionCommand[];
+  readonly checkpoints: RefinementSessionOverlayHistoryCheckpoint[];
+}
+
+interface PreparedOverlayHistoryCheckpoint {
+  readonly owner: OverlayHistoryCheckpointOwner;
+  readonly commandPrefix: readonly RefinementSessionCommand[];
+  readonly commandLength: number;
+  readonly nextCommandId: number;
+}
+
+const overlayHistoryCheckpointOwners =
+  new WeakMap<object, OverlayHistoryCheckpointOwner>();
+const preparedOverlayHistoryCheckpoints =
+  new WeakMap<object, PreparedOverlayHistoryCheckpoint>();
+const OVERLAY_HISTORY_BASELINE_KEYS = TRUSTED_OBJECT_FREEZE([
+  "baseRevision",
+  "baseNodes",
+  "baseCells",
+  "baseActiveLeafIds",
+  "baseActiveLeafIdsByNodeKey",
+  "baseSortedActiveLeafIds",
+  "baseUndoStack",
+  "baseRedoStack",
+  "baseNodeCount",
+  "baseCellCount",
+  "baseActiveLeafCount",
+  "baseOwnerKeyCount",
+  "baseSortedActiveLeafCount",
+  "baseUndoLength",
+  "baseRedoLength",
+  "baseSortedActiveLeafIdsDirty",
+  "baseNextCommandId",
+  "baseNextCellOrdinal"
+] as const);
 
 interface OverlayDeltaCell {
   readonly id: CellId;
@@ -239,6 +293,276 @@ function overlayBaseline(baseSession: RefinementSession): OverlayBaseline {
     baseNextCommandId: baseSession.nextCommandId,
     baseNextCellOrdinal: baseSession.nextCellOrdinal
   };
+}
+
+function overlayHistoryCheckpointError(message: string): never {
+  throw new TypeError(
+    `invalid refinement session overlay history checkpoint: ${message}`
+  );
+}
+
+function assertTrustedOverlayHistoryCheckpointIntrinsics(): void {
+  if (Array.prototype !== TRUSTED_ARRAY_PROTOTYPE
+    || Array.isArray !== TRUSTED_ARRAY_IS_ARRAY
+    || Array.prototype.push !== TRUSTED_ARRAY_PUSH
+    || Function.prototype.call !== TRUSTED_FUNCTION_CALL
+    || Reflect.apply !== TRUSTED_REFLECT_APPLY
+    || Reflect.defineProperty !== TRUSTED_REFLECT_DEFINE_PROPERTY
+    || Number.isSafeInteger !== TRUSTED_NUMBER_IS_SAFE_INTEGER
+    || Object.prototype !== TRUSTED_OBJECT_PROTOTYPE
+    || Object.freeze !== TRUSTED_OBJECT_FREEZE
+    || Object.getPrototypeOf !== TRUSTED_OBJECT_GET_PROTOTYPE_OF
+    || Object.getOwnPropertyDescriptor !== TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR
+    || WeakMap.prototype.get !== TRUSTED_WEAK_MAP_GET
+    || WeakMap.prototype.set !== TRUSTED_WEAK_MAP_SET
+    || WeakMap.prototype.delete !== TRUSTED_WEAK_MAP_DELETE) {
+    overlayHistoryCheckpointError(
+      "prototype intrinsics changed since module initialization"
+    );
+  }
+}
+
+function historyOwnDataProperty<T>(
+  value: object,
+  key: string,
+  label: string
+): T {
+  const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) {
+    overlayHistoryCheckpointError(`${label}.${key} must be an own data property`);
+  }
+  return descriptor.value as T;
+}
+
+function assertOverlayHistoryBaseline(
+  owner: OverlayHistoryCheckpointOwner
+): void {
+  for (let index = 0; index < OVERLAY_HISTORY_BASELINE_KEYS.length; index += 1) {
+    const key = OVERLAY_HISTORY_BASELINE_KEYS[index]!;
+    if (historyOwnDataProperty(owner.storage, key, "overlay storage")
+      !== owner.baselineValues[index]) {
+      overlayHistoryCheckpointError("overlay baseline changed after creation");
+    }
+  }
+}
+
+function requireOverlayHistoryCheckpointOwner(
+  overlay: RefinementSessionOverlay
+): OverlayHistoryCheckpointOwner {
+  const owner = TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    overlayHistoryCheckpointOwners,
+    [overlay]
+  ) as OverlayHistoryCheckpointOwner | undefined;
+  if (owner === undefined || owner.overlay !== overlay) {
+    overlayHistoryCheckpointError("overlay is not registered by this module");
+  }
+  if (TRUSTED_OBJECT_GET_PROTOTYPE_OF(overlay) !== TRUSTED_OBJECT_PROTOTYPE
+    || TRUSTED_OBJECT_GET_PROTOTYPE_OF(owner.storage) !== TRUSTED_OBJECT_PROTOTYPE
+    || historyOwnDataProperty(overlay, "storage", "overlay") !== owner.storage
+    || historyOwnDataProperty(overlay, "baseSession", "overlay") !== owner.baseSession) {
+    overlayHistoryCheckpointError("overlay or storage identity changed");
+  }
+  assertOverlayHistoryBaseline(owner);
+  const commands = historyOwnDataProperty<unknown>(
+    owner.storage,
+    "appendedUndoCommands",
+    "overlay storage"
+  );
+  if (commands !== owner.appendedUndoCommands) {
+    overlayHistoryCheckpointError("overlay command storage identity changed");
+  }
+  return owner;
+}
+
+function readOverlayHistoryState(owner: OverlayHistoryCheckpointOwner): {
+  readonly commands: RefinementSessionCommand[];
+  readonly length: number;
+  readonly nextCommandId: number;
+} {
+  const commands = owner.appendedUndoCommands;
+  if (!TRUSTED_ARRAY_IS_ARRAY(commands)
+    || TRUSTED_OBJECT_GET_PROTOTYPE_OF(commands) !== TRUSTED_ARRAY_PROTOTYPE) {
+    overlayHistoryCheckpointError(
+      "overlay storage.appendedUndoCommands must be an ordinary Array"
+    );
+  }
+  const lengthDescriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    commands,
+    "length"
+  );
+  if (lengthDescriptor === undefined
+    || !("value" in lengthDescriptor)
+    || !lengthDescriptor.writable
+    || typeof lengthDescriptor.value !== "number"
+    || !TRUSTED_NUMBER_IS_SAFE_INTEGER(lengthDescriptor.value)
+    || lengthDescriptor.value < 0) {
+    overlayHistoryCheckpointError(
+      "overlay storage.appendedUndoCommands.length must be writable"
+    );
+  }
+  const nextCommandIdDescriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    owner.storage,
+    "nextCommandId"
+  );
+  if (nextCommandIdDescriptor === undefined
+    || !("value" in nextCommandIdDescriptor)
+    || !nextCommandIdDescriptor.writable
+    || typeof nextCommandIdDescriptor.value !== "number"
+    || !TRUSTED_NUMBER_IS_SAFE_INTEGER(nextCommandIdDescriptor.value)
+    || nextCommandIdDescriptor.value < 0) {
+    overlayHistoryCheckpointError(
+      "overlay storage.nextCommandId must be a writable non-negative safe integer"
+    );
+  }
+  return {
+    commands,
+    length: lengthDescriptor.value,
+    nextCommandId: nextCommandIdDescriptor.value
+  };
+}
+
+function registerOverlayHistoryCheckpointOwner(
+  overlay: RefinementSessionOverlay,
+  storage: OverlayStorage,
+  baseSession: RefinementSession,
+  baseline: OverlayBaseline
+): void {
+  const baselineValues: unknown[] = [];
+  for (let index = 0; index < OVERLAY_HISTORY_BASELINE_KEYS.length; index += 1) {
+    const key = OVERLAY_HISTORY_BASELINE_KEYS[index]!;
+    TRUSTED_REFLECT_APPLY(
+      TRUSTED_ARRAY_PUSH,
+      baselineValues,
+      [historyOwnDataProperty(baseline, key, "overlay baseline")]
+    );
+  }
+  const owner: OverlayHistoryCheckpointOwner = {
+    overlay,
+    storage,
+    baseSession,
+    baselineValues: TRUSTED_OBJECT_FREEZE(baselineValues),
+    appendedUndoCommands: storage.appendedUndoCommands,
+    checkpoints: []
+  };
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_SET,
+    overlayHistoryCheckpointOwners,
+    [overlay, owner]
+  );
+}
+
+export function checkpointRefinementSessionOverlayHistory(
+  overlay: RefinementSessionOverlay
+): RefinementSessionOverlayHistoryCheckpoint {
+  assertTrustedOverlayHistoryCheckpointIntrinsics();
+  const owner = requireOverlayHistoryCheckpointOwner(overlay);
+  const state = readOverlayHistoryState(owner);
+  const commandPrefix: RefinementSessionCommand[] = [];
+  for (let index = 0; index < state.length; index += 1) {
+    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+      state.commands,
+      String(index)
+    );
+    if (descriptor === undefined
+      || !("value" in descriptor)
+      || !descriptor.enumerable) {
+      overlayHistoryCheckpointError(
+        `overlay command history has an unsafe entry at index ${index}`
+      );
+    }
+    TRUSTED_REFLECT_APPLY(
+      TRUSTED_ARRAY_PUSH,
+      commandPrefix,
+      [descriptor.value]
+    );
+  }
+  const token = TRUSTED_OBJECT_FREEZE({}) as
+    RefinementSessionOverlayHistoryCheckpoint;
+  const prepared: PreparedOverlayHistoryCheckpoint = {
+    owner,
+    commandPrefix: TRUSTED_OBJECT_FREEZE(commandPrefix),
+    commandLength: state.length,
+    nextCommandId: state.nextCommandId
+  };
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_SET,
+    preparedOverlayHistoryCheckpoints,
+    [token, prepared]
+  );
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_ARRAY_PUSH,
+    owner.checkpoints,
+    [token]
+  );
+  return token;
+}
+
+export function restoreRefinementSessionOverlayHistory(
+  overlay: RefinementSessionOverlay,
+  checkpoint: RefinementSessionOverlayHistoryCheckpoint
+): void {
+  assertTrustedOverlayHistoryCheckpointIntrinsics();
+  const prepared = TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_GET,
+    preparedOverlayHistoryCheckpoints,
+    [checkpoint]
+  ) as PreparedOverlayHistoryCheckpoint | undefined;
+  if (prepared === undefined) {
+    overlayHistoryCheckpointError("token is forged, invalid, or already consumed");
+  }
+  const owner = requireOverlayHistoryCheckpointOwner(overlay);
+  if (prepared.owner !== owner) {
+    overlayHistoryCheckpointError("token belongs to a different overlay");
+  }
+  const topIndex = owner.checkpoints.length - 1;
+  if (topIndex < 0 || owner.checkpoints[topIndex] !== checkpoint) {
+    overlayHistoryCheckpointError("nested checkpoints must be restored in LIFO order");
+  }
+  const state = readOverlayHistoryState(owner);
+  if (state.length < prepared.commandLength) {
+    overlayHistoryCheckpointError("overlay command history is shorter than its checkpoint");
+  }
+  for (let index = 0; index < prepared.commandLength; index += 1) {
+    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+      state.commands,
+      String(index)
+    );
+    if (descriptor === undefined
+      || !("value" in descriptor)
+      || descriptor.value !== prepared.commandPrefix[index]) {
+      overlayHistoryCheckpointError(
+        `overlay command history prefix changed at index ${index}`
+      );
+    }
+  }
+  for (let index = prepared.commandLength; index < state.length; index += 1) {
+    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+      state.commands,
+      String(index)
+    );
+    if (descriptor === undefined
+      || !("value" in descriptor)
+      || !descriptor.enumerable
+      || !descriptor.configurable) {
+      overlayHistoryCheckpointError(
+        `overlay command history cannot be safely truncated at index ${index}`
+      );
+    }
+  }
+
+  TRUSTED_REFLECT_APPLY(
+    TRUSTED_WEAK_MAP_DELETE,
+    preparedOverlayHistoryCheckpoints,
+    [checkpoint]
+  );
+  owner.checkpoints.length = topIndex;
+  TRUSTED_REFLECT_DEFINE_PROPERTY(state.commands, "length", {
+    value: prepared.commandLength
+  });
+  TRUSTED_REFLECT_DEFINE_PROPERTY(owner.storage, "nextCommandId", {
+    value: prepared.nextCommandId
+  });
 }
 
 function assertOverlayBaseline(
@@ -1643,7 +1967,7 @@ function createRefinementSessionOverlayWithBaseline(
       prepared.sortedActiveLeafIdsDirty;
   };
 
-  return {
+  const overlay: RefinementSessionOverlay = {
     storage,
     options,
     baseSession,
@@ -1845,6 +2169,13 @@ function createRefinementSessionOverlayWithBaseline(
       storage.clearRedo = true;
     }
   };
+  registerOverlayHistoryCheckpointOwner(
+    overlay,
+    storage,
+    baseSession,
+    baseline
+  );
+  return overlay;
 }
 
 export function createRefinementSessionOverlay(

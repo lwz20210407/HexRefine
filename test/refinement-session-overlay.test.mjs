@@ -12,6 +12,7 @@ import {
 } from "../dist/index.js";
 import * as publicApi from "../dist/index.js";
 import * as refinementSessionInternal from "../dist/refinement-session.js";
+import * as refinementSessionOverlayInternal from "../dist/refinement-session-overlay-internal.js";
 import {
   commitRefinementSessionOverlay,
   createRefinementSessionOverlay,
@@ -1434,6 +1435,316 @@ test("fork isolates active sparse collections, references, flags, and counters",
   assert.equal(parent.storage.clearRedo, true);
   assert.equal(parent.storage.nextCellOrdinal, 4);
   assert.equal(parent.storage.nextCommandId, 42);
+});
+
+test("overlay history restore rewinds only speculative commands and command ids", () => {
+  assert.equal(
+    typeof refinementSessionOverlayInternal.checkpointRefinementSessionOverlayHistory,
+    "function"
+  );
+  assert.equal(
+    typeof refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory,
+    "function"
+  );
+
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const originalCommand = { id: "original-command", kind: "original" };
+  const redoCommand = { id: "redo-command", kind: "redo" };
+  session.undoStack.push(originalCommand);
+  session.redoStack.push(redoCommand);
+  const overlay = createTestOverlay(session);
+  const retainedCommand = { id: "retained-command", kind: "retained" };
+  overlay.appendUndoCommand(retainedCommand);
+  overlay.setNextCommandId(session.nextCommandId + 1);
+  const checkpointNextCommandId = overlay.nextCommandId;
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+
+  assert.ok(Object.isFrozen(checkpoint));
+  const temporaryCommands = [
+    { id: "temporary-shell", kind: "shell" },
+    { id: "temporary-current", kind: "current" }
+  ];
+  for (const command of temporaryCommands) overlay.appendUndoCommand(command);
+  overlay.setNextCommandId(checkpointNextCommandId + temporaryCommands.length);
+  overlay.clearRedoCommands();
+
+  const parent = overlay.mutableCell("e1");
+  parent.active = false;
+  parent.hidden = true;
+  const appendedNodeId = overlay.appendNode([0.25, 0.5, 0.75]);
+  const created = cloneCell(
+    parent,
+    "checkpoint-created",
+    overlay.allocateCellOrdinal()
+  );
+  created.active = true;
+  created.hidden = false;
+  created.element = [...created.element.slice(0, -1), appendedNodeId];
+  overlay.setCell(created);
+  overlay.removeActiveLeaf("e1");
+  overlay.addActiveLeaf(created.id);
+  const laterOrdinal = overlay.allocateCellOrdinal();
+  const beforeRestoreStats = refinementSessionOverlayStats(overlay);
+  const beforeRestoreOwners = [...overlay.storage.ownerOverridesByNodeKey]
+    .map(([key, ownerIds]) => [key, [...ownerIds]]);
+  const beforeRestoreRevision = session.revision;
+
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    checkpoint
+  );
+
+  assert.deepEqual([...overlay.undoCommands()], [originalCommand, retainedCommand]);
+  assert.deepEqual(overlay.storage.appendedUndoCommands, [retainedCommand]);
+  assert.equal(overlay.nextCommandId, checkpointNextCommandId);
+  assert.equal(overlay.storage.clearRedo, true);
+  assert.deepEqual([...overlay.redoCommands()], []);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeRestoreStats);
+  assert.equal(overlay.nodeCount, session.nodes.length + 1);
+  assert.deepEqual(overlay.node(appendedNodeId), [0.25, 0.5, 0.75]);
+  assert.strictEqual(overlay.cell(created.id), created);
+  assert.equal(overlay.hasActiveLeaf("e1"), false);
+  assert.equal(overlay.hasActiveLeaf(created.id), true);
+  assert.deepEqual(
+    [...overlay.storage.ownerOverridesByNodeKey]
+      .map(([key, ownerIds]) => [key, [...ownerIds]]),
+    beforeRestoreOwners
+  );
+  assert.equal(overlay.sortedActiveLeafIdsDirty, true);
+  assert.equal(overlay.nextCellOrdinal, laterOrdinal + 1);
+  assert.equal(session.revision, beforeRestoreRevision);
+});
+
+test("restored overlay commits retained history plus one final compound command", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  session.undoStack.push({ id: "original-command", kind: "original" });
+  session.redoStack.push({ id: "redo-command", kind: "redo" });
+  const overlay = createTestOverlay(session);
+  overlay.appendUndoCommand({ id: "retained-command", kind: "retained" });
+  overlay.setNextCommandId(session.nextCommandId + 1);
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+
+  overlay.appendUndoCommand({ id: "temporary-shell", kind: "shell" });
+  overlay.appendUndoCommand({ id: "temporary-current", kind: "current" });
+  overlay.setNextCommandId(overlay.nextCommandId + 2);
+  overlay.clearRedoCommands();
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    checkpoint
+  );
+
+  const compoundCommand = {
+    id: "final-compound",
+    kind: "compound",
+    commandIds: ["temporary-shell", "temporary-current"]
+  };
+  overlay.appendUndoCommand(compoundCommand);
+  overlay.setNextCommandId(overlay.nextCommandId + 1);
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  const beforeRevision = session.revision;
+
+  assert.deepEqual(
+    delta.appendedUndoCommands.map((command) => command.id),
+    ["retained-command", "final-compound"]
+  );
+  commitRefinementSessionOverlay(session, delta);
+
+  assert.deepEqual(
+    session.undoStack.map((command) => command.id),
+    ["original-command", "retained-command", "final-compound"]
+  );
+  assert.equal(
+    session.undoStack.some((command) =>
+      command.id === "temporary-shell" || command.id === "temporary-current"
+    ),
+    false
+  );
+  assert.equal(session.revision, beforeRevision + 1);
+  assert.deepEqual(session.redoStack, []);
+  assert.equal(session.nextCommandId, 3);
+});
+
+test("overlay history checkpoints reject wrong owners, forgery, reuse, and non-LIFO restore", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  overlay.appendUndoCommand({ id: "retained-command" });
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "temporary-command" });
+  overlay.setNextCommandId(11);
+  const fork = forkRefinementSessionOverlay(overlay);
+  const other = createTestOverlay(session);
+  other.appendUndoCommand({ id: "other-command" });
+  other.setNextCommandId(22);
+
+  for (const wrongOverlay of [fork, other]) {
+    const beforeCommands = [...wrongOverlay.storage.appendedUndoCommands];
+    const beforeNextCommandId = wrongOverlay.nextCommandId;
+    assert.throws(
+      () => refinementSessionOverlayInternal
+        .restoreRefinementSessionOverlayHistory(wrongOverlay, checkpoint),
+      /different overlay|registered|invalid/i
+    );
+    assert.deepEqual(wrongOverlay.storage.appendedUndoCommands, beforeCommands);
+    assert.equal(wrongOverlay.nextCommandId, beforeNextCommandId);
+  }
+
+  const forgedCheckpoint = Object.freeze({});
+  const beforeForgeryCommands = [...overlay.storage.appendedUndoCommands];
+  const beforeForgeryNextCommandId = overlay.nextCommandId;
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(overlay, forgedCheckpoint),
+    /forged|invalid|consumed/i
+  );
+  assert.deepEqual(overlay.storage.appendedUndoCommands, beforeForgeryCommands);
+  assert.equal(overlay.nextCommandId, beforeForgeryNextCommandId);
+
+  const nestedCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "nested-temporary-command" });
+  const beforeNonLifoCommands = [...overlay.storage.appendedUndoCommands];
+  const beforeNonLifoNextCommandId = overlay.nextCommandId;
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(overlay, checkpoint),
+    /LIFO|nested/i
+  );
+  assert.deepEqual(overlay.storage.appendedUndoCommands, beforeNonLifoCommands);
+  assert.equal(overlay.nextCommandId, beforeNonLifoNextCommandId);
+
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    nestedCheckpoint
+  );
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    checkpoint
+  );
+  const afterRestoreCommands = [...overlay.storage.appendedUndoCommands];
+  const afterRestoreNextCommandId = overlay.nextCommandId;
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(overlay, checkpoint),
+    /forged|invalid|consumed/i
+  );
+  assert.deepEqual(overlay.storage.appendedUndoCommands, afterRestoreCommands);
+  assert.equal(overlay.nextCommandId, afterRestoreNextCommandId);
+});
+
+test("overlay history checkpoints reject stale or shortened prefixes atomically", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const staleOverlay = createTestOverlay(session);
+  const retainedCommand = { id: "retained-command" };
+  staleOverlay.appendUndoCommand(retainedCommand);
+  const staleCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(staleOverlay);
+  staleOverlay.appendUndoCommand({ id: "temporary-command" });
+  staleOverlay.setNextCommandId(19);
+  staleOverlay.storage.appendedUndoCommands[0] = { id: "replacement-command" };
+  const beforeStaleCommands = [...staleOverlay.storage.appendedUndoCommands];
+  const beforeStaleNextCommandId = staleOverlay.nextCommandId;
+
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(staleOverlay, staleCheckpoint),
+    /prefix|changed|stale/i
+  );
+  assert.deepEqual(staleOverlay.storage.appendedUndoCommands, beforeStaleCommands);
+  assert.equal(staleOverlay.nextCommandId, beforeStaleNextCommandId);
+
+  staleOverlay.storage.appendedUndoCommands[0] = retainedCommand;
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    staleOverlay,
+    staleCheckpoint
+  );
+  assert.deepEqual(staleOverlay.storage.appendedUndoCommands, [retainedCommand]);
+
+  const shortOverlay = createTestOverlay(session);
+  shortOverlay.appendUndoCommand({ id: "retained-command" });
+  const shortCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(shortOverlay);
+  shortOverlay.storage.appendedUndoCommands.length = 0;
+  shortOverlay.setNextCommandId(23);
+  const beforeShortCommands = [...shortOverlay.storage.appendedUndoCommands];
+  const beforeShortNextCommandId = shortOverlay.nextCommandId;
+
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(shortOverlay, shortCheckpoint),
+    /shorter|prefix|stale/i
+  );
+  assert.deepEqual(shortOverlay.storage.appendedUndoCommands, beforeShortCommands);
+  assert.equal(shortOverlay.nextCommandId, beforeShortNextCommandId);
+});
+
+test("overlay history restore prevalidates truncation and resists token prototype poisoning", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const hostileOverlay = createTestOverlay(session);
+  hostileOverlay.appendUndoCommand({ id: "retained-command" });
+  const hostileCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(hostileOverlay);
+  const hostileCommand = { id: "non-configurable-temporary-command" };
+  hostileOverlay.appendUndoCommand(hostileCommand);
+  hostileOverlay.setNextCommandId(29);
+  Object.defineProperty(hostileOverlay.storage.appendedUndoCommands, "1", {
+    configurable: false,
+    enumerable: true,
+    writable: true,
+    value: hostileCommand
+  });
+  const beforeHostileCommands = [...hostileOverlay.storage.appendedUndoCommands];
+  const beforeHostileNextCommandId = hostileOverlay.nextCommandId;
+
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(hostileOverlay, hostileCheckpoint),
+    /truncate|safe|configurable/i
+  );
+  assert.deepEqual(hostileOverlay.storage.appendedUndoCommands, beforeHostileCommands);
+  assert.equal(hostileOverlay.nextCommandId, beforeHostileNextCommandId);
+
+  const overlay = createTestOverlay(session);
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "temporary-command" });
+  overlay.setNextCommandId(31);
+  const forgedCheckpoint = Object.freeze({});
+  const originalWeakMapGet = WeakMap.prototype.get;
+  let poisonedError;
+
+  Object.prototype.owner = overlay;
+  WeakMap.prototype.get = function forgedWeakMapGet() {
+    return { owner: overlay, commandLength: 0, nextCommandId: 0 };
+  };
+  try {
+    assert.throws(
+      () => refinementSessionOverlayInternal
+        .restoreRefinementSessionOverlayHistory(overlay, forgedCheckpoint),
+      (error) => {
+        poisonedError = error;
+        return /intrinsic|prototype|invalid/i.test(error.message);
+      }
+    );
+  } finally {
+    WeakMap.prototype.get = originalWeakMapGet;
+    delete Object.prototype.owner;
+  }
+  assert.ok(poisonedError instanceof Error);
+  assert.deepEqual(
+    overlay.storage.appendedUndoCommands.map((command) => command.id),
+    ["temporary-command"]
+  );
+  assert.equal(overlay.nextCommandId, 31);
+
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    checkpoint
+  );
+  assert.deepEqual(overlay.storage.appendedUndoCommands, []);
+  assert.equal(overlay.nextCommandId, session.nextCommandId);
 });
 
 test("overlay delta snapshot is deeply frozen and detached from overlay and base state", () => {
