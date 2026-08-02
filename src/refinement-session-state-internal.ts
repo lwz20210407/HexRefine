@@ -7,6 +7,15 @@ import type {
   RefinementSessionCommand
 } from "./refinement-session.js";
 
+const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_MAP_SET = Map.prototype.set;
+const TRUSTED_MAP_DELETE = Map.prototype.delete;
+const TRUSTED_SET_ADD = Set.prototype.add;
+const TRUSTED_SET_DELETE = Set.prototype.delete;
+const TRUSTED_WEAK_MAP_GET = WeakMap.prototype.get;
+const TRUSTED_WEAK_MAP_SET = WeakMap.prototype.set;
+const TRUSTED_WEAK_MAP_DELETE = WeakMap.prototype.delete;
+
 export interface MutableRefinementSessionCell {
   id: CellId;
   ordinal: number;
@@ -43,12 +52,30 @@ export interface RefinementSessionStateReader {
   redoCommands(): Iterable<RefinementSessionCommand>;
 }
 
+export interface RefinementSessionActiveLeafBatchInternal {
+  readonly additions: readonly RefinementSessionCell[];
+  readonly removals: readonly CellId[];
+  readonly appendedNodes: readonly Point[];
+}
+
+declare const PREPARED_ACTIVE_LEAF_BATCH_INTERNAL: unique symbol;
+
+export interface PreparedRefinementSessionActiveLeafBatchInternal {
+  readonly [PREPARED_ACTIVE_LEAF_BATCH_INTERNAL]: true;
+}
+
 export interface RefinementSessionStateWriter extends RefinementSessionStateReader {
   mutableCell(cellId: CellId): MutableRefinementSessionCell;
   appendNode(point: Point): number;
   setCell(cell: MutableRefinementSessionCell): void;
   addActiveLeaf(cellId: CellId): void;
   removeActiveLeaf(cellId: CellId): void;
+  prepareActiveLeafBatch(
+    batch: RefinementSessionActiveLeafBatchInternal
+  ): PreparedRefinementSessionActiveLeafBatchInternal;
+  commitActiveLeafBatch(
+    prepared: PreparedRefinementSessionActiveLeafBatchInternal
+  ): void;
   allocateCellOrdinal(): number;
   setNextCommandId(value: number): void;
   appendUndoCommand(command: RefinementSessionCommand): void;
@@ -98,11 +125,24 @@ function activeNodeKeys(
   return keys;
 }
 
+interface DirectPreparedActiveLeafBatch {
+  readonly additions: readonly CellId[];
+  readonly removals: readonly CellId[];
+  readonly ownerUpdates: readonly [string, CellId[]][];
+  readonly dirty: boolean;
+}
+
+function preparedBatchToken(): PreparedRefinementSessionActiveLeafBatchInternal {
+  return Object.freeze({}) as PreparedRefinementSessionActiveLeafBatchInternal;
+}
+
 export function createDirectRefinementSessionState(
   session: RefinementSession,
   nodeKey: (point: Point) => string
 ): RefinementSessionStateWriter {
   const mutable = mutableSession(session);
+  const preparedActiveLeafBatches =
+    new WeakMap<object, DirectPreparedActiveLeafBatch>();
   return {
     baseSession: session,
     get revision() { return session.revision; },
@@ -163,6 +203,114 @@ export function createDirectRefinementSessionState(
           mutable.activeLeafIdsByNodeKey.set(key, next);
         }
       }
+    },
+    prepareActiveLeafBatch(batch) {
+      const initialNodeCount = session.nodes.length;
+      const activeOverrides = new Map<CellId, boolean>();
+      const ownerUpdates = new Map<string, CellId[]>();
+      const additions: CellId[] = [];
+      const removals: CellId[] = [];
+      const addedCells = new Map(
+        batch.additions.map((cell) => [cell.id, cell])
+      );
+      const keysForCell = (cell: RefinementSessionCell): string[] => {
+        const keys = new Set<string>();
+        for (const nodeId of cell.element) {
+          const point = nodeId <= initialNodeCount
+            ? session.nodes[nodeId - 1]
+            : batch.appendedNodes[nodeId - initialNodeCount - 1];
+          if (point === undefined) {
+            throw new Error(
+              `active cell ${cell.id} references missing node ${nodeId}`
+            );
+          }
+          keys.add(nodeKey(point));
+        }
+        return [...keys];
+      };
+      const currentOwners = (key: string): readonly CellId[] =>
+        ownerUpdates.get(key)
+          ?? mutable.activeLeafIdsByNodeKey.get(key)
+          ?? [];
+      const isActive = (cellId: CellId): boolean =>
+        activeOverrides.get(cellId) ?? mutable.activeLeafIds.has(cellId);
+
+      for (const cell of batch.additions) {
+        if (isActive(cell.id)) continue;
+        const keys = keysForCell(cell);
+        activeOverrides.set(cell.id, true);
+        additions.push(cell.id);
+        for (const key of keys) {
+          const owners = currentOwners(key);
+          ownerUpdates.set(
+            key,
+            owners.includes(cell.id) ? [...owners] : [...owners, cell.id]
+          );
+        }
+      }
+      for (const cellId of batch.removals) {
+        if (!isActive(cellId)) continue;
+        const cell = addedCells.get(cellId) ?? requiredMutableCell(session, cellId);
+        const keys = keysForCell(cell);
+        activeOverrides.set(cellId, false);
+        removals.push(cellId);
+        for (const key of keys) {
+          ownerUpdates.set(
+            key,
+            currentOwners(key).filter((ownerId) => ownerId !== cellId)
+          );
+        }
+      }
+
+      const token = preparedBatchToken();
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_SET,
+        preparedActiveLeafBatches,
+        [token, {
+          additions,
+          removals,
+          ownerUpdates: [...ownerUpdates],
+          dirty: additions.length > 0 || removals.length > 0
+        }]
+      );
+      return token;
+    },
+    commitActiveLeafBatch(token) {
+      const prepared = TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_GET,
+        preparedActiveLeafBatches,
+        [token]
+      ) as DirectPreparedActiveLeafBatch | undefined;
+      if (prepared === undefined) {
+        throw new TypeError("invalid or consumed active-leaf batch token");
+      }
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_WEAK_MAP_DELETE,
+        preparedActiveLeafBatches,
+        [token]
+      );
+      for (const cellId of prepared.additions) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_SET_ADD, mutable.activeLeafIds, [cellId]);
+      }
+      for (const cellId of prepared.removals) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_SET_DELETE, mutable.activeLeafIds, [cellId]);
+      }
+      for (const [key, owners] of prepared.ownerUpdates) {
+        if (owners.length === 0) {
+          TRUSTED_REFLECT_APPLY(
+            TRUSTED_MAP_DELETE,
+            mutable.activeLeafIdsByNodeKey,
+            [key]
+          );
+        } else {
+          TRUSTED_REFLECT_APPLY(
+            TRUSTED_MAP_SET,
+            mutable.activeLeafIdsByNodeKey,
+            [key, owners]
+          );
+        }
+      }
+      if (prepared.dirty) mutable.sortedActiveLeafIdsDirty = true;
     },
     allocateCellOrdinal() {
       const ordinal = mutable.nextCellOrdinal ?? session.cells.size + 1;

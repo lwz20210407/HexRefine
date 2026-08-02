@@ -62,6 +62,8 @@ const stateWriterMethods = new Set([
   "setCell",
   "addActiveLeaf",
   "removeActiveLeaf",
+  "prepareActiveLeafBatch",
+  "commitActiveLeafBatch",
   "allocateCellOrdinal",
   "setNextCommandId",
   "appendUndoCommand",
@@ -167,6 +169,58 @@ function comparableSessionState(session) {
     nextCommandId: session.nextCommandId,
     nextCellOrdinal: session.nextCellOrdinal
   };
+}
+
+function assertPlanOwnedValuesFrozen(plan) {
+  assert.ok(Object.isFrozen(plan));
+  for (const replacements of [plan.replacements, plan.sourceReplacements]) {
+    assert.ok(Object.isFrozen(replacements));
+    for (const replacement of replacements) {
+      assert.ok(Object.isFrozen(replacement));
+      assert.ok(Object.isFrozen(replacement.refinement));
+      assert.ok(Object.isFrozen(replacement.refinement.nodes));
+      assert.ok(replacement.refinement.nodes.every(Object.isFrozen));
+      assert.ok(Object.isFrozen(replacement.refinement.elements));
+      assert.ok(replacement.refinement.elements.every(Object.isFrozen));
+    }
+  }
+  assert.ok(Object.isFrozen(plan.hiddenCellIds));
+  assert.ok(Object.isFrozen(plan.recipe));
+  assert.ok(Object.isFrozen(plan.recipe.selectedCellIds));
+  assert.ok(Object.isFrozen(plan.recipe.selectedCellGeometry));
+  assert.ok(plan.recipe.selectedCellGeometry.every((geometry) =>
+    Object.isFrozen(geometry)
+    && Object.isFrozen(geometry.points)
+    && geometry.points.every(Object.isFrozen)
+  ));
+  assert.ok(Object.isFrozen(plan.recipe.transitionSupportCellIds));
+  assert.ok(Object.isFrozen(plan.recipe.transitionSupportCellGeometry));
+  assert.ok(Object.isFrozen(plan.recipe.options));
+  assert.ok(Object.isFrozen(plan.recipe.options.hexTwoToOneCompensation));
+  if (plan.quality !== undefined) assert.ok(Object.isFrozen(plan.quality));
+  if (plan.twoToOne !== undefined) {
+    assert.ok(Object.isFrozen(plan.twoToOne));
+    assert.ok(Object.isFrozen(plan.twoToOne.originalSelectedCellIds));
+    assert.ok(Object.isFrozen(plan.twoToOne.effectiveSelectedCellIds));
+    assert.ok(Object.isFrozen(plan.twoToOne.actions));
+    assert.ok(Object.isFrozen(plan.twoToOne.affectedComponentCellIds));
+    assert.ok(plan.twoToOne.actions.every((action) =>
+      Object.isFrozen(action)
+      && Object.isFrozen(action.addedParentCellIds)
+      && Object.isFrozen(action.replacedTransitionCellIds)
+    ));
+  }
+}
+
+function assertFreshOverlayState(overlay, session, beforeSession, beforeStats) {
+  assertSessionStateUnchanged(session, beforeSession);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  assert.equal(overlay.nodeCount, session.nodes.length);
+  assert.equal(overlay.cellCount, session.cells.size);
+  assert.equal(overlay.nextCommandId, session.nextCommandId);
+  assert.equal(overlay.nextCellOrdinal, session.nextCellOrdinal);
+  assert.deepEqual([...overlay.undoCommands()], session.undoStack);
+  assert.deepEqual([...overlay.redoCommands()], session.redoStack);
 }
 
 function populatedOverlay(session) {
@@ -434,6 +488,209 @@ test("patch plans apply identically through direct and overlay state writers", (
   );
 });
 
+test("direct patch application accepts mergeTolerance zero", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const command = refineSessionPatch(session, ["e1"], {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    mergeTolerance: 0
+  });
+
+  assert.equal(command.recipe.options.mergeTolerance, 0);
+  assert.equal(session.revision, 1);
+  assert.equal(session.activeLeafIds.size, 8);
+});
+
+test("overlay patch application with mergeTolerance zero matches direct state", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local",
+    mergeTolerance: 0
+  };
+  const directSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const directCommand = refineSessionPatch(directSession, ["e1"], options);
+  const overlaySession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(overlaySession, ["e1"], options);
+  const overlay = createTestOverlay(overlaySession);
+  const overlayCommand = refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, plan);
+
+  assert.equal(overlayCommand.recipe.options.mergeTolerance, 0);
+  assert.deepEqual(overlayCommand, directCommand);
+  commitRefinementSessionOverlay(
+    overlaySession,
+    snapshotRefinementSessionOverlayDelta(overlay)
+  );
+  assert.deepEqual(
+    comparableSessionState(overlaySession),
+    comparableSessionState(directSession)
+  );
+});
+
+test("patch plans are authentic deeply frozen values", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    });
+  assert.notEqual(plan.quality, undefined);
+  assert.notEqual(plan.twoToOne, undefined);
+  assertPlanOwnedValuesFrozen(plan);
+
+  const originalCoordinate = plan.replacements[0].refinement.nodes[0][0];
+  assert.throws(
+    () => { plan.replacements[0].refinement.nodes[0][0] = 99; },
+    TypeError
+  );
+  assert.equal(plan.replacements[0].refinement.nodes[0][0], originalCoordinate);
+
+  const overlay = createTestOverlay(session);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, plan);
+  assert.equal(overlay.cellCount, 9);
+});
+
+test("structured clones and hand-built patch plans are rejected before state access", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    });
+  const candidates = [structuredClone(plan), { ...plan }];
+
+  for (const candidate of candidates) {
+    const overlay = createTestOverlay(session);
+    const beforeSession = sessionStateSnapshot(session);
+    const beforeStats = refinementSessionOverlayStats(overlay);
+    let stateAccessed = false;
+    const unreadableState = new Proxy(overlay, {
+      get() {
+        stateAccessed = true;
+        throw new Error("state was accessed");
+      }
+    });
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(unreadableState, candidate),
+      /invalid refinement patch plan.*(authentic|trusted|brand)/i
+    );
+    assert.equal(stateAccessed, false);
+    assertFreshOverlayState(overlay, session, beforeSession, beforeStats);
+  }
+});
+
+test("finite geometry tampering cannot be applied", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    });
+  const tampered = {
+    ...plan,
+    replacements: plan.replacements.map((replacement) => ({
+      ...replacement,
+      refinement: {
+        ...replacement.refinement,
+        nodes: replacement.refinement.nodes.map((point) => [...point])
+      }
+    }))
+  };
+  tampered.replacements[0].refinement.nodes[0] = [99, 99, 99];
+  const overlay = createTestOverlay(session);
+  const beforeSession = sessionStateSnapshot(session);
+  const beforeStats = refinementSessionOverlayStats(overlay);
+
+  assert.throws(
+    () => refinementSessionInternal
+      .applyRefinementSessionPatchPlanToStateInternal(overlay, tampered),
+    /invalid refinement patch plan.*(authentic|trusted|brand)/i
+  );
+  assertFreshOverlayState(overlay, session, beforeSession, beforeStats);
+});
+
+test("active-leaf callback failures precede all patch writer mutations", () => {
+  const callbacks = [
+    {
+      label: "nodeKey",
+      options: {
+        nodeKey() { throw new Error("batch node key failure"); },
+        cellNodeIds: (cell) => cell.element
+      },
+      error: /batch node key failure/
+    },
+    {
+      label: "cellNodeIds",
+      options: {
+        nodeKey: exactNodeKey,
+        cellNodeIds() { throw new Error("batch cell node ids failure"); }
+      },
+      error: /batch cell node ids failure/
+    }
+  ];
+
+  for (const { label, options, error } of callbacks) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const plan = refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local"
+      });
+    const overlay = createRefinementSessionOverlay(session, options);
+    const beforeSession = sessionStateSnapshot(session);
+    const beforeStats = refinementSessionOverlayStats(overlay);
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(overlay, plan),
+      error,
+      label
+    );
+    assertFreshOverlayState(overlay, session, beforeSession, beforeStats);
+  }
+});
+
+test("prepared multi-child active batch builds exact canonical owner lists", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    });
+  const overlay = createTestOverlay(session);
+  const command = refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, plan);
+  const expectedOwners = new Map();
+
+  for (const cellId of command.createdCellIds) {
+    const cell = overlay.cell(cellId);
+    const keys = new Set(cell.element.map((nodeId) =>
+      exactNodeKey(overlay.node(nodeId))
+    ));
+    for (const key of keys) {
+      const owners = expectedOwners.get(key) ?? [];
+      owners.push(cellId);
+      expectedOwners.set(key, owners);
+    }
+  }
+
+  assert.equal(expectedOwners.size, 27);
+  for (const [key, ownerIds] of expectedOwners) {
+    assert.deepEqual(overlay.activeOwnersByNodeKey(key), ownerIds, key);
+  }
+  assert.deepEqual(
+    snapshotRefinementSessionOverlayDelta(overlay).ownerOverrides
+      .map(({ key, ownerIds }) => [key, [...ownerIds]])
+      .sort(([first], [second]) => first.localeCompare(second)),
+    [...expectedOwners]
+      .sort(([first], [second]) => first.localeCompare(second))
+  );
+});
+
 test("patch plan state preflight rejects stale parents before writer mutation", () => {
   const planSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const plan = refinementSessionInternal
@@ -557,72 +814,6 @@ test("patch application rejects unsafe counters and command ids before writer mu
   assert.deepEqual(counted.calls, []);
   assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
   assertSessionStateUnchanged(session, before);
-});
-
-test("patch application snapshots and validates hostile plan payloads before writer mutation", () => {
-  const options = {
-    hexRefinementRatio: 2,
-    hexTwoToOneSelectionMode: "local"
-  };
-  const cases = [
-    ["recipe", (plan) => {
-      plan.recipe = { ...plan.recipe, version: 2 };
-    }],
-    ["two-to-one report", (plan) => {
-      plan.twoToOne = { ...plan.twoToOne, actions: null };
-    }],
-    ["replacement node", (plan) => {
-      const replacement = plan.replacements[0];
-      replacement.refinement = {
-        ...replacement.refinement,
-        nodes: replacement.refinement.nodes.map((point) => [...point])
-      };
-      replacement.refinement.nodes[1] = {
-        [Symbol.iterator]() {
-          throw new Error("late replacement node failure");
-        }
-      };
-    }],
-    ["replacement element", (plan) => {
-      const replacement = plan.replacements[0];
-      replacement.refinement = {
-        ...replacement.refinement,
-        elements: replacement.refinement.elements.map((element) => [...element])
-      };
-      replacement.refinement.elements[0].map = null;
-    }],
-    ["replacement metadata", (plan) => {
-      plan.replacements[0] = {
-        ...plan.replacements[0],
-        role: "invalid-role",
-        templateCode: Number.NaN
-      };
-    }],
-    ["quality", (plan) => {
-      plan.quality = { ...plan.quality, childElementCount: Number.NaN };
-    }]
-  ];
-
-  for (const [label, mutatePlan] of cases) {
-    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
-    const plan = refinementSessionInternal
-      .buildRefinementSessionPatchPlanInternal(session, ["e1"], options);
-    mutatePlan(plan);
-    const before = sessionStateSnapshot(session);
-    const overlay = createTestOverlay(session);
-    const beforeStats = refinementSessionOverlayStats(overlay);
-    const counted = countStateWriterCalls(overlay);
-
-    assert.throws(
-      () => refinementSessionInternal
-        .applyRefinementSessionPatchPlanToStateInternal(counted.state, plan),
-      /invalid|must|unsupported|replacement|recipe|quality|two-to-one|capability/i,
-      label
-    );
-    assert.deepEqual(counted.calls, [], label);
-    assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats, label);
-    assertSessionStateUnchanged(session, before);
-  }
 });
 
 test("explicit reader merge visits only unique active nodes", () => {
