@@ -7,9 +7,18 @@ import type {
   RefinementSessionCommand
 } from "./refinement-session.js";
 
+const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
+const TRUSTED_DATA_VIEW_GET_UINT8 = DataView.prototype.getUint8;
+const TRUSTED_DATA_VIEW_SET_FLOAT64 = DataView.prototype.setFloat64;
+const TRUSTED_MATH_IMUL = Math.imul;
+const TRUSTED_NUMBER_TO_STRING = Number.prototype.toString;
 const TRUSTED_REFLECT_APPLY = Reflect.apply;
+const TRUSTED_STRING_CHAR_CODE_AT = String.prototype.charCodeAt;
+const TRUSTED_STRING_PAD_START = String.prototype.padStart;
+const TRUSTED_MAP_GET = Map.prototype.get;
 const TRUSTED_MAP_SET = Map.prototype.set;
 const TRUSTED_MAP_DELETE = Map.prototype.delete;
+const TRUSTED_SET_HAS = Set.prototype.has;
 const TRUSTED_SET_ADD = Set.prototype.add;
 const TRUSTED_SET_DELETE = Set.prototype.delete;
 const TRUSTED_WEAK_MAP_GET = WeakMap.prototype.get;
@@ -52,14 +61,47 @@ export interface RefinementSessionStateReader {
   redoCommands(): Iterable<RefinementSessionCommand>;
 }
 
+export interface RefinementSessionStateCellFingerprintInternal {
+  readonly cellId: CellId;
+  readonly fingerprint: string;
+}
+
+export interface RefinementSessionStateNodeFingerprintInternal {
+  readonly nodeId: number;
+  readonly fingerprint: string;
+}
+
+export interface RefinementSessionStateActiveMembershipInternal {
+  readonly cellId: CellId;
+  readonly active: boolean;
+}
+
+export interface RefinementSessionStateOwnerSnapshotInternal {
+  readonly key: string;
+  readonly owners: readonly CellId[];
+}
+
 export interface RefinementSessionStateReferenceBatchInternal {
-  readonly cellIds: readonly CellId[];
-  readonly nodeIds: readonly number[];
+  readonly baseSession: RefinementSession;
+  readonly revision: number;
+  readonly kind: ElementKind;
+  readonly nodeCount: number;
+  readonly cellCount: number;
+  readonly activeLeafCount: number;
+  readonly nextCommandId: number;
+  readonly nextCellOrdinal: number;
+  readonly sortedActiveLeafIdsDirty: boolean;
+  readonly cells: readonly RefinementSessionStateCellFingerprintInternal[];
+  readonly nodes: readonly RefinementSessionStateNodeFingerprintInternal[];
+  readonly activeMembership:
+    readonly RefinementSessionStateActiveMembershipInternal[];
+  readonly activeLeafIds: readonly CellId[];
+  readonly ownersByNodeKey:
+    readonly RefinementSessionStateOwnerSnapshotInternal[];
 }
 
 export interface RefinementSessionStateReferencePublisherInternal {
-  prepare(batch: RefinementSessionStateReferenceBatchInternal): unknown;
-  commit(prepared: unknown): void;
+  validateAndPublish(batch: RefinementSessionStateReferenceBatchInternal): void;
 }
 
 declare const PREPARED_STATE_REFERENCE_BATCH_INTERNAL: unique symbol;
@@ -69,14 +111,14 @@ export interface PreparedRefinementSessionStateReferenceBatchInternal {
 }
 
 interface RegisteredStateReferencePublisher {
-  readonly prepare: RefinementSessionStateReferencePublisherInternal["prepare"];
-  readonly commit: RefinementSessionStateReferencePublisherInternal["commit"];
+  readonly validateAndPublish:
+    RefinementSessionStateReferencePublisherInternal["validateAndPublish"];
 }
 
 interface PreparedStateReferenceBatch {
   readonly state: RefinementSessionStateReader;
   readonly publisher: RegisteredStateReferencePublisher;
-  readonly prepared: unknown;
+  readonly batch: RefinementSessionStateReferenceBatchInternal;
 }
 
 const stateReferencePublishers =
@@ -98,10 +140,7 @@ export function registerRefinementSessionStateReferencePublisherInternal(
   TRUSTED_REFLECT_APPLY(
     TRUSTED_WEAK_MAP_SET,
     stateReferencePublishers,
-    [state, Object.freeze({
-      prepare: publisher.prepare,
-      commit: publisher.commit
-    })]
+    [state, Object.freeze({ validateAndPublish: publisher.validateAndPublish })]
   );
 }
 
@@ -133,21 +172,45 @@ export function prepareRefinementSessionStateReferenceBatchInternal(
       "unsupported refinement session state reader: no registered reference publisher"
     );
   }
-  const snapshot = Object.freeze({
-    cellIds: Object.freeze([...batch.cellIds]),
-    nodeIds: Object.freeze([...batch.nodeIds])
-  });
-  const prepared = TRUSTED_REFLECT_APPLY(
-    publisher.prepare,
-    undefined,
-    [snapshot]
-  );
+  const snapshot: RefinementSessionStateReferenceBatchInternal =
+    Object.freeze({
+      baseSession: batch.baseSession,
+      revision: batch.revision,
+      kind: batch.kind,
+      nodeCount: batch.nodeCount,
+      cellCount: batch.cellCount,
+      activeLeafCount: batch.activeLeafCount,
+      nextCommandId: batch.nextCommandId,
+      nextCellOrdinal: batch.nextCellOrdinal,
+      sortedActiveLeafIdsDirty: batch.sortedActiveLeafIdsDirty,
+      cells: Object.freeze(batch.cells.map((entry) => Object.freeze({
+        cellId: entry.cellId,
+        fingerprint: entry.fingerprint
+      }))),
+      nodes: Object.freeze(batch.nodes.map((entry) => Object.freeze({
+        nodeId: entry.nodeId,
+        fingerprint: entry.fingerprint
+      }))),
+      activeMembership: Object.freeze(
+        batch.activeMembership.map((entry) => Object.freeze({
+          cellId: entry.cellId,
+          active: entry.active
+        }))
+      ),
+      activeLeafIds: Object.freeze([...batch.activeLeafIds]),
+      ownersByNodeKey: Object.freeze(
+        batch.ownersByNodeKey.map((entry) => Object.freeze({
+          key: entry.key,
+          owners: Object.freeze([...entry.owners])
+        }))
+      )
+    });
   const token = Object.freeze({}) as
     PreparedRefinementSessionStateReferenceBatchInternal;
   TRUSTED_REFLECT_APPLY(
     TRUSTED_WEAK_MAP_SET,
     preparedStateReferenceBatches,
-    [token, { state, publisher, prepared }]
+    [token, { state, publisher, batch: snapshot }]
   );
   return token;
 }
@@ -170,10 +233,139 @@ export function commitRefinementSessionStateReferenceBatchInternal(
     [token]
   );
   TRUSTED_REFLECT_APPLY(
-    prepared.publisher.commit,
+    prepared.publisher.validateAndPublish,
     undefined,
-    [prepared.prepared]
+    [prepared.batch]
   );
+}
+
+class RefinementSessionStateFingerprintInternal {
+  private first = 0x811c9dc5;
+  private second = 0x9e3779b9;
+  private readonly numberBytes = new DataView(new ArrayBuffer(8));
+
+  private addByte(value: number): void {
+    this.first = TRUSTED_MATH_IMUL(this.first ^ value, 0x01000193) >>> 0;
+    this.second = TRUSTED_MATH_IMUL(this.second ^ value, 0x85ebca6b) >>> 0;
+  }
+
+  private addUint32(value: number): void {
+    for (let shift = 24; shift >= 0; shift -= 8) {
+      this.addByte((value >>> shift) & 0xff);
+    }
+  }
+
+  add(value: unknown): void {
+    if (value === undefined) {
+      this.addByte(0);
+    } else if (typeof value === "boolean") {
+      this.addByte(value ? 3 : 2);
+    } else if (typeof value === "number") {
+      this.addByte(4);
+      TRUSTED_REFLECT_APPLY(
+        TRUSTED_DATA_VIEW_SET_FLOAT64,
+        this.numberBytes,
+        [0, value, false]
+      );
+      for (let index = 0; index < 8; index += 1) {
+        this.addByte(TRUSTED_REFLECT_APPLY(
+          TRUSTED_DATA_VIEW_GET_UINT8,
+          this.numberBytes,
+          [index]
+        ) as number);
+      }
+    } else if (typeof value === "string") {
+      this.addByte(5);
+      this.addUint32(value.length);
+      for (let index = 0; index < value.length; index += 1) {
+        this.addUint32(TRUSTED_REFLECT_APPLY(
+          TRUSTED_STRING_CHAR_CODE_AT,
+          value,
+          [index]
+        ) as number);
+      }
+    } else if (TRUSTED_ARRAY_IS_ARRAY(value)) {
+      this.addByte(6);
+      this.addUint32(value.length);
+      for (let index = 0; index < value.length; index += 1) {
+        this.add(value[index]);
+      }
+    } else {
+      throw new TypeError(
+        `unsupported refinement state fingerprint value: ${typeof value}`
+      );
+    }
+  }
+
+  digest(): string {
+    const first = TRUSTED_REFLECT_APPLY(
+      TRUSTED_NUMBER_TO_STRING,
+      this.first,
+      [16]
+    ) as string;
+    const second = TRUSTED_REFLECT_APPLY(
+      TRUSTED_NUMBER_TO_STRING,
+      this.second,
+      [16]
+    ) as string;
+    return `${TRUSTED_REFLECT_APPLY(
+      TRUSTED_STRING_PAD_START,
+      first,
+      [8, "0"]
+    )}${TRUSTED_REFLECT_APPLY(
+      TRUSTED_STRING_PAD_START,
+      second,
+      [8, "0"]
+    )}`;
+  }
+}
+
+function refinementSessionStateFingerprintInternal(value: unknown): string {
+  const fingerprint = new RefinementSessionStateFingerprintInternal();
+  fingerprint.add(value);
+  return fingerprint.digest();
+}
+
+export function refinementSessionStateCellFingerprintInternal(
+  cellId: CellId,
+  cell: RefinementSessionCell
+): string {
+  return refinementSessionStateFingerprintInternal([
+    cellId,
+    cell.id,
+    cell.ordinal,
+    cell.parentId,
+    cell.level,
+    cell.role,
+    cell.kind,
+    cell.element,
+    cell.children,
+    cell.active,
+    cell.hidden,
+    cell.sourceElementId,
+    cell.template
+  ]);
+}
+
+export function refinementSessionStateNodeFingerprintInternal(
+  point: Point
+): string {
+  return refinementSessionStateFingerprintInternal(point);
+}
+
+export function assertRefinementSessionStateCellIdsEqualInternal(
+  actual: readonly CellId[],
+  expected: readonly CellId[],
+  label: string
+): void {
+  if (actual.length !== expected.length) {
+    throw new Error(`refinement session state ${label} changed during planning`);
+  }
+  for (let index = 0; index < actual.length; index += 1) {
+    if (actual[index] !== expected[index]) {
+      throw new Error(`refinement session state ${label} changed during planning`);
+    }
+  }
 }
 
 export interface RefinementSessionActiveLeafBatchInternal {
@@ -452,10 +644,84 @@ export function createDirectRefinementSessionState(
     }
   };
   registerRefinementSessionStateReferencePublisherInternal(state, {
-    prepare() {
-      return undefined;
-    },
-    commit() {}
+    validateAndPublish(batch) {
+      if (
+        batch.baseSession !== session
+        || batch.revision !== session.revision
+        || batch.kind !== session.kind
+        || batch.nodeCount !== session.nodes.length
+        || batch.cellCount !== session.cells.size
+        || batch.activeLeafCount !== session.activeLeafIds.size
+        || batch.nextCommandId !== session.nextCommandId
+        || batch.nextCellOrdinal
+          !== (mutable.nextCellOrdinal ?? session.cells.size + 1)
+        || batch.sortedActiveLeafIdsDirty
+          !== session.sortedActiveLeafIdsDirty
+      ) {
+        throw new Error(
+          "refinement session state counters changed during planning"
+        );
+      }
+      for (const expected of batch.cells) {
+        const cell = TRUSTED_REFLECT_APPLY(
+          TRUSTED_MAP_GET,
+          session.cells,
+          [expected.cellId]
+        ) as RefinementSessionCell | undefined;
+        if (
+          cell === undefined
+          || refinementSessionStateCellFingerprintInternal(
+            expected.cellId,
+            cell
+          ) !== expected.fingerprint
+        ) {
+          throw new Error(
+            `refinement session state cell ${expected.cellId} changed during planning`
+          );
+        }
+      }
+      for (const expected of batch.nodes) {
+        const point = session.nodes[expected.nodeId - 1];
+        if (
+          point === undefined
+          || refinementSessionStateNodeFingerprintInternal(point)
+            !== expected.fingerprint
+        ) {
+          throw new Error(
+            `refinement session state node ${expected.nodeId} changed during planning`
+          );
+        }
+      }
+      for (const expected of batch.activeMembership) {
+        const active = TRUSTED_REFLECT_APPLY(
+          TRUSTED_SET_HAS,
+          session.activeLeafIds,
+          [expected.cellId]
+        ) as boolean;
+        if (active !== expected.active) {
+          throw new Error(
+            `refinement session state active membership for ${expected.cellId} changed during planning`
+          );
+        }
+      }
+      assertRefinementSessionStateCellIdsEqualInternal(
+        [...session.activeLeafIds],
+        batch.activeLeafIds,
+        "active leaf iteration"
+      );
+      for (const expected of batch.ownersByNodeKey) {
+        const owners = TRUSTED_REFLECT_APPLY(
+          TRUSTED_MAP_GET,
+          session.activeLeafIdsByNodeKey,
+          [expected.key]
+        ) as readonly CellId[] | undefined;
+        assertRefinementSessionStateCellIdsEqualInternal(
+          owners ?? [],
+          expected.owners,
+          `owner mapping ${expected.key}`
+        );
+      }
+    }
   });
   return state;
 }

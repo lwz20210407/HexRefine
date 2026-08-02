@@ -23,7 +23,9 @@ import {
 import {
   commitRefinementSessionStateReferenceBatchInternal,
   createDirectRefinementSessionState,
-  prepareRefinementSessionStateReferenceBatchInternal
+  prepareRefinementSessionStateReferenceBatchInternal,
+  refinementSessionStateCellFingerprintInternal,
+  refinementSessionStateNodeFingerprintInternal
 } from "../dist/refinement-session-state-internal.js";
 
 function exactNodeKey(point) {
@@ -59,6 +61,42 @@ function createTestOverlay(session) {
     nodeKey: exactNodeKey,
     cellNodeIds: (cell) => cell.element
   });
+}
+
+function planningReferenceBatch(session, overlay, cellIds, nodeIds) {
+  return {
+    baseSession: session,
+    revision: overlay.revision,
+    kind: overlay.kind,
+    nodeCount: overlay.nodeCount,
+    cellCount: overlay.cellCount,
+    activeLeafCount: overlay.activeLeafCount,
+    nextCommandId: overlay.nextCommandId,
+    nextCellOrdinal: overlay.nextCellOrdinal,
+    sortedActiveLeafIdsDirty: overlay.sortedActiveLeafIdsDirty,
+    cells: cellIds.map((cellId) => ({
+      cellId,
+      fingerprint: refinementSessionStateCellFingerprintInternal(
+        cellId,
+        overlay.peekCell(cellId)
+      )
+    })),
+    nodes: nodeIds.map((nodeId) => ({
+      nodeId,
+      fingerprint: refinementSessionStateNodeFingerprintInternal(
+        overlay.peekNode(nodeId)
+      )
+    })),
+    activeMembership: cellIds.map((cellId) => ({
+      cellId,
+      active: overlay.hasActiveLeaf(cellId)
+    })),
+    activeLeafIds: [...overlay.activeLeafIds()],
+    ownersByNodeKey: nodeIds.map((nodeId) => {
+      const key = exactNodeKey(overlay.peekNode(nodeId));
+      return { key, owners: [...overlay.activeOwnersByNodeKey(key)] };
+    })
+  };
 }
 
 const stateWriterMethods = new Set([
@@ -705,7 +743,7 @@ test("official reference batches reject late target corruption atomically", () =
   const overlay = createTestOverlay(session);
   const prepared = prepareRefinementSessionStateReferenceBatchInternal(
     overlay,
-    { cellIds: ["e1"], nodeIds: [1] }
+    planningReferenceBatch(session, overlay, ["e1"], [1])
   );
   const references = overlay.storage.referencedBaseCellIds;
   const originalPrototype = Object.getPrototypeOf(references);
@@ -739,7 +777,7 @@ test("official reference batches ignore late Set.add poisoning atomically", () =
   const overlay = createTestOverlay(session);
   const prepared = prepareRefinementSessionStateReferenceBatchInternal(
     overlay,
-    { cellIds: ["e1"], nodeIds: [1] }
+    planningReferenceBatch(session, overlay, ["e1"], [1])
   );
   const originalSetAdd = Set.prototype.add;
 
@@ -779,73 +817,105 @@ test("reader patch planning rejects in-place state mutation before publication",
   };
   const cases = [
     {
-      label: "coordinate",
+      label: "coordinate from owner callback",
       install(session, overlay) {
-        const original = overlay.peekNode;
-        let reads = 0;
+        const originalPeekNode = overlay.peekNode;
+        const originalOwners = overlay.activeOwnersByNodeKey;
+        let lastNodeId;
+        let mutatedPoint;
         overlay.peekNode = (nodeId) => {
-          const point = original(nodeId);
-          if (nodeId === 1 && ++reads === 2) point[0] += 0.125;
-          return point;
+          lastNodeId = nodeId;
+          return originalPeekNode(nodeId);
         };
-        return () => { session.nodes[0][0] -= 0.125; };
-      }
-    },
-    {
-      label: "connectivity",
-      install(session, overlay) {
-        const original = overlay.peekCell;
-        let reads = 0;
-        overlay.peekCell = (cellId) => {
-          const cell = original(cellId);
-          if (cellId === "e1" && ++reads === 2) {
-            [cell.element[0], cell.element[1]] = [cell.element[1], cell.element[0]];
+        overlay.activeOwnersByNodeKey = (key) => {
+          if (mutatedPoint === undefined && lastNodeId !== undefined) {
+            mutatedPoint = originalPeekNode(lastNodeId);
+            mutatedPoint[0] += 0.125;
           }
-          return cell;
+          return originalOwners(key);
         };
         return () => {
-          const element = session.cells.get("e1").element;
-          [element[0], element[1]] = [element[1], element[0]];
+          if (mutatedPoint !== undefined) mutatedPoint[0] -= 0.125;
         };
       }
     },
     {
-      label: "active membership",
+      label: "connectivity from owner callback",
       install(session, overlay) {
-        const original = overlay.hasActiveLeaf;
-        let reads = 0;
-        overlay.hasActiveLeaf = (cellId) => {
-          if (cellId === "e1" && ++reads === 2) {
-            session.activeLeafIds.delete("e1");
+        const originalOwners = overlay.activeOwnersByNodeKey;
+        const element = session.cells.get("e1").element;
+        let mutated = false;
+        overlay.activeOwnersByNodeKey = (key) => {
+          if (!mutated) {
+            [element[0], element[1]] = [element[1], element[0]];
+            mutated = true;
           }
-          return original(cellId);
+          return originalOwners(key);
         };
-        return () => { session.activeLeafIds.add("e1"); };
+        return () => {
+          if (mutated) {
+            [element[0], element[1]] = [element[1], element[0]];
+          }
+        };
       }
     },
     {
-      label: "owner mapping",
+      label: "active membership callback",
+      install(session, overlay) {
+        const originalHasActiveLeaf = overlay.hasActiveLeaf;
+        let mutated = false;
+        overlay.hasActiveLeaf = (cellId) => {
+          const active = originalHasActiveLeaf(cellId);
+          if (!mutated && cellId === "e1") {
+            session.activeLeafIds.delete("e1");
+            mutated = true;
+          }
+          return active;
+        };
+        return () => {
+          if (mutated) session.activeLeafIds.add("e1");
+        };
+      }
+    },
+    {
+      label: "owner mapping from later owner callback",
       install(session, overlay) {
         const original = overlay.activeOwnersByNodeKey;
-        let key;
-        let owners;
+        let observedOwners;
         let removedOwner;
-        let reads = 0;
         overlay.activeOwnersByNodeKey = (candidateKey) => {
           const result = original(candidateKey);
-          if (key === undefined && result.length > 0) {
-            key = candidateKey;
-            owners = session.activeLeafIdsByNodeKey.get(candidateKey);
+          if (observedOwners === undefined && result.length > 0) {
+            observedOwners = result;
+          } else if (
+            observedOwners !== undefined
+            && removedOwner === undefined
+          ) {
+            removedOwner = observedOwners.pop();
           }
-          if (candidateKey === key && ++reads === 2) {
-            removedOwner = owners.pop();
-          }
-          return original(candidateKey);
+          return result;
         };
         return () => {
-          if (owners !== undefined && removedOwner !== undefined) {
-            owners.push(removedOwner);
+          if (observedOwners !== undefined && removedOwner !== undefined) {
+            observedOwners.push(removedOwner);
           }
+        };
+      }
+    },
+    {
+      label: "counter from owner callback",
+      install(_session, overlay) {
+        const originalOwners = overlay.activeOwnersByNodeKey;
+        let mutated = false;
+        overlay.activeOwnersByNodeKey = (key) => {
+          if (!mutated) {
+            overlay.storage.nextCommandId += 1;
+            mutated = true;
+          }
+          return originalOwners(key);
+        };
+        return () => {
+          if (mutated) overlay.storage.nextCommandId -= 1;
         };
       }
     }
@@ -856,17 +926,21 @@ test("reader patch planning rejects in-place state mutation before publication",
     const overlay = createTestOverlay(session);
     const restore = install(session, overlay);
     const beforeStats = refinementSessionOverlayStats(overlay);
+    let plan;
     try {
       assert.throws(
-        () => refinementSessionInternal
-          .buildRefinementSessionPatchPlanFromStateInternal(
+        () => {
+          plan = refinementSessionInternal
+            .buildRefinementSessionPatchPlanFromStateInternal(
             overlay,
             ["e1"],
             options
-          ),
+          );
+        },
         /changed during planning/i,
         label
       );
+      assert.equal(plan, undefined, label);
       assert.deepEqual(
         refinementSessionOverlayStats(overlay),
         beforeStats,

@@ -82,7 +82,9 @@ import {
   assertRefinementSessionStateReferencePublisherInternal,
   commitRefinementSessionStateReferenceBatchInternal,
   createDirectRefinementSessionState,
-  prepareRefinementSessionStateReferenceBatchInternal
+  prepareRefinementSessionStateReferenceBatchInternal,
+  refinementSessionStateCellFingerprintInternal,
+  refinementSessionStateNodeFingerprintInternal
 } from "./refinement-session-state-internal.js";
 import type {
   MutableRefinementSessionCell,
@@ -5433,29 +5435,6 @@ function stageRefinementSessionPlanningReferences(
     readonly snapshot: Point;
     readonly fingerprint: string;
   }
-  const fingerprintValue = (value: unknown): string => {
-    const fingerprint = new StableFingerprint();
-    addStableValue(fingerprint, value);
-    return fingerprint.digest();
-  };
-  const fingerprintCell = (
-    cellId: CellId,
-    cell: RefinementSessionCell
-  ): string => fingerprintValue([
-    cellId,
-    cell.id,
-    cell.ordinal,
-    cell.parentId,
-    cell.level,
-    cell.role,
-    cell.kind,
-    cell.element,
-    cell.children,
-    cell.active,
-    cell.hidden,
-    cell.sourceElementId,
-    cell.template
-  ]);
   const snapshotCell = (
     cell: RefinementSessionCell
   ): RefinementSessionCell => Object.freeze({
@@ -5486,7 +5465,6 @@ function stageRefinementSessionPlanningReferences(
     sortedActiveLeafIdsDirty: state.sortedActiveLeafIdsDirty
   });
   const activeLeafIds = Object.freeze([...state.activeLeafIds()]);
-  const activeLeafIdsFingerprint = fingerprintValue(activeLeafIds);
   const undoCommands = Object.freeze([...state.undoCommands()]);
   const redoCommands = Object.freeze([...state.redoCommands()]);
   const cells = new Map<CellId, ObservedCell>();
@@ -5507,7 +5485,10 @@ function stageRefinementSessionPlanningReferences(
     const snapshot = snapshotCell(cell);
     cells.set(cellId, {
       snapshot,
-      fingerprint: fingerprintCell(cellId, snapshot)
+      fingerprint: refinementSessionStateCellFingerprintInternal(
+        cellId,
+        snapshot
+      )
     });
     return snapshot;
   };
@@ -5523,7 +5504,7 @@ function stageRefinementSessionPlanningReferences(
     const snapshot = Object.freeze([...point]) as unknown as Point;
     nodes.set(nodeId, {
       snapshot,
-      fingerprint: fingerprintValue(snapshot)
+      fingerprint: refinementSessionStateNodeFingerprintInternal(snapshot)
     });
     stagedOwners(exactActiveMergeKey(snapshot));
     return snapshot;
@@ -5571,72 +5552,27 @@ function stageRefinementSessionPlanningReferences(
   return {
     reader,
     commit() {
-      if (
-        state.baseSession !== baseSession
-        || state.revision !== scalarSnapshot.revision
-        || state.kind !== scalarSnapshot.kind
-        || state.nodeCount !== scalarSnapshot.nodeCount
-        || state.cellCount !== scalarSnapshot.cellCount
-        || state.activeLeafCount !== scalarSnapshot.activeLeafCount
-        || state.nextCommandId !== scalarSnapshot.nextCommandId
-        || state.nextCellOrdinal !== scalarSnapshot.nextCellOrdinal
-        || state.sortedActiveLeafIdsDirty
-          !== scalarSnapshot.sortedActiveLeafIdsDirty
-      ) {
-        throw new Error("refinement session state counters changed during planning");
-      }
-      for (const [cellId, observed] of cells) {
-        const cell = state.peekCell(cellId);
-        if (
-          cell === undefined
-          || fingerprintCell(cellId, cell) !== observed.fingerprint
-        ) {
-          throw new Error(
-            `refinement session state cell ${cellId} changed during planning`
-          );
-        }
-      }
-      for (const [nodeId, observed] of nodes) {
-        const point = state.peekNode(nodeId);
-        if (
-          point === undefined
-          || fingerprintValue(point) !== observed.fingerprint
-        ) {
-          throw new Error(
-            `refinement session state node ${nodeId} changed during planning`
-          );
-        }
-      }
-      for (const [cellId, active] of activeMembership) {
-        if (state.hasActiveLeaf(cellId) !== active) {
-          throw new Error(
-            `refinement session state active membership for ${cellId} changed during planning`
-          );
-        }
-      }
-      if (
-        fingerprintValue([...state.activeLeafIds()])
-          !== activeLeafIdsFingerprint
-      ) {
-        throw new Error(
-          "refinement session state active leaf iteration changed during planning"
-        );
-      }
-      for (const [key, owners] of ownersByNodeKey) {
-        if (
-          fingerprintValue([...state.activeOwnersByNodeKey(key)])
-            !== fingerprintValue(owners)
-        ) {
-          throw new Error(
-            `refinement session state owner mapping ${key} changed during planning`
-          );
-        }
-      }
       const prepared = prepareRefinementSessionStateReferenceBatchInternal(
         state,
         {
-          cellIds: [...cells.keys()],
-          nodeIds: [...nodes.keys()]
+          baseSession,
+          ...scalarSnapshot,
+          cells: [...cells].map(([cellId, observed]) => ({
+            cellId,
+            fingerprint: observed.fingerprint
+          })),
+          nodes: [...nodes].map(([nodeId, observed]) => ({
+            nodeId,
+            fingerprint: observed.fingerprint
+          })),
+          activeMembership: [...activeMembership].map(
+            ([cellId, active]) => ({ cellId, active })
+          ),
+          activeLeafIds,
+          ownersByNodeKey: [...ownersByNodeKey].map(([key, owners]) => ({
+            key,
+            owners
+          }))
         }
       );
       commitRefinementSessionStateReferenceBatchInternal(state, prepared);

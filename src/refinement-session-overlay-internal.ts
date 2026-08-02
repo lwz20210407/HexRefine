@@ -8,10 +8,12 @@ import type {
 import type {
   MutableRefinementSessionCell,
   PreparedRefinementSessionActiveLeafBatchInternal,
-  RefinementSessionStateReferenceBatchInternal,
   RefinementSessionStateWriter
 } from "./refinement-session-state-internal.js";
 import {
+  assertRefinementSessionStateCellIdsEqualInternal,
+  refinementSessionStateCellFingerprintInternal,
+  refinementSessionStateNodeFingerprintInternal,
   registerRefinementSessionStateReferencePublisherInternal
 } from "./refinement-session-state-internal.js";
 
@@ -53,6 +55,9 @@ const TRUSTED_SET_HAS = TRUSTED_SET_PROTOTYPE.has;
 const TRUSTED_SET_ADD = TRUSTED_SET_PROTOTYPE.add;
 const TRUSTED_SET_DELETE = TRUSTED_SET_PROTOTYPE.delete;
 const TRUSTED_SET_VALUES = TRUSTED_SET_PROTOTYPE.values;
+const TRUSTED_SET_ITERATOR_NEXT = TRUSTED_OBJECT_GET_PROTOTYPE_OF(
+  TRUSTED_REFLECT_APPLY(TRUSTED_SET_VALUES, new TRUSTED_SET(), [])
+).next as (this: SetIterator<unknown>) => IteratorResult<unknown>;
 const TRUSTED_WEAK_MAP_PROTOTYPE = TRUSTED_WEAK_MAP.prototype;
 const TRUSTED_WEAK_MAP_GET = TRUSTED_WEAK_MAP_PROTOTYPE.get;
 const TRUSTED_WEAK_MAP_SET = TRUSTED_WEAK_MAP_PROTOTYPE.set;
@@ -326,13 +331,6 @@ interface PreparedOverlayActiveLeafBatch {
   readonly referencedBaseCellIds: readonly CellId[];
   readonly referencedBaseNodeIds: readonly number[];
   readonly sortedActiveLeafIdsDirty: boolean;
-}
-
-interface PreparedOverlayReferenceBatch {
-  readonly referencedBaseCellIds: Set<CellId>;
-  readonly referencedBaseNodeIds: Set<number>;
-  readonly cellIds: readonly CellId[];
-  readonly nodeIds: readonly number[];
 }
 
 function cloneCell(
@@ -845,11 +843,11 @@ function assertOrdinarySet(value: unknown, label: string): Set<unknown> {
 }
 
 function mapSize(map: Map<unknown, unknown>): number {
-  return Reflect.get(Map.prototype, "size", map) as number;
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SIZE_GETTER, map, []) as number;
 }
 
 function setSize(set: Set<unknown>): number {
-  return Reflect.get(Set.prototype, "size", set) as number;
+  return TRUSTED_REFLECT_APPLY(TRUSTED_SET_SIZE_GETTER, set, []) as number;
 }
 
 function mapGet(map: Map<unknown, unknown>, key: unknown): unknown {
@@ -862,6 +860,24 @@ function mapHas(map: Map<unknown, unknown>, key: unknown): boolean {
 
 function setHas(set: Set<unknown>, value: unknown): boolean {
   return TRUSTED_REFLECT_APPLY(TRUSTED_SET_HAS, set, [value]) as boolean;
+}
+
+function setValues<T>(set: Set<T>): T[] {
+  const values: T[] = [];
+  const iterator = TRUSTED_REFLECT_APPLY(
+    TRUSTED_SET_VALUES,
+    set,
+    []
+  ) as SetIterator<T>;
+  while (true) {
+    const step = TRUSTED_REFLECT_APPLY(
+      TRUSTED_SET_ITERATOR_NEXT,
+      iterator,
+      []
+    ) as IteratorResult<T>;
+    if (step.done) return values;
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, values, [step.value]);
+  }
 }
 
 function isPlainPrimitive(value: unknown): value is PlainPrimitive {
@@ -1930,8 +1946,6 @@ function createRefinementSessionOverlayWithBaseline(
   };
   const preparedActiveLeafBatches =
     new WeakMap<object, PreparedOverlayActiveLeafBatch>();
-  const preparedReferenceBatches =
-    new WeakMap<object, PreparedOverlayReferenceBatch>();
   const prepareActiveLeafBatch = (
     batch: Parameters<RefinementSessionStateWriter["prepareActiveLeafBatch"]>[0]
   ): PreparedRefinementSessionActiveLeafBatchInternal => {
@@ -2335,7 +2349,7 @@ function createRefinementSessionOverlayWithBaseline(
     }
   };
   registerRefinementSessionStateReferencePublisherInternal(overlay, {
-    prepare(batch: RefinementSessionStateReferenceBatchInternal): object {
+    validateAndPublish(batch) {
       const referencedBaseCellIds = assertOrdinarySet(
         storage.referencedBaseCellIds,
         "overlay referenced base cell ids"
@@ -2344,85 +2358,168 @@ function createRefinementSessionOverlayWithBaseline(
         storage.referencedBaseNodeIds,
         "overlay referenced base node ids"
       ) as Set<number>;
-      const cellIds: CellId[] = [];
-      const nodeIds: number[] = [];
-      for (let index = 0; index < batch.cellIds.length; index += 1) {
-        const cellId = batch.cellIds[index]!;
-        if (
-          mapHas(baseSession.cells as Map<unknown, unknown>, cellId)
-          && !setHas(referencedBaseCellIds, cellId)
-        ) {
-          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, cellIds, [cellId]);
-        }
-      }
-      for (let index = 0; index < batch.nodeIds.length; index += 1) {
-        const nodeId = batch.nodeIds[index]!;
-        if (
-          TRUSTED_NUMBER_IS_SAFE_INTEGER(nodeId)
-          && nodeId >= 1
-          && nodeId <= storage.baseNodeCount
-          && !setHas(referencedBaseNodeIds, nodeId)
-        ) {
-          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodeIds, [nodeId]);
-        }
-      }
-      const prepared: PreparedOverlayReferenceBatch = {
-        referencedBaseCellIds,
-        referencedBaseNodeIds,
-        cellIds: TRUSTED_OBJECT_FREEZE(cellIds),
-        nodeIds: TRUSTED_OBJECT_FREEZE(nodeIds)
-      };
-      const token = TRUSTED_OBJECT_FREEZE({});
-      TRUSTED_REFLECT_APPLY(
-        TRUSTED_WEAK_MAP_SET,
-        preparedReferenceBatches,
-        [token, prepared]
+      const createdCells = assertOrdinaryMap(
+        storage.createdCells,
+        "overlay created cells"
       );
-      return token;
-    },
-    commit(token: unknown): void {
-      if (token === null || typeof token !== "object") {
-        throw new TypeError("invalid or consumed overlay reference batch token");
-      }
-      const prepared = TRUSTED_REFLECT_APPLY(
-        TRUSTED_WEAK_MAP_GET,
-        preparedReferenceBatches,
-        [token]
-      ) as PreparedOverlayReferenceBatch | undefined;
-      if (prepared === undefined) {
-        throw new TypeError("invalid or consumed overlay reference batch token");
-      }
-      const referencedBaseCellIds = assertOrdinarySet(
-        storage.referencedBaseCellIds,
-        "overlay referenced base cell ids"
+      const cellOverrides = assertOrdinaryMap(
+        storage.cellOverrides,
+        "overlay cell overrides"
       );
-      const referencedBaseNodeIds = assertOrdinarySet(
-        storage.referencedBaseNodeIds,
-        "overlay referenced base node ids"
+      const activeLeafAdditions = assertOrdinarySet(
+        storage.activeLeafAdditions,
+        "overlay active leaf additions"
+      ) as Set<CellId>;
+      const activeLeafRemovals = assertOrdinarySet(
+        storage.activeLeafRemovals,
+        "overlay active leaf removals"
+      ) as Set<CellId>;
+      const ownerOverridesByNodeKey = assertOrdinaryMap(
+        storage.ownerOverridesByNodeKey,
+        "overlay owner overrides"
+      );
+      const baseCells = assertOrdinaryMap(
+        baseSession.cells,
+        "overlay base cells"
+      );
+      const baseActiveLeafIds = assertOrdinarySet(
+        baseSession.activeLeafIds,
+        "overlay base active leaf ids"
+      ) as Set<CellId>;
+      const baseOwnersByNodeKey = assertOrdinaryMap(
+        baseSession.activeLeafIdsByNodeKey,
+        "overlay base active owners"
       );
       if (
-        referencedBaseCellIds !== prepared.referencedBaseCellIds
-        || referencedBaseNodeIds !== prepared.referencedBaseNodeIds
+        batch.baseSession !== baseSession
+        || batch.revision !== storage.baseRevision
+        || batch.kind !== baseSession.kind
+        || batch.nodeCount
+          !== storage.baseNodeCount + storage.appendedNodes.length
+        || batch.cellCount
+          !== storage.baseCellCount + mapSize(createdCells)
+        || batch.activeLeafCount
+          !== storage.baseActiveLeafCount
+            - setSize(activeLeafRemovals)
+            + setSize(activeLeafAdditions)
+        || batch.nextCommandId !== storage.nextCommandId
+        || batch.nextCellOrdinal !== storage.nextCellOrdinal
+        || batch.sortedActiveLeafIdsDirty
+          !== (storage.sortedActiveLeafIdsDirty
+            || storage.baseSortedActiveLeafIdsDirty)
       ) {
-        throw new Error("overlay reference batch target changed before commit");
+        throw new Error(
+          "refinement session state counters changed during planning"
+        );
       }
-      TRUSTED_REFLECT_APPLY(
-        TRUSTED_WEAK_MAP_DELETE,
-        preparedReferenceBatches,
-        [token]
+      const cellIds: CellId[] = [];
+      const nodeIds: number[] = [];
+      for (let index = 0; index < batch.cells.length; index += 1) {
+        const expected = batch.cells[index]!;
+        const cell = (mapGet(createdCells, expected.cellId)
+          ?? mapGet(cellOverrides, expected.cellId)
+          ?? mapGet(baseCells, expected.cellId)) as
+            RefinementSessionCell | undefined;
+        if (
+          cell === undefined
+          || refinementSessionStateCellFingerprintInternal(
+            expected.cellId,
+            cell
+          ) !== expected.fingerprint
+        ) {
+          throw new Error(
+            `refinement session state cell ${expected.cellId} changed during planning`
+          );
+        }
+        if (
+          mapHas(baseCells, expected.cellId)
+          && !setHas(referencedBaseCellIds, expected.cellId)
+        ) {
+          TRUSTED_REFLECT_APPLY(
+            TRUSTED_ARRAY_PUSH,
+            cellIds,
+            [expected.cellId]
+          );
+        }
+      }
+      for (let index = 0; index < batch.nodes.length; index += 1) {
+        const expected = batch.nodes[index]!;
+        const point = expected.nodeId >= 1
+          && expected.nodeId <= storage.baseNodeCount
+          ? baseSession.nodes[expected.nodeId - 1]
+          : storage.appendedNodes[
+            expected.nodeId - storage.baseNodeCount - 1
+          ];
+        if (
+          point === undefined
+          || refinementSessionStateNodeFingerprintInternal(point)
+            !== expected.fingerprint
+        ) {
+          throw new Error(
+            `refinement session state node ${expected.nodeId} changed during planning`
+          );
+        }
+        if (
+          TRUSTED_NUMBER_IS_SAFE_INTEGER(expected.nodeId)
+          && expected.nodeId >= 1
+          && expected.nodeId <= storage.baseNodeCount
+          && !setHas(referencedBaseNodeIds, expected.nodeId)
+        ) {
+          TRUSTED_REFLECT_APPLY(
+            TRUSTED_ARRAY_PUSH,
+            nodeIds,
+            [expected.nodeId]
+          );
+        }
+      }
+      for (let index = 0; index < batch.activeMembership.length; index += 1) {
+        const expected = batch.activeMembership[index]!;
+        const active = setHas(activeLeafAdditions, expected.cellId)
+          || (!setHas(activeLeafRemovals, expected.cellId)
+            && setHas(baseActiveLeafIds, expected.cellId));
+        if (active !== expected.active) {
+          throw new Error(
+            `refinement session state active membership for ${expected.cellId} changed during planning`
+          );
+        }
+      }
+      const activeLeafIds: CellId[] = [];
+      for (const cellId of setValues(baseActiveLeafIds)) {
+        if (!setHas(activeLeafRemovals, cellId)) {
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeLeafIds, [cellId]);
+        }
+      }
+      for (const cellId of setValues(activeLeafAdditions)) {
+        TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeLeafIds, [cellId]);
+      }
+      assertRefinementSessionStateCellIdsEqualInternal(
+        activeLeafIds,
+        batch.activeLeafIds,
+        "active leaf iteration"
       );
-      for (let index = 0; index < prepared.cellIds.length; index += 1) {
+      for (let index = 0; index < batch.ownersByNodeKey.length; index += 1) {
+        const expected = batch.ownersByNodeKey[index]!;
+        const owners = (mapGet(ownerOverridesByNodeKey, expected.key)
+          ?? mapGet(baseOwnersByNodeKey, expected.key)
+          ?? []) as readonly CellId[];
+        assertRefinementSessionStateCellIdsEqualInternal(
+          owners,
+          expected.owners,
+          `owner mapping ${expected.key}`
+        );
+      }
+      for (let index = 0; index < cellIds.length; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
           referencedBaseCellIds,
-          [prepared.cellIds[index]!]
+          [cellIds[index]!]
         );
       }
-      for (let index = 0; index < prepared.nodeIds.length; index += 1) {
+      for (let index = 0; index < nodeIds.length; index += 1) {
         TRUSTED_REFLECT_APPLY(
           TRUSTED_SET_ADD,
           referencedBaseNodeIds,
-          [prepared.nodeIds[index]!]
+          [nodeIds[index]!]
         );
       }
     }
