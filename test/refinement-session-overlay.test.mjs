@@ -591,6 +591,71 @@ test("reader patch planning matches concrete planning semantics", () => {
   assertPlanOwnedValuesFrozen(overlayPlan);
 });
 
+test("reader planning ignores a poisoned staged active-leaf iterator", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const directSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlaySession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(overlaySession);
+  const originalIteratorDescriptor = Object.getOwnPropertyDescriptor(
+    Array.prototype,
+    Symbol.iterator
+  );
+  const originalIterator = originalIteratorDescriptor.value;
+  let directPlan;
+  let overlayPlan;
+
+  Object.defineProperty(Array.prototype, Symbol.iterator, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: function poisonedStagedActiveLeafIterator() {
+      if (
+        Object.isFrozen(this)
+        && this.length === 2
+        && this[0] === "e1"
+        && this[1] === "e2"
+      ) {
+        return Reflect.apply(originalIterator, ["e1"], []);
+      }
+      return Reflect.apply(originalIterator, this, []);
+    }
+  });
+  try {
+    directPlan = refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(directSession, ["e1"], options);
+    overlayPlan = refinementSessionInternal
+      .buildRefinementSessionPatchPlanFromStateInternal(
+        overlay,
+        ["e1"],
+        options
+      );
+  } finally {
+    Object.defineProperty(
+      Array.prototype,
+      Symbol.iterator,
+      originalIteratorDescriptor
+    );
+  }
+
+  assert.deepEqual(
+    normalizedPatchPlanSemantics(overlayPlan),
+    normalizedPatchPlanSemantics(directPlan)
+  );
+  assert.deepEqual(refinementSessionOverlayStats(overlay), {
+    copiedBaseCellCount: 0,
+    createdCellCount: 0,
+    appendedNodeCount: 0,
+    activeLeafAdditionCount: 0,
+    activeLeafRemovalCount: 0,
+    copiedNodeOwnerKeyCount: 0,
+    referencedBaseCellCount: 2,
+    referencedBaseNodeCount: 12
+  });
+});
+
 test("overlay-built patch plan applies without changing its base session", () => {
   const options = {
     hexRefinementRatio: 2,

@@ -83,7 +83,9 @@ import {
   commitRefinementSessionStateReferenceBatchInternal,
   createDirectRefinementSessionState,
   prepareRefinementSessionStateReferenceBatchInternal,
+  refinementSessionStateOrdinaryArrayLengthInternal,
   refinementSessionStateOrdinaryArraySnapshotInternal,
+  refinementSessionStateOrdinaryArrayValueInternal,
   refinementSessionStateSetValuesInternal,
   refinementSessionStateCellFingerprintInternal,
   refinementSessionStateNodeFingerprintInternal
@@ -96,12 +98,15 @@ import type {
 
 const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
 const TRUSTED_ARRAY_PUSH = Array.prototype.push;
+const TRUSTED_ARRAY_SORT = Array.prototype.sort;
 const TRUSTED_MAP = Map;
 const TRUSTED_MAP_FOR_EACH = Map.prototype.forEach;
 const TRUSTED_MAP_GET = Map.prototype.get;
 const TRUSTED_MAP_HAS = Map.prototype.has;
 const TRUSTED_MAP_SET = Map.prototype.set;
 const TRUSTED_OBJECT_FREEZE = Object.freeze;
+const TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR =
+  Object.getOwnPropertyDescriptor;
 const TRUSTED_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
 const TRUSTED_REFLECT_APPLY = Reflect.apply;
 const TRUSTED_SET_PROTOTYPE = Set.prototype;
@@ -502,15 +507,27 @@ function buildActiveMeshForSessionStateCellIdsWithMap(
     compactNodeIdBySessionNodeId.set(sessionNodeId, nextNodeId);
     sessionNodeIdByCompactNodeId?.set(nextNodeId, sessionNodeId);
     sessionNodeIdsByCompactNodeId?.set(nextNodeId, [sessionNodeId]);
-    nodes.push([...node]);
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodes, [
+      snapshotPlanningArray<number>(node, `node ${sessionNodeId}`) as Point
+    ]);
     return nextNodeId;
   };
 
+  const activeIdCount = planningArrayLength(
+    activeIds,
+    "reader planning active cell ids"
+  );
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
-  const cellIdsByElementIdArray: CellId[] = new Array(activeIds.length + 1);
+  const cellIdsByElementIdArray: CellId[] = new Array(activeIdCount + 1);
   const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
-  const elements = activeIds.map((cellId, index) => {
+  const elements: Element[] = new Array(activeIdCount);
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      activeIds,
+      index,
+      "reader planning active cell ids"
+    );
     const elementId = index + 1;
     const cell = requiredSessionStateCell(state, cellId);
     if (includeCellIdByElementId) {
@@ -521,8 +538,23 @@ function buildActiveMeshForSessionStateCellIdsWithMap(
       elementIdByCellId.set(cellId, elementId);
     }
     recordActiveElementByCellOrdinal(elementIdByCellOrdinalArray, cell, elementId);
-    return cell.element.map((nodeId) => compactNodeId(nodeId, cellId));
-  });
+    const nodeCount = planningArrayLength(
+      cell.element,
+      `cell ${cellId}.element`
+    );
+    const element = new Array<number>(nodeCount);
+    for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex += 1) {
+      element[nodeIndex] = compactNodeId(
+        planningArrayValue<number>(
+          cell.element,
+          nodeIndex,
+          `cell ${cellId}.element`
+        ),
+        cellId
+      );
+    }
+    elements[index] = element;
+  }
 
   const mesh: Mesh = { kind: state.kind, nodes, elements };
   if (!options.mergeNodes) {
@@ -618,21 +650,43 @@ function buildMergedActiveMeshDirect(
   const auditNodes: Point[] = [];
   const auditNodeIdBySessionNodeId = new Map<number, number>();
   const activePointBySessionNodeId = new Map<number, Point>();
-  const auditElements = activeIds.map((cellId) => {
+  const activeIdCount = planningArrayLength(
+    activeIds,
+    "reader merged planning active cell ids"
+  );
+  const auditElements: Element[] = new Array(activeIdCount);
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      activeIds,
+      index,
+      "reader merged planning active cell ids"
+    );
     const cell = requiredSessionStateCell(state, cellId);
-    return cell.element.map((sessionNodeId) => {
+    const nodeCount = planningArrayLength(
+      cell.element,
+      `cell ${cellId}.element`
+    );
+    const auditElement = new Array<number>(nodeCount);
+    for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex += 1) {
+      const sessionNodeId = planningArrayValue<number>(
+        cell.element,
+        nodeIndex,
+        `cell ${cellId}.element`
+      );
       const existing = auditNodeIdBySessionNodeId.get(sessionNodeId);
       if (existing !== undefined) {
-        return existing;
+        auditElement[nodeIndex] = existing;
+        continue;
       }
       const point = activeSessionStateNode(state, sessionNodeId, cellId);
       const auditNodeId = auditNodes.length + 1;
-      auditNodes.push(point);
+      TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, auditNodes, [point]);
       auditNodeIdBySessionNodeId.set(sessionNodeId, auditNodeId);
       activePointBySessionNodeId.set(sessionNodeId, point);
-      return auditNodeId;
-    });
-  });
+      auditElement[nodeIndex] = auditNodeId;
+    }
+    auditElements[index] = auditElement;
+  }
   assertMergeToleranceBelowFinalEdgeLimit(
     {
       kind: state.kind,
@@ -642,10 +696,10 @@ function buildMergedActiveMeshDirect(
     tolerance
   );
   const nodes: Point[] = [];
-  const elements: Element[] = new Array(activeIds.length);
+  const elements: Element[] = new Array(activeIdCount);
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
-  const cellIdsByElementIdArray: CellId[] = new Array(activeIds.length + 1);
+  const cellIdsByElementIdArray: CellId[] = new Array(activeIdCount + 1);
   const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
   const nodeIdBySessionNodeId = new Map<number, number>();
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
@@ -654,8 +708,12 @@ function buildMergedActiveMeshDirect(
   const buckets = tolerance === 0 ? undefined : new Map<string, number[]>();
   const bucketLayout = createMergeBucketLayout(auditNodes, tolerance);
 
-  for (let index = 0; index < activeIds.length; index += 1) {
-    const cellId = activeIds[index]!;
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      activeIds,
+      index,
+      "reader merged planning active cell ids"
+    );
     const elementId = index + 1;
     const cell = requiredSessionStateCell(state, cellId);
     if (includeCellIdByElementId) {
@@ -667,16 +725,24 @@ function buildMergedActiveMeshDirect(
     }
     recordActiveElementByCellOrdinal(elementIdByCellOrdinalArray, cell, elementId);
     const sourceElement = cell.element;
-    const mappedElement = new Array<number>(sourceElement.length);
-    for (let nodeOffset = 0; nodeOffset < sourceElement.length; nodeOffset += 1) {
-      const sessionNodeId = sourceElement[nodeOffset]!;
+    const sourceElementLength = planningArrayLength(
+      sourceElement,
+      `cell ${cellId}.element`
+    );
+    const mappedElement = new Array<number>(sourceElementLength);
+    for (let nodeOffset = 0; nodeOffset < sourceElementLength; nodeOffset += 1) {
+      const sessionNodeId = planningArrayValue<number>(
+        sourceElement,
+        nodeOffset,
+        `cell ${cellId}.element`
+      );
       let nodeId = nodeIdBySessionNodeId.get(sessionNodeId);
       if (nodeId === undefined) {
         const point = activePointBySessionNodeId.get(sessionNodeId)
           ?? activeSessionStateNode(state, sessionNodeId, cellId);
         let nodeIndex: number | undefined;
         if (exactNodeIndexByKey) {
-          const exactKey = exactActiveMergeKey(point);
+          const exactKey = exactReaderActiveMergeKey(point);
           const exactCandidateIndex = exactNodeIndexByKey.get(exactKey);
           nodeIndex = exactCandidateIndex !== undefined
             && pointEquals(nodes[exactCandidateIndex]!, point, 0)
@@ -684,7 +750,12 @@ function buildMergedActiveMeshDirect(
             : undefined;
           if (nodeIndex === undefined) {
             nodeIndex = nodes.length;
-            nodes.push([...point]);
+            TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodes, [
+              snapshotPlanningArray<number>(
+                point,
+                `node ${sessionNodeId}`
+              ) as Point
+            ]);
             exactNodeIndexByKey.set(exactKey, nodeIndex);
           }
         } else if (buckets) {
@@ -697,7 +768,12 @@ function buildMergedActiveMeshDirect(
           );
           if (nodeIndex === undefined) {
             nodeIndex = nodes.length;
-            nodes.push([...point]);
+            TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodes, [
+              snapshotPlanningArray<number>(
+                point,
+                `node ${sessionNodeId}`
+              ) as Point
+            ]);
             addActiveMergeBucket(
               point,
               nodeIndex,
@@ -708,7 +784,12 @@ function buildMergedActiveMeshDirect(
           }
         } else {
           nodeIndex = nodes.length;
-          nodes.push([...point]);
+          TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, nodes, [
+            snapshotPlanningArray<number>(
+              point,
+              `node ${sessionNodeId}`
+            ) as Point
+          ]);
         }
         nodeId = nodeIndex! + 1;
         nodeIdBySessionNodeId.set(sessionNodeId, nodeId);
@@ -1103,7 +1184,16 @@ function refinementSessionStateCellFingerprint(
   addStableValue(fingerprint, cell.sourceElementId);
   addStableValue(fingerprint, cell.template);
   addStableValue(fingerprint, state.hasActiveLeaf(cellId));
-  for (const nodeId of cell.element) {
+  const nodeCount = planningArrayLength(
+    cell.element,
+    `cell ${cellId}.element`
+  );
+  for (let index = 0; index < nodeCount; index += 1) {
+    const nodeId = planningArrayValue<number>(
+      cell.element,
+      index,
+      `cell ${cellId}.element`
+    );
     const point = Number.isSafeInteger(nodeId)
       && nodeId > 0
       && nodeId <= state.nodeCount
@@ -1377,6 +1467,21 @@ function exactActiveMergeKey(point: Point): string {
     Object.is(coordinate, -0) ? 0 : coordinate
   );
   return `${point.length}|${coordinates.join(":")}`;
+}
+
+function exactReaderActiveMergeKey(point: Point): string {
+  const coordinateCount = planningArrayLength(point, "active merge point");
+  let key = `${coordinateCount}|`;
+  for (let index = 0; index < coordinateCount; index += 1) {
+    const coordinate = planningArrayValue<number>(
+      point,
+      index,
+      "active merge point"
+    );
+    if (index > 0) key += ":";
+    key += String(Object.is(coordinate, -0) ? 0 : coordinate);
+  }
+  return key;
 }
 
 export function activeBuildCellIdByElementId(build: ActiveMeshBuildResult, elementId: number): CellId | undefined {
@@ -5438,6 +5543,22 @@ function snapshotPlanningArray<T>(value: unknown, label: string): T[] {
   ) as T[];
 }
 
+function planningArrayLength(value: unknown, label: string): number {
+  return refinementSessionStateOrdinaryArrayLengthInternal(value, label);
+}
+
+function planningArrayValue<T>(
+  value: unknown,
+  index: number,
+  label: string
+): T {
+  return refinementSessionStateOrdinaryArrayValueInternal(
+    value,
+    index,
+    label
+  ) as T;
+}
+
 function snapshotPlanningArrayOrSet<T>(value: unknown, label: string): T[] {
   if (TRUSTED_ARRAY_IS_ARRAY(value)) {
     return snapshotPlanningArray<T>(value, label);
@@ -5587,7 +5708,7 @@ function stageRefinementSessionPlanningReferences(
       fingerprint: refinementSessionStateNodeFingerprintInternal(snapshot),
       identity: point
     });
-    stagedOwners(exactActiveMergeKey(snapshot));
+    stagedOwners(exactReaderActiveMergeKey(snapshot));
     return snapshot;
   };
   const stagedActiveMembership = (cellId: CellId): boolean => {
@@ -5929,11 +6050,17 @@ function buildRefinementSessionPatchPlanFromState(
         validation.cellIds
       )
     : undefined;
-  const recipe = createRefinementSessionCommandRecipeFromState(
-    state,
-    validation.cellIds,
-    options
-  );
+  const recipe = concreteBuilds === undefined
+    ? createRefinementSessionCommandRecipeFromState(
+        state,
+        validation.cellIds,
+        options
+      )
+    : createRefinementSessionCommandRecipe(
+        state.baseSession,
+        validation.cellIds,
+        options
+      );
 
   return finalizeRefinementSessionPatchPlan({
     sourceActive,
@@ -5954,10 +6081,10 @@ function createRefinementSessionCommandRecipe(
   selectedCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
 ): RefinementSessionCommandRecipeV1 {
-  return createRefinementSessionCommandRecipeFromState(
-    createDirectRefinementSessionState(session, exactActiveMergeKey),
+  return createRefinementSessionCommandRecipeWithGeometry(
     selectedCellIds,
-    options
+    options,
+    (cellId) => refinementCellGeometrySnapshot(session, cellId)
   );
 }
 
@@ -5965,6 +6092,18 @@ function createRefinementSessionCommandRecipeFromState(
   state: RefinementSessionStateReader,
   selectedCellIds: readonly CellId[],
   options: RefinementSessionPatchOptions
+): RefinementSessionCommandRecipeV1 {
+  return createRefinementSessionCommandRecipeWithGeometry(
+    selectedCellIds,
+    options,
+    (cellId) => refinementCellGeometrySnapshotFromState(state, cellId)
+  );
+}
+
+function createRefinementSessionCommandRecipeWithGeometry(
+  selectedCellIds: readonly CellId[],
+  options: RefinementSessionPatchOptions,
+  geometrySnapshot: (cellId: CellId) => RefinementCellGeometrySnapshot
 ): RefinementSessionCommandRecipeV1 {
   const stableSelectedCellIds = stableCellIds(selectedCellIds);
   const stableTransitionSupportCellIds = stableCellIds(
@@ -5981,12 +6120,12 @@ function createRefinementSessionCommandRecipeFromState(
     version: 1,
     selectedCellIds: stableSelectedCellIds,
     selectedCellGeometry: stableSelectedCellIds.map((cellId) =>
-      refinementCellGeometrySnapshotFromState(state, cellId)
+      geometrySnapshot(cellId)
     ),
     transitionSupportCellIds: stableTransitionSupportCellIds,
     transitionSupportCellGeometry:
       stableTransitionSupportCellIds.map((cellId) =>
-        refinementCellGeometrySnapshotFromState(state, cellId)
+        geometrySnapshot(cellId)
       ),
     options: {
       includeTransitions: options.includeTransitions ?? true,
@@ -6073,10 +6212,20 @@ function refinementCellGeometrySnapshot(
   session: RefinementSession,
   cellId: CellId
 ): RefinementCellGeometrySnapshot {
-  return refinementCellGeometrySnapshotFromState(
-    createDirectRefinementSessionState(session, exactActiveMergeKey),
-    cellId
-  );
+  const cell = requiredCell(session, cellId);
+  return {
+    originalCellId: cell.id,
+    kind: cell.kind,
+    level: cell.level,
+    role: cell.role,
+    points: cell.element.map((nodeId) => {
+      const point = session.nodes[nodeId - 1];
+      if (point === undefined) {
+        throw new Error(`cell ${cellId} references missing node ${nodeId}`);
+      }
+      return [...point];
+    })
+  };
 }
 
 function refinementCellGeometrySnapshotFromState(
@@ -6084,18 +6233,31 @@ function refinementCellGeometrySnapshotFromState(
   cellId: CellId
 ): RefinementCellGeometrySnapshot {
   const cell = requiredSessionStateCell(state, cellId);
+  const nodeCount = planningArrayLength(
+    cell.element,
+    `cell ${cellId}.element`
+  );
+  const points: Point[] = [];
+  for (let index = 0; index < nodeCount; index += 1) {
+    const nodeId = planningArrayValue<number>(
+      cell.element,
+      index,
+      `cell ${cellId}.element`
+    );
+    const point = state.node(nodeId);
+    if (point === undefined) {
+      throw new Error(`cell ${cellId} references missing node ${nodeId}`);
+    }
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, points, [
+      snapshotPlanningArray<number>(point, `node ${nodeId}`) as Point
+    ]);
+  }
   return {
     originalCellId: cell.id,
     kind: cell.kind,
     level: cell.level,
     role: cell.role,
-    points: cell.element.map((nodeId) => {
-      const point = state.node(nodeId);
-      if (point === undefined) {
-        throw new Error(`cell ${cellId} references missing node ${nodeId}`);
-      }
-      return [...point];
-    })
+    points
   };
 }
 
@@ -6298,9 +6460,16 @@ function activeBuildCellIdByElementIdFromState(
   }
 
   const activeElement = build.mesh.elements[elementId - 1];
+  const cellElementLength = planningArrayLength(
+    cell.element,
+    `cell ${cellId}.element`
+  );
   if (
     activeElement === undefined
-    || activeElement.length !== cell.element.length
+    || planningArrayLength(
+      activeElement,
+      `active element ${elementId}`
+    ) !== cellElementLength
     || cell.kind !== state.kind
     || build.mesh.kind !== state.kind
   ) {
@@ -6310,8 +6479,12 @@ function activeBuildCellIdByElementIdFromState(
     );
   }
   const tolerance = build.mergeTolerance ?? 0;
-  for (let index = 0; index < cell.element.length; index += 1) {
-    const sessionNodeId = cell.element[index]!;
+  for (let index = 0; index < cellElementLength; index += 1) {
+    const sessionNodeId = planningArrayValue<number>(
+      cell.element,
+      index,
+      `cell ${cellId}.element`
+    );
     const activeNodeId = mappings.nodeIdBySessionNodeId.get(sessionNodeId);
     const statePoint = Number.isSafeInteger(sessionNodeId)
       && sessionNodeId > 0
@@ -6323,7 +6496,11 @@ function activeBuildCellIdByElementIdFromState(
       : build.mesh.nodes[activeNodeId - 1];
     if (
       activeNodeId === undefined
-      || activeElement[index] !== activeNodeId
+      || planningArrayValue<number>(
+        activeElement,
+        index,
+        `active element ${elementId}`
+      ) !== activeNodeId
       || statePoint === undefined
       || activePoint === undefined
     ) {
@@ -6400,7 +6577,10 @@ function assertRefinementSessionStatePatchPlanParents(
         `refinement patch plan is stale because parent cell ${parentId} no longer exists`
       );
     }
-    const firstChildIndex = parent.children.length + 1;
+    const firstChildIndex = planningArrayLength(
+      parent.children,
+      `cell ${parentId}.children`
+    ) + 1;
     for (const [elementIndex, element] of replacement.refinement.elements.entries()) {
       const childId = `${parentId}/${firstChildIndex + elementIndex}`;
       if (createdCellIds.has(childId) || state.peekCell(childId) !== undefined) {
@@ -6879,12 +7059,23 @@ function buildSameLevelRefinementPlanningMeshFromState(
   level: number,
   options: RefinementSessionPatchOptions
 ): ActiveMeshBuildResult {
-  const activeIds = sortedActiveLeafIdsFromSessionState(state).filter(
-    (cellId) => {
-      const cell = state.cell(cellId);
-      return cell?.level === level && isRefinableSessionCell(cell);
-    }
+  const sortedActiveIds = sortedActiveLeafIdsFromSessionState(state);
+  const activeIds: CellId[] = [];
+  const activeIdCount = planningArrayLength(
+    sortedActiveIds,
+    "sorted reader active cell ids"
   );
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      sortedActiveIds,
+      index,
+      "sorted reader active cell ids"
+    );
+    const cell = state.cell(cellId);
+    if (cell?.level === level && isRefinableSessionCell(cell)) {
+      TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeIds, [cellId]);
+    }
+  }
   return buildActiveMeshForSessionStateCellIdsWithMap(
     state,
     activeIds,
@@ -6933,28 +7124,77 @@ function collectRefinementPatchActiveCellIdsFromState(
   state: RefinementSessionStateReader,
   selectedCellIds: readonly CellId[]
 ): CellId[] {
-  const haloCellIds = new Set<CellId>(selectedCellIds);
+  const haloCellIds = new Set<CellId>();
+  const selectedCellCount = planningArrayLength(
+    selectedCellIds,
+    "selected reader cell ids"
+  );
+  for (let index = 0; index < selectedCellCount; index += 1) {
+    haloCellIds.add(planningArrayValue<CellId>(
+      selectedCellIds,
+      index,
+      "selected reader cell ids"
+    ));
+  }
 
-  for (const cellId of selectedCellIds) {
+  for (let index = 0; index < selectedCellCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      selectedCellIds,
+      index,
+      "selected reader cell ids"
+    );
     const cell = requiredSessionStateCell(state, cellId);
-    for (const sessionNodeId of cell.element) {
+    const nodeCount = planningArrayLength(
+      cell.element,
+      `cell ${cellId}.element`
+    );
+    for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex += 1) {
+      const sessionNodeId = planningArrayValue<number>(
+        cell.element,
+        nodeIndex,
+        `cell ${cellId}.element`
+      );
       const point = state.node(sessionNodeId);
       if (point === undefined) {
         throw new Error(
           `selected cell ${cellId} references missing node ${sessionNodeId}`
         );
       }
-      for (const ownerId of state.activeOwnersByNodeKey(
-        exactActiveMergeKey(point)
-      )) {
+      const owners = state.activeOwnersByNodeKey(
+        exactReaderActiveMergeKey(point)
+      );
+      const ownerCount = planningArrayLength(
+        owners,
+        `owners for node ${sessionNodeId}`
+      );
+      for (let ownerIndex = 0; ownerIndex < ownerCount; ownerIndex += 1) {
+        const ownerId = planningArrayValue<CellId>(
+          owners,
+          ownerIndex,
+          `owners for node ${sessionNodeId}`
+        );
         haloCellIds.add(ownerId);
       }
     }
   }
 
-  return sortedActiveLeafIdsFromSessionState(state).filter(
-    (cellId) => haloCellIds.has(cellId)
+  const sortedActiveIds = sortedActiveLeafIdsFromSessionState(state);
+  const activeIds: CellId[] = [];
+  const activeIdCount = planningArrayLength(
+    sortedActiveIds,
+    "sorted reader active cell ids"
   );
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      sortedActiveIds,
+      index,
+      "sorted reader active cell ids"
+    );
+    if (haloCellIds.has(cellId)) {
+      TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, activeIds, [cellId]);
+    }
+  }
+  return activeIds;
 }
 
 export function validateRefinementSessionSelection(
@@ -7021,7 +7261,23 @@ function validateRefinementSessionStateSelection(
   state: RefinementSessionStateReader,
   cellIds: CellId[]
 ): RefinementSessionSelectionValidation {
-  const uniqueCellIds = [...new Set(cellIds)];
+  const uniqueCellIds: CellId[] = [];
+  const seenCellIds = new Set<CellId>();
+  const inputCellCount = planningArrayLength(
+    cellIds,
+    "reader selection cell ids"
+  );
+  for (let index = 0; index < inputCellCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      cellIds,
+      index,
+      "reader selection cell ids"
+    );
+    if (!seenCellIds.has(cellId)) {
+      seenCellIds.add(cellId);
+      TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, uniqueCellIds, [cellId]);
+    }
+  }
   const missingCellIds: CellId[] = [];
   const inactiveCellIds: CellId[] = [];
   const transitionCellIds: CellId[] = [];
@@ -7033,7 +7289,16 @@ function validateRefinementSessionStateSelection(
     errors.push("refinement selection must contain at least one cell");
   }
 
-  for (const cellId of uniqueCellIds) {
+  const uniqueCellCount = planningArrayLength(
+    uniqueCellIds,
+    "unique reader selection cell ids"
+  );
+  for (let index = 0; index < uniqueCellCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      uniqueCellIds,
+      index,
+      "unique reader selection cell ids"
+    );
     const cell = state.cell(cellId);
     if (cell === undefined) {
       missingCellIds.push(cellId);
@@ -7254,16 +7519,46 @@ function activeSessionStateNode(
 function sortedActiveLeafIdsFromSessionState(
   state: Pick<RefinementSessionStateReader, "activeLeafIds" | "cell">
 ): CellId[] {
-  return [...state.activeLeafIds()]
-    .map((cellId) => ({
+  const activeIds = snapshotPlanningArrayOrSet<CellId>(
+    state.activeLeafIds(),
+    "reader active leaf ids"
+  );
+  const entries: { cellId: CellId; ordinal: number }[] = [];
+  const activeIdCount = planningArrayLength(
+    activeIds,
+    "copied reader active leaf ids"
+  );
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      activeIds,
+      index,
+      "copied reader active leaf ids"
+    );
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, entries, [{
       cellId,
       ordinal: state.cell(cellId)?.ordinal ?? Number.MAX_SAFE_INTEGER
-    }))
-    .sort((first, second) =>
+    }]);
+  }
+  TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_SORT, entries, [
+    (
+      first: { cellId: CellId; ordinal: number },
+      second: { cellId: CellId; ordinal: number }
+    ) =>
       first.ordinal - second.ordinal
       || (first.cellId < second.cellId ? -1 : first.cellId > second.cellId ? 1 : 0)
-    )
-    .map(({ cellId }) => cellId);
+  ]);
+  const sortedIds: CellId[] = [];
+  const entryCount = planningArrayLength(entries, "sorted reader active entries");
+  for (let index = 0; index < entryCount; index += 1) {
+    TRUSTED_REFLECT_APPLY(TRUSTED_ARRAY_PUSH, sortedIds, [
+      planningArrayValue<{ cellId: CellId }>(
+        entries,
+        index,
+        "sorted reader active entries"
+      ).cellId
+    ]);
+  }
+  return sortedIds;
 }
 
 function sortedActiveLeafIds(session: RefinementSession): readonly CellId[] {
