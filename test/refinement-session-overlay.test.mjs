@@ -110,6 +110,30 @@ function activeBuildStructure(build) {
   };
 }
 
+function normalizedPatchPlanSemantics(plan) {
+  const normalizeReplacements = (build, replacements) => replacements.map(
+    (replacement) => ({
+      parentId: activeBuildCellIdByElementId(build, replacement.elementId),
+      role: replacement.role,
+      templateCode: replacement.templateCode,
+      refinement: structuredClone(replacement.refinement)
+    })
+  );
+  return {
+    replacements: normalizeReplacements(plan.planningActive, plan.replacements),
+    sourceReplacements: normalizeReplacements(
+      plan.sourceActive,
+      plan.sourceReplacements
+    ),
+    hiddenCellIds: [...plan.hiddenCellIds],
+    quality: plan.quality === undefined ? undefined : { ...plan.quality },
+    twoToOne: plan.twoToOne === undefined
+      ? undefined
+      : structuredClone(plan.twoToOne),
+    recipe: structuredClone(plan.recipe)
+  };
+}
+
 function sessionStateSnapshot(session) {
   return {
     revision: session.revision,
@@ -494,6 +518,177 @@ test("patch plans apply identically through direct and overlay state writers", (
   assert.equal(
     Object.hasOwn(publicApi, "buildRefinementSessionPatchPlanInternal"),
     false
+  );
+});
+
+test("reader patch planning matches concrete planning semantics", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const directSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlaySession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(overlaySession);
+
+  const directPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(directSession, ["e1"], options);
+  const overlayPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
+
+  assert.deepEqual(
+    normalizedPatchPlanSemantics(overlayPlan),
+    normalizedPatchPlanSemantics(directPlan)
+  );
+  assertPlanOwnedValuesFrozen(overlayPlan);
+});
+
+test("overlay-built patch plan applies without changing its base session", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const directSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const directPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(directSession, ["e1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanInternal(directSession, directPlan);
+
+  const baseSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const beforeBase = sessionStateSnapshot(baseSession);
+  const overlay = createTestOverlay(baseSession);
+  const overlayPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, overlayPlan);
+
+  assert.deepEqual(
+    activeBuildStructure(
+      refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
+        overlay
+      )
+    ),
+    activeBuildStructure(buildActiveMeshWithMap(directSession))
+  );
+  assertSessionStateUnchanged(baseSession, beforeBase);
+});
+
+test("reader patch planning sees cells and nodes created by an earlier overlay patch", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const directSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  refineSessionPatch(directSession, ["e1"], options);
+  const directSecondPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(directSession, ["e1/1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanInternal(directSession, directSecondPlan);
+
+  const baseSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const beforeBase = sessionStateSnapshot(baseSession);
+  const overlay = createTestOverlay(baseSession);
+  const firstPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, firstPlan);
+  const overlayCreatedNodeCount = overlay.nodeCount - baseSession.nodes.length;
+
+  const secondPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1/1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, secondPlan);
+
+  assert.ok(overlayCreatedNodeCount > 0);
+  assert.deepEqual(
+    normalizedPatchPlanSemantics(secondPlan),
+    normalizedPatchPlanSemantics(directSecondPlan)
+  );
+  assert.deepEqual(
+    activeBuildStructure(
+      refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
+        overlay
+      )
+    ),
+    activeBuildStructure(buildActiveMeshWithMap(directSession))
+  );
+  assertSessionStateUnchanged(baseSession, beforeBase);
+});
+
+test("failed reader patch planning leaves overlay and base state unchanged", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const baseSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(baseSession);
+  const firstPlan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
+  refinementSessionInternal
+    .applyRefinementSessionPatchPlanToStateInternal(overlay, firstPlan);
+  const beforeBase = sessionStateSnapshot(baseSession);
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  const beforeOverlay = {
+    nodeCount: overlay.nodeCount,
+    cellCount: overlay.cellCount,
+    nextCommandId: overlay.nextCommandId,
+    nextCellOrdinal: overlay.nextCellOrdinal,
+    undoCommands: [...overlay.undoCommands()],
+    redoCommands: [...overlay.redoCommands()]
+  };
+
+  assert.throws(
+    () => refinementSessionInternal
+      .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options),
+    /not active leaves/i
+  );
+
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  assert.equal(overlay.nodeCount, beforeOverlay.nodeCount);
+  assert.equal(overlay.cellCount, beforeOverlay.cellCount);
+  assert.equal(overlay.nextCommandId, beforeOverlay.nextCommandId);
+  assert.equal(overlay.nextCellOrdinal, beforeOverlay.nextCellOrdinal);
+  assert.deepEqual([...overlay.undoCommands()], beforeOverlay.undoCommands);
+  assert.deepEqual([...overlay.redoCommands()], beforeOverlay.redoCommands);
+  assertSessionStateUnchanged(baseSession, beforeBase);
+});
+
+test("reader patch planning rejects caller-supplied active builds", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const activeBuild = buildActiveMeshWithMap(session);
+
+  assert.throws(
+    () => refinementSessionInternal
+      .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        activeBuild
+      }),
+    /reader patch planning does not accept.*activeBuild/i
+  );
+});
+
+test("reader patch planner is internal and mapping-only builds stay untrusted publicly", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const mappingOnlyBuild = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal(overlay);
+
+  assert.equal(
+    Object.hasOwn(
+      publicApi,
+      "buildRefinementSessionPatchPlanFromStateInternal"
+    ),
+    false
+  );
+  assert.throws(
+    () => refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(session, ["e1"], {
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        activeBuild: mappingOnlyBuild
+      }),
+    /mapping-only|session-state/i
   );
 });
 
