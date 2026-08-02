@@ -213,6 +213,14 @@ function assertPlanOwnedValuesFrozen(plan) {
   }
 }
 
+function assertDeeplyFrozenPlainValue(value) {
+  if (value === null || typeof value !== "object") return;
+  assert.ok(Object.isFrozen(value));
+  for (const nestedValue of Object.values(value)) {
+    assertDeeplyFrozenPlainValue(nestedValue);
+  }
+}
+
 function assertFreshOverlayState(overlay, session, beforeSession, beforeStats) {
   assertSessionStateUnchanged(session, beforeSession);
   assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
@@ -1516,6 +1524,101 @@ test("overlay history restore rewinds only speculative commands and command ids"
   assert.equal(session.revision, beforeRestoreRevision);
 });
 
+test("overlay history owns deeply frozen command snapshots across restore and commit", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const beforeCommit = sessionStateSnapshot(session);
+  const overlay = createTestOverlay(session);
+  const command = {
+    id: "retained-command",
+    kind: "refine",
+    hiddenCellIds: ["e1"],
+    createdCellIds: ["e2"],
+    createdNodeIds: [9],
+    quality: {
+      ok: true,
+      parentElementCount: 1,
+      childElementCount: 8,
+      parentOrientedVolume: 1,
+      childOrientedVolume: 1,
+      relativeVolumeError: 0,
+      parentMinimumOrientedScaledJacobian: 1,
+      childMinimumOrientedScaledJacobian: 0.75
+    },
+    twoToOne: {
+      status: "compensated",
+      topologyClass: "mixed-level",
+      originalSelectedCellIds: ["e1"],
+      effectiveSelectedCellIds: ["e1", "e2"],
+      actions: [{
+        kind: "transition-shell-rebuild",
+        reason: "preserve local balance",
+        addedParentCellIds: ["e2"],
+        replacedTransitionCellIds: ["e3"]
+      }],
+      affectedComponentCellIds: ["e1", "e2", "e3"],
+      preservedFarFieldCellCount: 4
+    },
+    recipe: {
+      version: 1,
+      selectedCellIds: ["e1"],
+      selectedCellGeometry: [{
+        originalCellId: "e1",
+        kind: "hex",
+        level: 0,
+        role: "regular",
+        points: [[0, 0, 0], [1, 0, 0]]
+      }],
+      transitionSupportCellIds: ["e3"],
+      transitionSupportCellGeometry: [],
+      options: {
+        includeTransitions: true,
+        hexRefinementRatio: 2,
+        hexTwoToOneSelectionMode: "local",
+        hexTwoToOneCompensation: {
+          mode: "local-topology",
+          maxAddedParentLayers: 1,
+          maxAddedParentCount: 8
+        },
+        rebuildExistingTransitions: true
+      }
+    }
+  };
+  const expectedCommand = structuredClone(command);
+
+  overlay.appendUndoCommand(command);
+  const retainedCommand = overlay.storage.appendedUndoCommands[0];
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "temporary-command" });
+
+  command.quality.ok = false;
+  command.twoToOne.actions[0].addedParentCellIds[0] = "mutated-parent";
+  command.recipe.selectedCellGeometry[0].points[0][0] = 99;
+  command.recipe.options.hexTwoToOneCompensation.mode = "none";
+
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    checkpoint
+  );
+
+  assertSessionStateUnchanged(session, beforeCommit);
+  assert.strictEqual(overlay.storage.appendedUndoCommands[0], retainedCommand);
+  assert.notStrictEqual(retainedCommand, command);
+  assert.deepEqual(retainedCommand, expectedCommand);
+  assertDeeplyFrozenPlainValue(retainedCommand);
+  assert.throws(() => {
+    retainedCommand.twoToOne.actions[0].reason = "mutated through overlay";
+  }, TypeError);
+
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  assertSessionStateUnchanged(session, beforeCommit);
+  commitRefinementSessionOverlay(session, delta);
+
+  const committedCommand = session.undoStack.at(-1);
+  assert.deepEqual(committedCommand, expectedCommand);
+  assertDeeplyFrozenPlainValue(committedCommand);
+});
+
 test("restored overlay commits retained history plus one final compound command", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   session.undoStack.push({ id: "original-command", kind: "original" });
@@ -1778,6 +1881,7 @@ test("overlay history checkpoints reject stale or shortened prefixes atomically"
   const staleOverlay = createTestOverlay(session);
   const retainedCommand = { id: "retained-command" };
   staleOverlay.appendUndoCommand(retainedCommand);
+  const ownedRetainedCommand = staleOverlay.storage.appendedUndoCommands[0];
   const staleCheckpoint = refinementSessionOverlayInternal
     .checkpointRefinementSessionOverlayHistory(staleOverlay);
   staleOverlay.appendUndoCommand({ id: "temporary-command" });
@@ -1794,7 +1898,7 @@ test("overlay history checkpoints reject stale or shortened prefixes atomically"
   assert.deepEqual(staleOverlay.storage.appendedUndoCommands, beforeStaleCommands);
   assert.equal(staleOverlay.nextCommandId, beforeStaleNextCommandId);
 
-  staleOverlay.storage.appendedUndoCommands[0] = retainedCommand;
+  staleOverlay.storage.appendedUndoCommands[0] = ownedRetainedCommand;
   refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
     staleOverlay,
     staleCheckpoint

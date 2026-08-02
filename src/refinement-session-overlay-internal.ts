@@ -2314,7 +2314,8 @@ function createRefinementSessionOverlayWithBaseline(
       }
     },
     appendUndoCommand(command) {
-      storage.appendedUndoCommands.push(command);
+      const ownedCommand = cloneCommand(command, "overlay appended undo command");
+      storage.appendedUndoCommands.push(ownedCommand);
     },
     clearRedoCommands() {
       storage.clearRedo = true;
