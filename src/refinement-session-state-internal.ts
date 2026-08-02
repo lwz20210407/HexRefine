@@ -32,6 +32,8 @@ export interface RefinementSessionStateReader {
   readonly nextCommandId: number;
   readonly nextCellOrdinal: number;
   readonly sortedActiveLeafIdsDirty: boolean;
+  peekNode(nodeId: number): Point | undefined;
+  peekCell(cellId: CellId): RefinementSessionCell | undefined;
   node(nodeId: number): Point | undefined;
   cell(cellId: CellId): RefinementSessionCell | undefined;
   hasActiveLeaf(cellId: CellId): boolean;
@@ -113,6 +115,8 @@ export function createDirectRefinementSessionState(
       return mutable.nextCellOrdinal ?? session.cells.size + 1;
     },
     get sortedActiveLeafIdsDirty() { return session.sortedActiveLeafIdsDirty; },
+    peekNode: (nodeId) => session.nodes[nodeId - 1],
+    peekCell: (cellId) => session.cells.get(cellId),
     node: (nodeId) => session.nodes[nodeId - 1],
     cell: (cellId) => session.cells.get(cellId),
     hasActiveLeaf: (cellId) => session.activeLeafIds.has(cellId),

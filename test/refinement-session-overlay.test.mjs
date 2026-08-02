@@ -56,6 +56,39 @@ function createTestOverlay(session) {
   });
 }
 
+const stateWriterMethods = new Set([
+  "mutableCell",
+  "appendNode",
+  "setCell",
+  "addActiveLeaf",
+  "removeActiveLeaf",
+  "allocateCellOrdinal",
+  "setNextCommandId",
+  "appendUndoCommand",
+  "clearRedoCommands"
+]);
+
+function countStateWriterCalls(state, readerOverrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    state: new Proxy(state, {
+      get(target, property, receiver) {
+        if (Object.hasOwn(readerOverrides, property)) {
+          return readerOverrides[property];
+        }
+        if (stateWriterMethods.has(property)) {
+          return (...args) => {
+            calls.push(property);
+            return target[property](...args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      }
+    })
+  };
+}
+
 function activeBuildStructure(build) {
   return {
     mesh: build.mesh,
@@ -345,6 +378,24 @@ test("patch plans apply identically through direct and overlay state writers", (
   assert.ok(Object.isFrozen(overlayCommand.createdNodeIds));
   assert.ok(Object.isFrozen(overlayCommand.recipe));
   assert.deepEqual(
+    overlayCommand.createdCellIds,
+    Array.from({ length: 8 }, (_, index) => `e1/${index + 1}`)
+  );
+  assert.deepEqual(
+    overlayCommand.createdCellIds.map((cellId) => overlay.cell(cellId).ordinal),
+    [2, 3, 4, 5, 6, 7, 8, 9]
+  );
+  assert.deepEqual(
+    overlayCommand.createdNodeIds,
+    Array.from({ length: 27 }, (_, index) => index + 9)
+  );
+  assert.equal(overlay.nodeCount, 35);
+  assert.equal(overlay.cellCount, 9);
+  assert.equal(overlay.nextCommandId, 2);
+  assert.equal(overlay.nextCellOrdinal, 10);
+  assert.deepEqual([...overlay.undoCommands()].map((command) => command.id), ["cmd-1"]);
+  assert.deepEqual([...overlay.redoCommands()], []);
+  assert.deepEqual(
     activeBuildStructure(
       refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(overlay)
     ),
@@ -356,8 +407,19 @@ test("patch plans apply identically through direct and overlay state writers", (
   );
 
   const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  assert.deepEqual(delta.baseCellGuards.map((guard) => guard.id), ["e1"]);
+  assert.deepEqual(
+    delta.baseNodeGuards.map((guard) => guard.nodeId),
+    [1, 2, 3, 4, 5, 6, 7, 8]
+  );
   commitRefinementSessionOverlay(overlaySession, delta);
   assert.equal(overlaySession.revision, 1);
+  assert.equal(overlaySession.cells.size, 9);
+  assert.equal(overlaySession.nodes.length, 35);
+  assert.equal(overlaySession.nextCommandId, 2);
+  assert.equal(overlaySession.nextCellOrdinal, 10);
+  assert.deepEqual(overlaySession.undoStack.map((command) => command.id), ["cmd-1"]);
+  assert.deepEqual(overlaySession.redoStack, []);
   assert.deepEqual(
     comparableSessionState(overlaySession),
     comparableSessionState(publicSession)
@@ -393,56 +455,173 @@ test("patch plan state preflight rejects stale parents before writer mutation", 
     makeStale(session);
     const before = sessionStateSnapshot(session);
     const overlay = createTestOverlay(session);
-    const writerCalls = [];
-    const countedState = new Proxy(overlay, {
-      get(target, property, receiver) {
-        if ([
-          "mutableCell",
-          "appendNode",
-          "setCell",
-          "addActiveLeaf",
-          "removeActiveLeaf",
-          "allocateCellOrdinal",
-          "appendUndoCommand",
-          "clearRedoCommands",
-          "setNextCommandId"
-        ].includes(property)) {
-          return (...args) => {
-            writerCalls.push(property);
-            return target[property](...args);
-          };
-        }
-        return Reflect.get(target, property, receiver);
-      }
-    });
+    const beforeStats = refinementSessionOverlayStats(overlay);
+    const counted = countStateWriterCalls(overlay);
 
     assert.throws(
       () => refinementSessionInternal
-        .applyRefinementSessionPatchPlanToStateInternal(countedState, plan),
+        .applyRefinementSessionPatchPlanToStateInternal(counted.state, plan),
       /stale|changed|mapping|active|connectivity|geometry|ordinal/i,
       label
     );
-    assert.deepEqual(writerCalls, [], label);
+    assert.deepEqual(counted.calls, [], label);
     assertSessionStateUnchanged(session, before);
     assert.deepEqual(
-      {
-        copiedBaseCellCount: refinementSessionOverlayStats(overlay).copiedBaseCellCount,
-        createdCellCount: refinementSessionOverlayStats(overlay).createdCellCount,
-        appendedNodeCount: refinementSessionOverlayStats(overlay).appendedNodeCount,
-        activeLeafAdditionCount: refinementSessionOverlayStats(overlay).activeLeafAdditionCount,
-        activeLeafRemovalCount: refinementSessionOverlayStats(overlay).activeLeafRemovalCount,
-        copiedNodeOwnerKeyCount: refinementSessionOverlayStats(overlay).copiedNodeOwnerKeyCount
-      },
-      {
-        copiedBaseCellCount: 0,
-        createdCellCount: 0,
-        appendedNodeCount: 0,
-        activeLeafAdditionCount: 0,
-        activeLeafRemovalCount: 0,
-        copiedNodeOwnerKeyCount: 0
-      },
+      refinementSessionOverlayStats(overlay),
+      beforeStats,
       label
     );
+  }
+});
+
+test("patch application rejects unsafe counters and command ids before writer mutation", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const cases = [
+    {
+      label: "max revision",
+      mutateSession(session) { session.revision = Number.MAX_SAFE_INTEGER; },
+      error: /revision|safe/i
+    },
+    {
+      label: "max next command id",
+      mutateSession(session) { session.nextCommandId = Number.MAX_SAFE_INTEGER; },
+      error: /command|safe|counter/i
+    },
+    {
+      label: "duplicate next command id",
+      mutateSession(session) {
+        session.undoStack.push({
+          id: "cmd-1",
+          kind: "refine",
+          hiddenCellIds: [],
+          createdCellIds: [],
+          createdNodeIds: []
+        });
+      },
+      error: /command|duplicate|reused/i
+    },
+    {
+      label: "stale next cell ordinal",
+      mutateSession(session) { session.nextCellOrdinal += 1; },
+      error: /ordinal|counter|stale/i
+    },
+    {
+      label: "max next cell ordinal",
+      mutateSession(session) { session.nextCellOrdinal = Number.MAX_SAFE_INTEGER; },
+      error: /ordinal|safe|counter/i
+    }
+  ];
+
+  for (const { label, mutateSession, error } of cases) {
+    const planSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const plan = refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(planSession, ["e1"], options);
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    mutateSession(session);
+    const before = sessionStateSnapshot(session);
+    const overlay = createTestOverlay(session);
+    const beforeStats = refinementSessionOverlayStats(overlay);
+    const counted = countStateWriterCalls(overlay);
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(counted.state, plan),
+      error,
+      label
+    );
+    assert.deepEqual(counted.calls, [], label);
+    assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats, label);
+    assertSessionStateUnchanged(session, before);
+  }
+
+  const planSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const plan = refinementSessionInternal
+    .buildRefinementSessionPatchPlanInternal(planSession, ["e1"], options);
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const before = sessionStateSnapshot(session);
+  const overlay = createTestOverlay(session);
+  const beforeStats = refinementSessionOverlayStats(overlay);
+  const counted = countStateWriterCalls(overlay, {
+    cellCount: Number.MAX_SAFE_INTEGER - 4,
+    nextCellOrdinal: Number.MAX_SAFE_INTEGER - 3
+  });
+
+  assert.throws(
+    () => refinementSessionInternal
+      .applyRefinementSessionPatchPlanToStateInternal(counted.state, plan),
+    /ordinal|range|safe|counter/i
+  );
+  assert.deepEqual(counted.calls, []);
+  assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
+  assertSessionStateUnchanged(session, before);
+});
+
+test("patch application snapshots and validates hostile plan payloads before writer mutation", () => {
+  const options = {
+    hexRefinementRatio: 2,
+    hexTwoToOneSelectionMode: "local"
+  };
+  const cases = [
+    ["recipe", (plan) => {
+      plan.recipe = { ...plan.recipe, version: 2 };
+    }],
+    ["two-to-one report", (plan) => {
+      plan.twoToOne = { ...plan.twoToOne, actions: null };
+    }],
+    ["replacement node", (plan) => {
+      const replacement = plan.replacements[0];
+      replacement.refinement = {
+        ...replacement.refinement,
+        nodes: replacement.refinement.nodes.map((point) => [...point])
+      };
+      replacement.refinement.nodes[1] = {
+        [Symbol.iterator]() {
+          throw new Error("late replacement node failure");
+        }
+      };
+    }],
+    ["replacement element", (plan) => {
+      const replacement = plan.replacements[0];
+      replacement.refinement = {
+        ...replacement.refinement,
+        elements: replacement.refinement.elements.map((element) => [...element])
+      };
+      replacement.refinement.elements[0].map = null;
+    }],
+    ["replacement metadata", (plan) => {
+      plan.replacements[0] = {
+        ...plan.replacements[0],
+        role: "invalid-role",
+        templateCode: Number.NaN
+      };
+    }],
+    ["quality", (plan) => {
+      plan.quality = { ...plan.quality, childElementCount: Number.NaN };
+    }]
+  ];
+
+  for (const [label, mutatePlan] of cases) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const plan = refinementSessionInternal
+      .buildRefinementSessionPatchPlanInternal(session, ["e1"], options);
+    mutatePlan(plan);
+    const before = sessionStateSnapshot(session);
+    const overlay = createTestOverlay(session);
+    const beforeStats = refinementSessionOverlayStats(overlay);
+    const counted = countStateWriterCalls(overlay);
+
+    assert.throws(
+      () => refinementSessionInternal
+        .applyRefinementSessionPatchPlanToStateInternal(counted.state, plan),
+      /invalid|must|unsupported|replacement|recipe|quality|two-to-one|capability/i,
+      label
+    );
+    assert.deepEqual(counted.calls, [], label);
+    assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats, label);
+    assertSessionStateUnchanged(session, before);
   }
 });
 

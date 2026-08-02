@@ -1429,6 +1429,17 @@ function createRefinementSessionOverlayWithBaseline(
       return storage.sortedActiveLeafIdsDirty
         || storage.baseSortedActiveLeafIdsDirty;
     },
+    peekNode(nodeId) {
+      if (nodeId >= 1 && nodeId <= storage.baseNodeCount) {
+        return baseSession.nodes[nodeId - 1];
+      }
+      return storage.appendedNodes[nodeId - storage.baseNodeCount - 1];
+    },
+    peekCell(cellId) {
+      return storage.createdCells.get(cellId)
+        ?? storage.cellOverrides.get(cellId)
+        ?? baseSession.cells.get(cellId);
+    },
     node(nodeId) {
       if (nodeId >= 1 && nodeId <= storage.baseNodeCount) {
         storage.referencedBaseNodeIds.add(nodeId);

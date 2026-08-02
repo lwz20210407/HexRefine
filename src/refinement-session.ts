@@ -1080,7 +1080,7 @@ function refinementSessionStateCellFingerprint(
     const point = Number.isSafeInteger(nodeId)
       && nodeId > 0
       && nodeId <= state.nodeCount
-        ? state.node(nodeId)
+        ? state.peekNode(nodeId)
         : undefined;
     if (point === undefined) {
       throw new RangeError(`cell ${cellId} references missing node ${nodeId}`);
@@ -1948,79 +1948,661 @@ export function applyRefinementSessionPatchPlanToStateInternal(
   state: RefinementSessionStateWriter,
   plan: RefinementSessionPatchPlanInternal
 ): RefinementSessionCommand {
-  assertRefinementSessionStatePatchPlanParents(state, plan);
-  const {
-    planningActive: active,
-    replacements,
-    hiddenCellIds
-  } = plan;
-  const createdCellIds: CellId[] = [];
-  const createdNodeIds: number[] = [];
+  const prepared = prepareRefinementSessionPatchApplication(state, plan);
+  recordRefinementSessionPatchApplicationReferences(state, prepared);
 
-  for (const replacement of replacements) {
-    const parentId = activeBuildCellIdByElementIdFromState(
-      state,
-      active,
-      replacement.elementId,
-      hiddenCellIds
-    );
-    const parent = requiredStateMutableCell(state, parentId);
-    const nodeOffset = state.nodeCount;
-    for (const point of replacement.refinement.nodes) {
-      createdNodeIds.push(state.appendNode(point));
+  for (const replacement of prepared.replacements) {
+    const parent = state.mutableCell(replacement.parentId);
+    for (const point of replacement.nodes) {
+      state.appendNode(point);
     }
-
-    const parentCreatedCellIds: CellId[] = [];
-    const firstChildIndex = parent.children.length + 1;
-    replacement.refinement.elements.forEach((element, index) => {
-      const childId = `${parentId}/${firstChildIndex + index}`;
-      parentCreatedCellIds.push(childId);
-      createdCellIds.push(childId);
-      const child: MutableRefinementSessionCell = {
-        id: childId,
-        ordinal: state.allocateCellOrdinal(),
-        parentId,
-        level: parent.level + 1,
-        role: replacement.role,
-        kind: parent.kind,
-        element: element.map((nodeId) => nodeId + nodeOffset),
-        children: [],
-        active: true,
-        hidden: false,
-        template: String(replacement.templateCode)
-      };
-      if (parent.sourceElementId !== undefined) {
-        child.sourceElementId = parent.sourceElementId;
-      }
-      state.setCell(child);
-      state.addActiveLeaf(childId);
-    });
-    parent.children.push(...parentCreatedCellIds);
+    for (const child of replacement.children) {
+      state.allocateCellOrdinal();
+      state.setCell(mutablePreparedRefinementSessionCell(child));
+      state.addActiveLeaf(child.id);
+    }
+    parent.children.push(...replacement.childIds);
   }
 
-  for (const parentId of hiddenCellIds) {
+  for (const parentId of prepared.hiddenCellIds) {
     const parent = requiredStateMutableCell(state, parentId);
     parent.active = false;
     parent.hidden = true;
     state.removeActiveLeaf(parentId);
   }
 
-  const command = freezeRefinementSessionCommand({
-    id: `cmd-${state.nextCommandId}`,
-    kind: "refine",
+  state.setNextCommandId(prepared.nextCommandId);
+  state.appendUndoCommand(prepared.command);
+  state.clearRedoCommands();
+  return prepared.command;
+}
+
+interface PreparedRefinementSessionPatchReplacement {
+  readonly parentId: CellId;
+  readonly nodes: readonly Point[];
+  readonly childIds: readonly CellId[];
+  readonly children: readonly RefinementSessionCell[];
+}
+
+interface PreparedRefinementSessionPatchApplication {
+  readonly replacements: readonly PreparedRefinementSessionPatchReplacement[];
+  readonly hiddenCellIds: readonly CellId[];
+  readonly referencedCellIds: readonly CellId[];
+  readonly referencedNodeIds: readonly number[];
+  readonly nextCommandId: number;
+  readonly command: RefinementSessionCommand;
+}
+
+function invalidRefinementSessionPatchPlan(message: string): never {
+  throw new TypeError(`invalid refinement patch plan: ${message}`);
+}
+
+function planDataProperty(
+  value: unknown,
+  key: PropertyKey,
+  label: string
+): unknown {
+  if (typeof value !== "object" || value === null) {
+    invalidRefinementSessionPatchPlan(`${label} must be an object`);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) {
+    invalidRefinementSessionPatchPlan(`${label}.${String(key)} must be an own data property`);
+  }
+  return descriptor.value;
+}
+
+function optionalPlanDataProperty(
+  value: unknown,
+  key: PropertyKey,
+  label: string
+): unknown {
+  if (typeof value !== "object" || value === null) {
+    invalidRefinementSessionPatchPlan(`${label} must be an object`);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor)) {
+    invalidRefinementSessionPatchPlan(`${label}.${String(key)} must be a data property`);
+  }
+  return descriptor.value;
+}
+
+function snapshotPlanArray<T>(
+  value: unknown,
+  label: string,
+  snapshot: (item: unknown, index: number) => T
+): T[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    invalidRefinementSessionPatchPlan(`${label} must be an ordinary array`);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  const length = lengthDescriptor !== undefined && "value" in lengthDescriptor
+    ? lengthDescriptor.value
+    : undefined;
+  if (!Number.isSafeInteger(length) || length < 0) {
+    invalidRefinementSessionPatchPlan(`${label}.length must be a non-negative safe integer`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== length + 1
+    || keys.some((key) => key !== "length" && (
+      typeof key !== "string"
+      || !/^(0|[1-9]\d*)$/.test(key)
+      || Number(key) >= length
+    ))
+  ) {
+    invalidRefinementSessionPatchPlan(`${label} must be dense and contain no extra properties`);
+  }
+  const result: T[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) {
+      invalidRefinementSessionPatchPlan(`${label}[${index}] must be a data property`);
+    }
+    result.push(snapshot(descriptor.value, index));
+  }
+  return result;
+}
+
+function snapshotPlanPoint(
+  value: unknown,
+  label: string,
+  dimension: number
+): Point {
+  const point = snapshotPlanArray(value, label, (coordinate, index) => {
+    if (typeof coordinate !== "number" || !Number.isFinite(coordinate)) {
+      invalidRefinementSessionPatchPlan(`${label}[${index}] must be finite`);
+    }
+    return coordinate;
+  });
+  if (point.length !== dimension) {
+    invalidRefinementSessionPatchPlan(`${label} must contain ${dimension} coordinates`);
+  }
+  return Object.freeze(point);
+}
+
+function isRefinementRole(value: unknown): value is RefinementRole {
+  return value === "unchanged"
+    || value === "selected"
+    || value === "face-transition"
+    || value === "edge-transition"
+    || value === "corner-transition";
+}
+
+function isRefinementSessionCellRole(
+  value: unknown
+): value is RefinementSessionCellRole {
+  return value === "base" || isRefinementRole(value);
+}
+
+function snapshotPlanReplacement(
+  value: unknown,
+  label: string
+): ClassifiedReplacement {
+  const elementId = planDataProperty(value, "elementId", label);
+  const role = planDataProperty(value, "role", label);
+  const templateCode = planDataProperty(value, "templateCode", label);
+  const refinementValue = planDataProperty(value, "refinement", label);
+  if (typeof elementId !== "number" || !Number.isSafeInteger(elementId) || elementId <= 0) {
+    invalidRefinementSessionPatchPlan(`${label}.elementId must be a positive safe integer`);
+  }
+  if (!isRefinementRole(role)) {
+    invalidRefinementSessionPatchPlan(`${label}.role is invalid`);
+  }
+  if (
+    typeof templateCode !== "number"
+    || !Number.isSafeInteger(templateCode)
+    || templateCode < 0
+  ) {
+    invalidRefinementSessionPatchPlan(`${label}.templateCode must be a non-negative safe integer`);
+  }
+  const kind = planDataProperty(refinementValue, "kind", `${label}.refinement`);
+  const source = planDataProperty(refinementValue, "source", `${label}.refinement`);
+  if (kind !== "Q1" && kind !== "H1") {
+    invalidRefinementSessionPatchPlan(`${label}.refinement.kind is invalid`);
+  }
+  if (typeof source !== "string" || source.length === 0) {
+    invalidRefinementSessionPatchPlan(`${label}.refinement.source must be a non-empty string`);
+  }
+  const dimension = kind === "H1" ? 3 : 2;
+  const elementSize = kind === "H1" ? 8 : 4;
+  const nodes = snapshotPlanArray(
+    planDataProperty(refinementValue, "nodes", `${label}.refinement`),
+    `${label}.refinement.nodes`,
+    (point, index) => snapshotPlanPoint(
+      point,
+      `${label}.refinement.nodes[${index}]`,
+      dimension
+    )
+  );
+  const elements = snapshotPlanArray(
+    planDataProperty(refinementValue, "elements", `${label}.refinement`),
+    `${label}.refinement.elements`,
+    (element, elementIndex) => {
+      const snapshot = snapshotPlanArray(
+        element,
+        `${label}.refinement.elements[${elementIndex}]`,
+        (nodeId, nodeIndex) => {
+          if (
+            typeof nodeId !== "number"
+            || !Number.isSafeInteger(nodeId)
+            || nodeId <= 0
+            || nodeId > nodes.length
+          ) {
+            invalidRefinementSessionPatchPlan(
+              `${label}.refinement.elements[${elementIndex}][${nodeIndex}] is outside the replacement node range`
+            );
+          }
+          return nodeId;
+        }
+      );
+      if (snapshot.length !== elementSize) {
+        invalidRefinementSessionPatchPlan(
+          `${label}.refinement.elements[${elementIndex}] must contain ${elementSize} node ids`
+        );
+      }
+      return Object.freeze(snapshot);
+    }
+  );
+  Object.freeze(nodes);
+  Object.freeze(elements);
+  return Object.freeze({
+    elementId,
+    role,
+    templateCode,
+    refinement: Object.freeze({ kind, source, nodes, elements })
+  }) as ClassifiedReplacement;
+}
+
+function snapshotPlanCellIds(value: unknown, label: string): CellId[] {
+  const ids = snapshotPlanArray(value, label, (cellId, index) => {
+    if (typeof cellId !== "string" || cellId.length === 0) {
+      invalidRefinementSessionPatchPlan(`${label}[${index}] must be a non-empty string`);
+    }
+    return cellId;
+  });
+  if (new Set(ids).size !== ids.length) {
+    invalidRefinementSessionPatchPlan(`${label} must not contain duplicate cell ids`);
+  }
+  return ids;
+}
+
+function assertPlanGeometrySnapshots(
+  cellIds: readonly CellId[],
+  geometries: readonly RefinementCellGeometrySnapshot[],
+  label: string
+): void {
+  if (geometries.length !== cellIds.length) {
+    invalidRefinementSessionPatchPlan(`${label} geometry count must match its cell ids`);
+  }
+  for (let index = 0; index < geometries.length; index += 1) {
+    const geometry = geometries[index]!;
+    if (
+      geometry.originalCellId !== cellIds[index]
+      || (geometry.kind !== "Q1" && geometry.kind !== "H1")
+      || !Number.isSafeInteger(geometry.level)
+      || geometry.level < 0
+      || !isRefinementSessionCellRole(geometry.role)
+    ) {
+      invalidRefinementSessionPatchPlan(`${label} geometry ${index} is malformed`);
+    }
+    const dimension = geometry.kind === "H1" ? 3 : 2;
+    const elementSize = geometry.kind === "H1" ? 8 : 4;
+    if (geometry.points.length !== elementSize) {
+      invalidRefinementSessionPatchPlan(`${label} geometry ${index} has invalid point count`);
+    }
+    for (const point of geometry.points) {
+      if (
+        point.length !== dimension
+        || point.some((coordinate) => !Number.isFinite(coordinate))
+      ) {
+        invalidRefinementSessionPatchPlan(`${label} geometry ${index} has invalid coordinates`);
+      }
+    }
+  }
+}
+
+function snapshotPlanRecipe(value: unknown): RefinementSessionCommandRecipeV1 {
+  let recipe: RefinementSessionCommandRecipeV1;
+  try {
+    recipe = freezeRefinementSessionCommandRecipe(
+      value as RefinementSessionCommandRecipeV1
+    );
+  } catch (error) {
+    invalidRefinementSessionPatchPlan(
+      `recipe is malformed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  assertPlanGeometrySnapshots(
+    recipe.selectedCellIds,
+    recipe.selectedCellGeometry,
+    "recipe selection"
+  );
+  assertPlanGeometrySnapshots(
+    recipe.transitionSupportCellIds,
+    recipe.transitionSupportCellGeometry,
+    "recipe transition support"
+  );
+  const options = recipe.options;
+  const compensation = options.hexTwoToOneCompensation;
+  if (
+    typeof options.includeTransitions !== "boolean"
+    || (options.hexRefinementRatio !== 2 && options.hexRefinementRatio !== 3)
+    || (
+      options.hexTwoToOneSelectionMode !== "section"
+      && options.hexTwoToOneSelectionMode !== "local"
+    )
+    || (
+      compensation.mode !== "none"
+      && compensation.mode !== "selection"
+      && compensation.mode !== "local-topology"
+    )
+    || !Number.isSafeInteger(compensation.maxAddedParentLayers)
+    || compensation.maxAddedParentLayers < 0
+    || !Number.isSafeInteger(compensation.maxAddedParentCount)
+    || compensation.maxAddedParentCount < 0
+    || typeof options.rebuildExistingTransitions !== "boolean"
+    || (
+      options.mergeTolerance !== undefined
+      && (!Number.isFinite(options.mergeTolerance) || options.mergeTolerance <= 0)
+    )
+  ) {
+    invalidRefinementSessionPatchPlan("recipe options are malformed");
+  }
+  return recipe;
+}
+
+function assertPlanReportCellIds(
+  cellIds: readonly CellId[],
+  label: string
+): void {
+  for (let index = 0; index < cellIds.length; index += 1) {
+    if (typeof cellIds[index] !== "string" || cellIds[index]!.length === 0) {
+      invalidRefinementSessionPatchPlan(`${label}[${index}] must be a non-empty string`);
+    }
+  }
+}
+
+function snapshotPlanTwoToOne(
+  value: unknown
+): ReadonlyTwoToOneCapabilityReport<CellId> {
+  let report: ReadonlyTwoToOneCapabilityReport<CellId>;
+  try {
+    report = freezeRefinementSessionCapabilityReport(
+      value as ReadonlyTwoToOneCapabilityReport<CellId>
+    );
+  } catch (error) {
+    invalidRefinementSessionPatchPlan(
+      `two-to-one capability report is malformed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (
+    (report.status !== "direct" && report.status !== "compensated")
+    || ![
+      "structured",
+      "mapped",
+      "periodic-ogrid",
+      "mixed-level",
+      "unstructured"
+    ].includes(report.topologyClass)
+    || !Number.isSafeInteger(report.preservedFarFieldCellCount)
+    || report.preservedFarFieldCellCount < 0
+  ) {
+    invalidRefinementSessionPatchPlan("two-to-one capability report metadata is malformed");
+  }
+  assertPlanReportCellIds(report.originalSelectedCellIds, "two-to-one original selection");
+  assertPlanReportCellIds(report.effectiveSelectedCellIds, "two-to-one effective selection");
+  assertPlanReportCellIds(report.affectedComponentCellIds, "two-to-one affected component");
+  for (const action of report.actions) {
+    if (
+      (
+        action.kind !== "selection-expand"
+        && action.kind !== "transition-shell-rebuild"
+        && action.kind !== "local-template"
+      )
+      || typeof action.reason !== "string"
+      || (action.templateId !== undefined && typeof action.templateId !== "string")
+    ) {
+      invalidRefinementSessionPatchPlan("two-to-one capability action is malformed");
+    }
+    assertPlanReportCellIds(action.addedParentCellIds, "two-to-one added parents");
+    assertPlanReportCellIds(
+      action.replacedTransitionCellIds,
+      "two-to-one replaced transitions"
+    );
+  }
+  return report;
+}
+
+function snapshotPlanQuality(value: unknown): HexRefinementQualitySummary {
+  const quality = {
+    ok: planDataProperty(value, "ok", "quality"),
+    parentElementCount: planDataProperty(value, "parentElementCount", "quality"),
+    childElementCount: planDataProperty(value, "childElementCount", "quality"),
+    parentOrientedVolume: planDataProperty(value, "parentOrientedVolume", "quality"),
+    childOrientedVolume: planDataProperty(value, "childOrientedVolume", "quality"),
+    relativeVolumeError: planDataProperty(value, "relativeVolumeError", "quality"),
+    parentMinimumOrientedScaledJacobian: planDataProperty(
+      value,
+      "parentMinimumOrientedScaledJacobian",
+      "quality"
+    ),
+    childMinimumOrientedScaledJacobian: planDataProperty(
+      value,
+      "childMinimumOrientedScaledJacobian",
+      "quality"
+    )
+  } as HexRefinementQualitySummary;
+  if (
+    !Number.isSafeInteger(quality.parentElementCount)
+    || quality.parentElementCount < 0
+    || !Number.isSafeInteger(quality.childElementCount)
+    || quality.childElementCount < 0
+  ) {
+    invalidRefinementSessionPatchPlan("quality element counts must be non-negative safe integers");
+  }
+  assertHexPatchQualitySummary(quality, "refinement patch plan quality");
+  return Object.freeze(quality);
+}
+
+function snapshotRefinementSessionPatchPlan(
+  plan: RefinementSessionPatchPlanInternal
+): RefinementSessionPatchPlanInternal {
+  const sourceActive = planDataProperty(plan, "sourceActive", "plan") as ActiveMeshBuildResult;
+  const planningActive = planDataProperty(plan, "planningActive", "plan") as ActiveMeshBuildResult;
+  const replacements = snapshotPlanArray(
+    planDataProperty(plan, "replacements", "plan"),
+    "plan.replacements",
+    (replacement, index) => snapshotPlanReplacement(
+      replacement,
+      `plan.replacements[${index}]`
+    )
+  );
+  const sourceReplacements = snapshotPlanArray(
+    planDataProperty(plan, "sourceReplacements", "plan"),
+    "plan.sourceReplacements",
+    (replacement, index) => snapshotPlanReplacement(
+      replacement,
+      `plan.sourceReplacements[${index}]`
+    )
+  );
+  const hiddenCellIds = snapshotPlanCellIds(
+    planDataProperty(plan, "hiddenCellIds", "plan"),
+    "plan.hiddenCellIds"
+  );
+  const qualityValue = optionalPlanDataProperty(plan, "quality", "plan");
+  const twoToOneValue = optionalPlanDataProperty(plan, "twoToOne", "plan");
+  const recipe = snapshotPlanRecipe(planDataProperty(plan, "recipe", "plan"));
+  Object.freeze(replacements);
+  Object.freeze(sourceReplacements);
+  Object.freeze(hiddenCellIds);
+  return Object.freeze({
+    sourceActive,
+    planningActive,
+    replacements,
+    sourceReplacements,
     hiddenCellIds,
+    ...(qualityValue === undefined ? {} : { quality: snapshotPlanQuality(qualityValue) }),
+    ...(twoToOneValue === undefined ? {} : { twoToOne: snapshotPlanTwoToOne(twoToOneValue) }),
+    recipe
+  }) as RefinementSessionPatchPlanInternal;
+}
+
+function assertRefinementSessionPatchApplicationCounters(
+  state: RefinementSessionStateReader,
+  createdCellCount: number,
+  appendedNodeCount: number
+): { commandId: string; nextCommandId: number } {
+  if (
+    !Number.isSafeInteger(state.revision)
+    || state.revision < 0
+    || state.revision >= Number.MAX_SAFE_INTEGER
+  ) {
+    invalidRefinementSessionPatchPlan("state revision cannot be incremented safely");
+  }
+  if (
+    !Number.isSafeInteger(state.nextCommandId)
+    || state.nextCommandId <= 0
+    || state.nextCommandId >= Number.MAX_SAFE_INTEGER
+  ) {
+    invalidRefinementSessionPatchPlan("next command id cannot be incremented safely");
+  }
+  if (!Number.isSafeInteger(state.cellCount) || state.cellCount < 0) {
+    invalidRefinementSessionPatchPlan("state cell count is invalid");
+  }
+  const expectedNextCellOrdinal = state.cellCount + 1;
+  if (
+    !Number.isSafeInteger(state.nextCellOrdinal)
+    || state.nextCellOrdinal <= 0
+    || state.nextCellOrdinal >= Number.MAX_SAFE_INTEGER
+    || state.nextCellOrdinal !== expectedNextCellOrdinal
+  ) {
+    invalidRefinementSessionPatchPlan(
+      "next cell ordinal is stale or outside the safe counter range"
+    );
+  }
+  if (!Number.isSafeInteger(state.nextCellOrdinal + createdCellCount)) {
+    invalidRefinementSessionPatchPlan("insufficient safe cell ordinal range");
+  }
+  if (
+    !Number.isSafeInteger(state.nodeCount)
+    || state.nodeCount < 0
+    || !Number.isSafeInteger(state.nodeCount + appendedNodeCount)
+  ) {
+    invalidRefinementSessionPatchPlan("insufficient safe node id range");
+  }
+  const commandId = `cmd-${state.nextCommandId}`;
+  const existingCommandIds = new Set<string>();
+  for (const commands of [state.undoCommands(), state.redoCommands()]) {
+    for (const command of commands) {
+      if (typeof command?.id !== "string" || command.id.length === 0) {
+        invalidRefinementSessionPatchPlan("history contains an invalid command id");
+      }
+      if (existingCommandIds.has(command.id)) {
+        invalidRefinementSessionPatchPlan(`history contains duplicate command id ${command.id}`);
+      }
+      existingCommandIds.add(command.id);
+    }
+  }
+  if (existingCommandIds.has(commandId)) {
+    invalidRefinementSessionPatchPlan(`next command id ${commandId} is already in history`);
+  }
+  return { commandId, nextCommandId: state.nextCommandId + 1 };
+}
+
+function prepareRefinementSessionPatchApplication(
+  state: RefinementSessionStateWriter,
+  inputPlan: RefinementSessionPatchPlanInternal
+): PreparedRefinementSessionPatchApplication {
+  const plan = snapshotRefinementSessionPatchPlan(inputPlan);
+  const createdCellCount = plan.replacements.reduce(
+    (count, replacement) => count + replacement.refinement.elements.length,
+    0
+  );
+  const appendedNodeCount = plan.replacements.reduce(
+    (count, replacement) => count + replacement.refinement.nodes.length,
+    0
+  );
+  if (!Number.isSafeInteger(createdCellCount) || !Number.isSafeInteger(appendedNodeCount)) {
+    invalidRefinementSessionPatchPlan("replacement output counts exceed the safe range");
+  }
+  const counters = assertRefinementSessionPatchApplicationCounters(
+    state,
+    createdCellCount,
+    appendedNodeCount
+  );
+  const parentIds = assertRefinementSessionStatePatchPlanParents(state, plan);
+  const replacements: PreparedRefinementSessionPatchReplacement[] = [];
+  const createdCellIds: CellId[] = [];
+  const referencedCellIds = new Set<CellId>();
+  const referencedNodeIds = new Set<number>();
+  let nodeOffset = state.nodeCount;
+  let ordinal = state.nextCellOrdinal;
+  for (let replacementIndex = 0; replacementIndex < plan.replacements.length; replacementIndex += 1) {
+    const replacement = plan.replacements[replacementIndex]!;
+    const parentId = parentIds[replacementIndex]!;
+    const parent = state.peekCell(parentId);
+    if (parent === undefined) {
+      invalidRefinementSessionPatchPlan(`replacement parent ${parentId} is missing`);
+    }
+    if (
+      replacement.refinement.kind !== parent.kind
+      || !Number.isSafeInteger(parent.level)
+      || parent.level < 0
+      || parent.level >= Number.MAX_SAFE_INTEGER
+    ) {
+      invalidRefinementSessionPatchPlan(`replacement parent ${parentId} has invalid metadata`);
+    }
+    referencedCellIds.add(parentId);
+    for (const nodeId of parent.element) referencedNodeIds.add(nodeId);
+    const firstChildIndex = parent.children.length + 1;
+    const childIds: CellId[] = [];
+    const children: RefinementSessionCell[] = [];
+    for (let elementIndex = 0; elementIndex < replacement.refinement.elements.length; elementIndex += 1) {
+      const childId = `${parentId}/${firstChildIndex + elementIndex}`;
+      const localElement = replacement.refinement.elements[elementIndex]!;
+      const element = localElement.map((nodeId) => nodeId + nodeOffset);
+      const child = {
+        id: childId,
+        ordinal,
+        parentId,
+        level: parent.level + 1,
+        role: replacement.role,
+        kind: parent.kind,
+        element: Object.freeze(element),
+        children: Object.freeze([]) as readonly CellId[],
+        active: true,
+        hidden: false,
+        ...(parent.sourceElementId === undefined
+          ? {}
+          : { sourceElementId: parent.sourceElementId }),
+        template: String(replacement.templateCode)
+      } satisfies RefinementSessionCell;
+      childIds.push(childId);
+      createdCellIds.push(childId);
+      children.push(Object.freeze(child));
+      ordinal += 1;
+    }
+    replacements.push(Object.freeze({
+      parentId,
+      nodes: replacement.refinement.nodes,
+      childIds: Object.freeze(childIds),
+      children: Object.freeze(children)
+    }));
+    nodeOffset += replacement.refinement.nodes.length;
+  }
+  const createdNodeIds = Array.from(
+    { length: appendedNodeCount },
+    (_, index) => state.nodeCount + index + 1
+  );
+  const command = freezeRefinementSessionCommand({
+    id: counters.commandId,
+    kind: "refine",
+    hiddenCellIds: plan.hiddenCellIds,
     createdCellIds,
     createdNodeIds,
-    ...(plan.quality ? { quality: plan.quality } : {}),
-    ...(plan.twoToOne
-      ? { twoToOne: cloneTwoToOneCapabilityReport(plan.twoToOne) }
-      : {}),
+    ...(plan.quality === undefined ? {} : { quality: plan.quality }),
+    ...(plan.twoToOne === undefined ? {} : { twoToOne: plan.twoToOne }),
     recipe: plan.recipe
   });
-  state.setNextCommandId(state.nextCommandId + 1);
-  state.appendUndoCommand(command);
-  state.clearRedoCommands();
-  return command;
+  return Object.freeze({
+    replacements: Object.freeze(replacements),
+    hiddenCellIds: Object.freeze([...plan.hiddenCellIds]),
+    referencedCellIds: Object.freeze([...referencedCellIds]),
+    referencedNodeIds: Object.freeze([...referencedNodeIds]),
+    nextCommandId: counters.nextCommandId,
+    command
+  });
+}
+
+function recordRefinementSessionPatchApplicationReferences(
+  state: RefinementSessionStateReader,
+  prepared: PreparedRefinementSessionPatchApplication
+): void {
+  for (const cellId of prepared.referencedCellIds) state.cell(cellId);
+  for (const nodeId of prepared.referencedNodeIds) state.node(nodeId);
+}
+
+function mutablePreparedRefinementSessionCell(
+  cell: RefinementSessionCell
+): MutableRefinementSessionCell {
+  return {
+    id: cell.id,
+    ordinal: cell.ordinal,
+    ...(cell.parentId === undefined ? {} : { parentId: cell.parentId }),
+    level: cell.level,
+    role: cell.role,
+    kind: cell.kind,
+    element: [...cell.element],
+    children: [...cell.children],
+    active: cell.active,
+    hidden: cell.hidden,
+    ...(cell.sourceElementId === undefined
+      ? {}
+      : { sourceElementId: cell.sourceElementId }),
+    ...(cell.template === undefined ? {} : { template: cell.template })
+  };
 }
 
 const EXISTING_TRANSITION_COLLISION_ERROR =
@@ -5342,7 +5924,7 @@ function activeBuildCellIdByElementIdFromState(
       `refinement patch plan is stale because element ${elementId} is outside the active mesh`
     );
   }
-  const cell = state.cell(cellId);
+  const cell = state.peekCell(cellId);
   if (cell === undefined) {
     throw sessionFaceResolutionError(
       diagnosticCellIds,
@@ -5406,7 +5988,7 @@ function activeBuildCellIdByElementIdFromState(
     const statePoint = Number.isSafeInteger(sessionNodeId)
       && sessionNodeId > 0
       && sessionNodeId <= state.nodeCount
-        ? state.node(sessionNodeId)
+        ? state.peekNode(sessionNodeId)
         : undefined;
     const activePoint = activeNodeId === undefined
       ? undefined
@@ -5435,7 +6017,7 @@ function activeBuildCellIdByElementIdFromState(
 function assertRefinementSessionStatePatchPlanParents(
   state: RefinementSessionStateReader,
   plan: RefinementSessionPatchPlanInternal
-): void {
+): CellId[] {
   const diagnosticCellIds = plan.hiddenCellIds;
   const planningParentIds = plan.replacements.map((replacement) =>
     activeBuildCellIdByElementIdFromState(
@@ -5483,11 +6065,17 @@ function assertRefinementSessionStatePatchPlanParents(
   for (let replacementIndex = 0; replacementIndex < plan.replacements.length; replacementIndex += 1) {
     const replacement = plan.replacements[replacementIndex]!;
     const parentId = planningParentIds[replacementIndex]!;
-    const parent = requiredStateCell(state, parentId);
+    const parent = state.peekCell(parentId);
+    if (parent === undefined) {
+      throw sessionFaceResolutionError(
+        diagnosticCellIds,
+        `refinement patch plan is stale because parent cell ${parentId} no longer exists`
+      );
+    }
     const firstChildIndex = parent.children.length + 1;
     for (const [elementIndex, element] of replacement.refinement.elements.entries()) {
       const childId = `${parentId}/${firstChildIndex + elementIndex}`;
-      if (createdCellIds.has(childId) || state.cell(childId) !== undefined) {
+      if (createdCellIds.has(childId) || state.peekCell(childId) !== undefined) {
         throw sessionFaceResolutionError(
           diagnosticCellIds,
           `refinement patch plan is stale because child cell ${childId} already exists`
@@ -5506,6 +6094,7 @@ function assertRefinementSessionStatePatchPlanParents(
       }
     }
   }
+  return planningParentIds;
 }
 
 function mapTwoToOneReportToCellIds(
