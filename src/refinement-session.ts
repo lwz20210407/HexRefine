@@ -5401,11 +5401,103 @@ export function buildRefinementSessionPatchPlanFromStateInternal(
   cellIds: CellId[],
   options: RefinementSessionPatchOptions = {}
 ): RefinementSessionPatchPlanInternal {
-  return buildRefinementSessionPatchPlanFromState(
-    state,
+  const staged = stageRefinementSessionPlanningReferences(state);
+  const plan = buildRefinementSessionPatchPlanFromState(
+    staged.reader,
     cellIds,
-    resolveSessionStatePatchOptions(state, cellIds, options)
+    resolveSessionStatePatchOptions(staged.reader, cellIds, options)
   );
+  staged.commit();
+  return plan;
+}
+
+interface StagedRefinementSessionPlanningReferences {
+  readonly reader: RefinementSessionStateReader;
+  commit(): void;
+}
+
+function stageRefinementSessionPlanningReferences(
+  state: RefinementSessionStateReader
+): StagedRefinementSessionPlanningReferences {
+  const cells = new Map<CellId, RefinementSessionCell>();
+  const nodes = new Map<number, Point>();
+  const stagedCell = (
+    cellId: CellId
+  ): RefinementSessionCell | undefined => {
+    const cell = state.peekCell(cellId);
+    if (cell === undefined) {
+      return undefined;
+    }
+    const previous = cells.get(cellId);
+    if (previous !== undefined && previous !== cell) {
+      throw new Error(
+        `refinement session state cell ${cellId} changed during planning`
+      );
+    }
+    cells.set(cellId, cell);
+    return cell;
+  };
+  const stagedNode = (nodeId: number): Point | undefined => {
+    const point = state.peekNode(nodeId);
+    if (point === undefined) {
+      return undefined;
+    }
+    const previous = nodes.get(nodeId);
+    if (previous !== undefined && previous !== point) {
+      throw new Error(
+        `refinement session state node ${nodeId} changed during planning`
+      );
+    }
+    nodes.set(nodeId, point);
+    return point;
+  };
+  const reader: RefinementSessionStateReader = {
+    get baseSession() { return state.baseSession; },
+    get revision() { return state.revision; },
+    get kind() { return state.kind; },
+    get nodeCount() { return state.nodeCount; },
+    get cellCount() { return state.cellCount; },
+    get activeLeafCount() { return state.activeLeafCount; },
+    get nextCommandId() { return state.nextCommandId; },
+    get nextCellOrdinal() { return state.nextCellOrdinal; },
+    get sortedActiveLeafIdsDirty() {
+      return state.sortedActiveLeafIdsDirty;
+    },
+    peekNode: stagedNode,
+    peekCell: stagedCell,
+    node: stagedNode,
+    cell: stagedCell,
+    hasActiveLeaf: (cellId) => state.hasActiveLeaf(cellId),
+    activeLeafIds: () => state.activeLeafIds(),
+    activeOwnersByNodeKey: (key) => state.activeOwnersByNodeKey(key),
+    undoCommands: () => state.undoCommands(),
+    redoCommands: () => state.redoCommands()
+  };
+  return {
+    reader,
+    commit() {
+      for (const [cellId, cell] of cells) {
+        if (state.peekCell(cellId) !== cell) {
+          throw new Error(
+            `refinement session state cell ${cellId} changed during planning`
+          );
+        }
+      }
+      for (const [nodeId, point] of nodes) {
+        if (state.peekNode(nodeId) !== point) {
+          throw new Error(
+            `refinement session state node ${nodeId} changed during planning`
+          );
+        }
+      }
+      for (const cellId of cells.keys()) {
+        state.cell(cellId);
+      }
+      for (const nodeId of nodes.keys()) {
+        state.node(nodeId);
+      }
+    }
+  };
 }
 
 function buildRefinementSessionPatchPlan(

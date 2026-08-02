@@ -550,7 +550,7 @@ test("overlay-built patch plan applies without changing its base session", () =>
   const directSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
   const directPlan = refinementSessionInternal
     .buildRefinementSessionPatchPlanInternal(directSession, ["e1"], options);
-  refinementSessionInternal
+  const directCommand = refinementSessionInternal
     .applyRefinementSessionPatchPlanInternal(directSession, directPlan);
 
   const baseSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
@@ -558,18 +558,31 @@ test("overlay-built patch plan applies without changing its base session", () =>
   const overlay = createTestOverlay(baseSession);
   const overlayPlan = refinementSessionInternal
     .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
-  refinementSessionInternal
+  const overlayCommand = refinementSessionInternal
     .applyRefinementSessionPatchPlanToStateInternal(overlay, overlayPlan);
 
+  assert.deepEqual(overlayCommand, directCommand);
   assert.deepEqual(
     activeBuildStructure(
       refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
         overlay
       )
     ),
-    activeBuildStructure(buildActiveMeshWithMap(directSession))
+    activeBuildStructure(
+      refinementSessionInternal.buildActiveMeshWithMapFromSessionStateInternal(
+        createDirectRefinementSessionState(directSession, exactNodeKey)
+      )
+    )
   );
   assertSessionStateUnchanged(baseSession, beforeBase);
+  commitRefinementSessionOverlay(
+    baseSession,
+    snapshotRefinementSessionOverlayDelta(overlay)
+  );
+  assert.deepEqual(
+    comparableSessionState(baseSession),
+    comparableSessionState(directSession)
+  );
 });
 
 test("reader patch planning sees cells and nodes created by an earlier overlay patch", () => {
@@ -619,12 +632,8 @@ test("failed reader patch planning leaves overlay and base state unchanged", () 
     hexRefinementRatio: 2,
     hexTwoToOneSelectionMode: "local"
   };
-  const baseSession = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const baseSession = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
   const overlay = createTestOverlay(baseSession);
-  const firstPlan = refinementSessionInternal
-    .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options);
-  refinementSessionInternal
-    .applyRefinementSessionPatchPlanToStateInternal(overlay, firstPlan);
   const beforeBase = sessionStateSnapshot(baseSession);
   const beforeStats = refinementSessionOverlayStats(overlay);
   const beforeOverlay = {
@@ -638,8 +647,12 @@ test("failed reader patch planning leaves overlay and base state unchanged", () 
 
   assert.throws(
     () => refinementSessionInternal
-      .buildRefinementSessionPatchPlanFromStateInternal(overlay, ["e1"], options),
-    /not active leaves/i
+      .buildRefinementSessionPatchPlanFromStateInternal(
+        overlay,
+        ["e1", "missing"],
+        options
+      ),
+    /cells do not exist: missing/i
   );
 
   assert.deepEqual(refinementSessionOverlayStats(overlay), beforeStats);
@@ -650,6 +663,37 @@ test("failed reader patch planning leaves overlay and base state unchanged", () 
   assert.deepEqual([...overlay.undoCommands()], beforeOverlay.undoCommands);
   assert.deepEqual([...overlay.redoCommands()], beforeOverlay.redoCommands);
   assertSessionStateUnchanged(baseSession, beforeBase);
+});
+
+test("successful reader patch planning publishes references for delta guards", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(2, 1, 1));
+  const overlay = createTestOverlay(session);
+
+  refinementSessionInternal.buildRefinementSessionPatchPlanFromStateInternal(
+    overlay,
+    ["e1"],
+    {
+      hexRefinementRatio: 2,
+      hexTwoToOneSelectionMode: "local"
+    }
+  );
+
+  assert.deepEqual(refinementSessionOverlayStats(overlay), {
+    copiedBaseCellCount: 0,
+    createdCellCount: 0,
+    appendedNodeCount: 0,
+    activeLeafAdditionCount: 0,
+    activeLeafRemovalCount: 0,
+    copiedNodeOwnerKeyCount: 0,
+    referencedBaseCellCount: 2,
+    referencedBaseNodeCount: 12
+  });
+  const delta = snapshotRefinementSessionOverlayDelta(overlay);
+  session.nodes[0][0] += 0.125;
+  assert.throws(
+    () => commitRefinementSessionOverlay(session, delta),
+    /base node fingerprint changed for 1/i
+  );
 });
 
 test("reader patch planning rejects caller-supplied active builds", () => {
