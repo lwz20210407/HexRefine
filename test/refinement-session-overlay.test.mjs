@@ -1566,7 +1566,7 @@ test("restored overlay commits retained history plus one final compound command"
   assert.equal(session.nextCommandId, 3);
 });
 
-test("overlay history checkpoints reject wrong owners, forgery, reuse, and non-LIFO restore", () => {
+test("overlay history checkpoints reject wrong owners, forgery, and reuse", () => {
   const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
   const overlay = createTestOverlay(session);
   overlay.appendUndoCommand({ id: "retained-command" });
@@ -1602,23 +1602,6 @@ test("overlay history checkpoints reject wrong owners, forgery, reuse, and non-L
   assert.deepEqual(overlay.storage.appendedUndoCommands, beforeForgeryCommands);
   assert.equal(overlay.nextCommandId, beforeForgeryNextCommandId);
 
-  const nestedCheckpoint = refinementSessionOverlayInternal
-    .checkpointRefinementSessionOverlayHistory(overlay);
-  overlay.appendUndoCommand({ id: "nested-temporary-command" });
-  const beforeNonLifoCommands = [...overlay.storage.appendedUndoCommands];
-  const beforeNonLifoNextCommandId = overlay.nextCommandId;
-  assert.throws(
-    () => refinementSessionOverlayInternal
-      .restoreRefinementSessionOverlayHistory(overlay, checkpoint),
-    /LIFO|nested/i
-  );
-  assert.deepEqual(overlay.storage.appendedUndoCommands, beforeNonLifoCommands);
-  assert.equal(overlay.nextCommandId, beforeNonLifoNextCommandId);
-
-  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
-    overlay,
-    nestedCheckpoint
-  );
   refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
     overlay,
     checkpoint
@@ -1632,6 +1615,162 @@ test("overlay history checkpoints reject wrong owners, forgery, reuse, and non-L
   );
   assert.deepEqual(overlay.storage.appendedUndoCommands, afterRestoreCommands);
   assert.equal(overlay.nextCommandId, afterRestoreNextCommandId);
+});
+
+test("overlay history restore accepts an older compatible checkpoint", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  const retainedCommand = { id: "retained-command" };
+  overlay.appendUndoCommand(retainedCommand);
+  overlay.setNextCommandId(7);
+  const olderCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+
+  overlay.appendUndoCommand({ id: "middle-command" });
+  overlay.setNextCommandId(8);
+  const newerCheckpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "temporary-command" });
+  overlay.setNextCommandId(9);
+
+  refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+    overlay,
+    olderCheckpoint
+  );
+
+  assert.deepEqual(overlay.storage.appendedUndoCommands, [retainedCommand]);
+  assert.equal(overlay.nextCommandId, 7);
+  const beforeStaleCommands = [...overlay.storage.appendedUndoCommands];
+  const beforeStaleNextCommandId = overlay.nextCommandId;
+  assert.throws(
+    () => refinementSessionOverlayInternal
+      .restoreRefinementSessionOverlayHistory(overlay, newerCheckpoint),
+    /shorter|prefix|stale/i
+  );
+  assert.deepEqual(overlay.storage.appendedUndoCommands, beforeStaleCommands);
+  assert.equal(overlay.nextCommandId, beforeStaleNextCommandId);
+});
+
+test("overlay history restore rejects live base staleness atomically", () => {
+  const staleCases = [
+    ["revision", (session) => {
+      const original = session.revision;
+      session.revision += 1;
+      return () => { session.revision = original; };
+    }],
+    ["nodes identity", (session) => {
+      const original = session.nodes;
+      session.nodes = [...session.nodes];
+      return () => { session.nodes = original; };
+    }],
+    ["node count", (session) => {
+      session.nodes.push([...session.nodes[0]]);
+      return () => { session.nodes.pop(); };
+    }],
+    ["cells identity", (session) => {
+      const original = session.cells;
+      session.cells = new Map(session.cells);
+      return () => { session.cells = original; };
+    }],
+    ["cell count", (session) => {
+      session.cells.set("external-cell", session.cells.get("e1"));
+      return () => { session.cells.delete("external-cell"); };
+    }],
+    ["active leaf identity", (session) => {
+      const original = session.activeLeafIds;
+      session.activeLeafIds = new Set(session.activeLeafIds);
+      return () => { session.activeLeafIds = original; };
+    }],
+    ["active leaf count", (session) => {
+      session.activeLeafIds.add("external-cell");
+      return () => { session.activeLeafIds.delete("external-cell"); };
+    }],
+    ["owner map identity", (session) => {
+      const original = session.activeLeafIdsByNodeKey;
+      session.activeLeafIdsByNodeKey = new Map(session.activeLeafIdsByNodeKey);
+      return () => { session.activeLeafIdsByNodeKey = original; };
+    }],
+    ["owner map count", (session) => {
+      session.activeLeafIdsByNodeKey.set("external-node", []);
+      return () => { session.activeLeafIdsByNodeKey.delete("external-node"); };
+    }],
+    ["sorted active identity", (session) => {
+      const original = session.sortedActiveLeafIds;
+      session.sortedActiveLeafIds = [...session.sortedActiveLeafIds];
+      return () => { session.sortedActiveLeafIds = original; };
+    }],
+    ["sorted active count", (session) => {
+      session.sortedActiveLeafIds.push("external-cell");
+      return () => { session.sortedActiveLeafIds.pop(); };
+    }],
+    ["sorted active dirty flag", (session) => {
+      const original = session.sortedActiveLeafIdsDirty;
+      session.sortedActiveLeafIdsDirty = !original;
+      return () => { session.sortedActiveLeafIdsDirty = original; };
+    }],
+    ["undo stack identity", (session) => {
+      const original = session.undoStack;
+      session.undoStack = [...session.undoStack];
+      return () => { session.undoStack = original; };
+    }],
+    ["undo stack length", (session) => {
+      session.undoStack.push({ id: "external-undo" });
+      return () => { session.undoStack.pop(); };
+    }],
+    ["redo stack identity", (session) => {
+      const original = session.redoStack;
+      session.redoStack = [...session.redoStack];
+      return () => { session.redoStack = original; };
+    }],
+    ["redo stack length", (session) => {
+      session.redoStack.push({ id: "external-redo" });
+      return () => { session.redoStack.pop(); };
+    }],
+    ["next command id", (session) => {
+      const original = session.nextCommandId;
+      session.nextCommandId += 1;
+      return () => { session.nextCommandId = original; };
+    }],
+    ["next cell ordinal", (session) => {
+      const original = session.nextCellOrdinal;
+      session.nextCellOrdinal += 1;
+      return () => { session.nextCellOrdinal = original; };
+    }]
+  ];
+
+  for (const [label, makeStale] of staleCases) {
+    const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+    const overlay = createTestOverlay(session);
+    const retainedCommand = { id: `retained-${label}` };
+    overlay.appendUndoCommand(retainedCommand);
+    overlay.setNextCommandId(13);
+    const checkpoint = refinementSessionOverlayInternal
+      .checkpointRefinementSessionOverlayHistory(overlay);
+    overlay.appendUndoCommand({ id: `temporary-${label}` });
+    overlay.setNextCommandId(14);
+    const beforeCommands = overlay.storage.appendedUndoCommands;
+    const beforeCommandValues = [...beforeCommands];
+    const beforeNextCommandId = overlay.nextCommandId;
+    const restoreBase = makeStale(session);
+
+    assert.throws(
+      () => refinementSessionOverlayInternal
+        .restoreRefinementSessionOverlayHistory(overlay, checkpoint),
+      /base|stale|changed/i,
+      label
+    );
+    assert.strictEqual(overlay.storage.appendedUndoCommands, beforeCommands, label);
+    assert.deepEqual(overlay.storage.appendedUndoCommands, beforeCommandValues, label);
+    assert.equal(overlay.nextCommandId, beforeNextCommandId, label);
+
+    restoreBase();
+    refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+      overlay,
+      checkpoint
+    );
+    assert.deepEqual(overlay.storage.appendedUndoCommands, [retainedCommand], label);
+    assert.equal(overlay.nextCommandId, 13, label);
+  }
 });
 
 test("overlay history checkpoints reject stale or shortened prefixes atomically", () => {
@@ -1745,6 +1884,49 @@ test("overlay history restore prevalidates truncation and resists token prototyp
   );
   assert.deepEqual(overlay.storage.appendedUndoCommands, []);
   assert.equal(overlay.nextCommandId, session.nextCommandId);
+});
+
+test("overlay history intrinsic validation does not invoke poisoned accessors", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const overlay = createTestOverlay(session);
+  overlay.appendUndoCommand({ id: "retained-command" });
+  const checkpoint = refinementSessionOverlayInternal
+    .checkpointRefinementSessionOverlayHistory(overlay);
+  overlay.appendUndoCommand({ id: "temporary-command" });
+  overlay.setNextCommandId(41);
+  const beforeCommands = overlay.storage.appendedUndoCommands;
+  const beforeCommandValues = [...beforeCommands];
+  const beforeNextCommandId = overlay.nextCommandId;
+  const pushDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "push");
+  let accessorCalls = 0;
+  let restoreError;
+
+  Object.defineProperty(Array.prototype, "push", {
+    configurable: true,
+    get() {
+      accessorCalls += 1;
+      overlay.storage.appendedUndoCommands.length = 0;
+      overlay.storage.nextCommandId = 999;
+      return pushDescriptor.value;
+    }
+  });
+  try {
+    refinementSessionOverlayInternal.restoreRefinementSessionOverlayHistory(
+      overlay,
+      checkpoint
+    );
+  } catch (error) {
+    restoreError = error;
+  } finally {
+    Object.defineProperty(Array.prototype, "push", pushDescriptor);
+  }
+
+  assert.ok(restoreError instanceof Error);
+  assert.match(restoreError.message, /intrinsic|prototype|invalid/i);
+  assert.equal(accessorCalls, 0);
+  assert.strictEqual(overlay.storage.appendedUndoCommands, beforeCommands);
+  assert.deepEqual(overlay.storage.appendedUndoCommands, beforeCommandValues);
+  assert.equal(overlay.nextCommandId, beforeNextCommandId);
 });
 
 test("overlay delta snapshot is deeply frozen and detached from overlay and base state", () => {

@@ -11,29 +11,48 @@ import type {
   RefinementSessionStateWriter
 } from "./refinement-session-state-internal.js";
 
-const TRUSTED_ARRAY_PROTOTYPE = Array.prototype;
-const TRUSTED_ARRAY_IS_ARRAY = Array.isArray;
-const TRUSTED_ARRAY_PUSH = Array.prototype.push;
+const TRUSTED_ARRAY = Array;
+const TRUSTED_MAP = Map;
+const TRUSTED_NUMBER = Number;
+const TRUSTED_OBJECT = Object;
+const TRUSTED_REFLECT = Reflect;
+const TRUSTED_SET = Set;
+const TRUSTED_WEAK_MAP = WeakMap;
+const TRUSTED_ARRAY_PROTOTYPE = TRUSTED_ARRAY.prototype;
+const TRUSTED_ARRAY_IS_ARRAY = TRUSTED_ARRAY.isArray;
+const TRUSTED_ARRAY_PUSH = TRUSTED_ARRAY_PROTOTYPE.push;
 const TRUSTED_FUNCTION_CALL = Function.prototype.call;
-const TRUSTED_REFLECT_APPLY = Reflect.apply;
-const TRUSTED_REFLECT_DEFINE_PROPERTY = Reflect.defineProperty;
-const TRUSTED_NUMBER_IS_SAFE_INTEGER = Number.isSafeInteger;
-const TRUSTED_OBJECT_PROTOTYPE = Object.prototype;
-const TRUSTED_OBJECT_FREEZE = Object.freeze;
-const TRUSTED_OBJECT_GET_PROTOTYPE_OF = Object.getPrototypeOf;
-const TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
-const TRUSTED_MAP_GET = Map.prototype.get;
-const TRUSTED_MAP_HAS = Map.prototype.has;
-const TRUSTED_MAP_SET = Map.prototype.set;
-const TRUSTED_MAP_DELETE = Map.prototype.delete;
-const TRUSTED_MAP_ENTRIES = Map.prototype.entries;
-const TRUSTED_SET_HAS = Set.prototype.has;
-const TRUSTED_SET_ADD = Set.prototype.add;
-const TRUSTED_SET_DELETE = Set.prototype.delete;
-const TRUSTED_SET_VALUES = Set.prototype.values;
-const TRUSTED_WEAK_MAP_GET = WeakMap.prototype.get;
-const TRUSTED_WEAK_MAP_SET = WeakMap.prototype.set;
-const TRUSTED_WEAK_MAP_DELETE = WeakMap.prototype.delete;
+const TRUSTED_REFLECT_APPLY = TRUSTED_REFLECT.apply;
+const TRUSTED_REFLECT_DEFINE_PROPERTY = TRUSTED_REFLECT.defineProperty;
+const TRUSTED_NUMBER_IS_SAFE_INTEGER = TRUSTED_NUMBER.isSafeInteger;
+const TRUSTED_OBJECT_PROTOTYPE = TRUSTED_OBJECT.prototype;
+const TRUSTED_OBJECT_FREEZE = TRUSTED_OBJECT.freeze;
+const TRUSTED_OBJECT_GET_PROTOTYPE_OF = TRUSTED_OBJECT.getPrototypeOf;
+const TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR =
+  TRUSTED_OBJECT.getOwnPropertyDescriptor;
+const TRUSTED_MAP_PROTOTYPE = TRUSTED_MAP.prototype;
+const TRUSTED_MAP_SIZE_GETTER = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+  TRUSTED_MAP_PROTOTYPE,
+  "size"
+)!.get!;
+const TRUSTED_MAP_GET = TRUSTED_MAP_PROTOTYPE.get;
+const TRUSTED_MAP_HAS = TRUSTED_MAP_PROTOTYPE.has;
+const TRUSTED_MAP_SET = TRUSTED_MAP_PROTOTYPE.set;
+const TRUSTED_MAP_DELETE = TRUSTED_MAP_PROTOTYPE.delete;
+const TRUSTED_MAP_ENTRIES = TRUSTED_MAP_PROTOTYPE.entries;
+const TRUSTED_SET_PROTOTYPE = TRUSTED_SET.prototype;
+const TRUSTED_SET_SIZE_GETTER = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+  TRUSTED_SET_PROTOTYPE,
+  "size"
+)!.get!;
+const TRUSTED_SET_HAS = TRUSTED_SET_PROTOTYPE.has;
+const TRUSTED_SET_ADD = TRUSTED_SET_PROTOTYPE.add;
+const TRUSTED_SET_DELETE = TRUSTED_SET_PROTOTYPE.delete;
+const TRUSTED_SET_VALUES = TRUSTED_SET_PROTOTYPE.values;
+const TRUSTED_WEAK_MAP_PROTOTYPE = TRUSTED_WEAK_MAP.prototype;
+const TRUSTED_WEAK_MAP_GET = TRUSTED_WEAK_MAP_PROTOTYPE.get;
+const TRUSTED_WEAK_MAP_SET = TRUSTED_WEAK_MAP_PROTOTYPE.set;
+const TRUSTED_WEAK_MAP_DELETE = TRUSTED_WEAK_MAP_PROTOTYPE.delete;
 
 export interface RefinementSessionOverlayStats {
   readonly copiedBaseCellCount: number;
@@ -106,7 +125,6 @@ interface OverlayHistoryCheckpointOwner {
   readonly baseSession: RefinementSession;
   readonly baselineValues: readonly unknown[];
   readonly appendedUndoCommands: RefinementSessionCommand[];
-  readonly checkpoints: RefinementSessionOverlayHistoryCheckpoint[];
 }
 
 interface PreparedOverlayHistoryCheckpoint {
@@ -140,6 +158,50 @@ const OVERLAY_HISTORY_BASELINE_KEYS = TRUSTED_OBJECT_FREEZE([
   "baseNextCommandId",
   "baseNextCellOrdinal"
 ] as const);
+const OVERLAY_HISTORY_DATA_INTRINSICS = [
+  [TRUSTED_ARRAY, "prototype", TRUSTED_ARRAY_PROTOTYPE],
+  [TRUSTED_ARRAY, "isArray", TRUSTED_ARRAY_IS_ARRAY],
+  [TRUSTED_ARRAY_PROTOTYPE, "push", TRUSTED_ARRAY_PUSH],
+  [TRUSTED_REFLECT, "apply", TRUSTED_REFLECT_APPLY],
+  [TRUSTED_REFLECT, "defineProperty", TRUSTED_REFLECT_DEFINE_PROPERTY],
+  [TRUSTED_NUMBER, "isSafeInteger", TRUSTED_NUMBER_IS_SAFE_INTEGER],
+  [TRUSTED_OBJECT, "prototype", TRUSTED_OBJECT_PROTOTYPE],
+  [TRUSTED_OBJECT, "freeze", TRUSTED_OBJECT_FREEZE],
+  [TRUSTED_OBJECT, "getPrototypeOf", TRUSTED_OBJECT_GET_PROTOTYPE_OF],
+  [TRUSTED_OBJECT, "getOwnPropertyDescriptor", TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR],
+  [TRUSTED_MAP, "prototype", TRUSTED_MAP_PROTOTYPE],
+  [TRUSTED_SET, "prototype", TRUSTED_SET_PROTOTYPE],
+  [TRUSTED_WEAK_MAP, "prototype", TRUSTED_WEAK_MAP_PROTOTYPE],
+  [TRUSTED_WEAK_MAP_PROTOTYPE, "get", TRUSTED_WEAK_MAP_GET],
+  [TRUSTED_WEAK_MAP_PROTOTYPE, "set", TRUSTED_WEAK_MAP_SET],
+  [TRUSTED_WEAK_MAP_PROTOTYPE, "delete", TRUSTED_WEAK_MAP_DELETE]
+] as const;
+const OVERLAY_HISTORY_GETTER_INTRINSICS = [
+  [TRUSTED_MAP_PROTOTYPE, "size", TRUSTED_MAP_SIZE_GETTER],
+  [TRUSTED_SET_PROTOTYPE, "size", TRUSTED_SET_SIZE_GETTER]
+] as const;
+const OVERLAY_HISTORY_LIVE_BASE_PROPERTIES = [
+  ["revision", "baseRevision"],
+  ["nodes", "baseNodes"],
+  ["cells", "baseCells"],
+  ["activeLeafIds", "baseActiveLeafIds"],
+  ["activeLeafIdsByNodeKey", "baseActiveLeafIdsByNodeKey"],
+  ["sortedActiveLeafIds", "baseSortedActiveLeafIds"],
+  ["undoStack", "baseUndoStack"],
+  ["redoStack", "baseRedoStack"],
+  ["sortedActiveLeafIdsDirty", "baseSortedActiveLeafIdsDirty"],
+  ["nextCommandId", "baseNextCommandId"],
+  ["nextCellOrdinal", "baseNextCellOrdinal"]
+] as const;
+const OVERLAY_HISTORY_LIVE_BASE_COUNTS = [
+  ["array", "nodes", "baseNodeCount"],
+  ["map", "cells", "baseCellCount"],
+  ["set", "activeLeafIds", "baseActiveLeafCount"],
+  ["map", "activeLeafIdsByNodeKey", "baseOwnerKeyCount"],
+  ["array", "sortedActiveLeafIds", "baseSortedActiveLeafCount"],
+  ["array", "undoStack", "baseUndoLength"],
+  ["array", "redoStack", "baseRedoLength"]
+] as const;
 
 interface OverlayDeltaCell {
   readonly id: CellId;
@@ -301,24 +363,65 @@ function overlayHistoryCheckpointError(message: string): never {
   );
 }
 
+function historyOwnPropertyDescriptor(
+  value: object,
+  key: string
+): PropertyDescriptor | undefined {
+  return TRUSTED_REFLECT_APPLY(
+    TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR,
+    TRUSTED_OBJECT,
+    [value, key]
+  ) as PropertyDescriptor | undefined;
+}
+
+function historyOwnDataPropertyDescriptor(
+  value: object,
+  key: string
+): (PropertyDescriptor & { readonly value: unknown }) | undefined {
+  const descriptor = historyOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined
+    || historyOwnPropertyDescriptor(descriptor, "value") === undefined) {
+    return undefined;
+  }
+  return descriptor as PropertyDescriptor & { readonly value: unknown };
+}
+
+function historyOwnDataPropertyMatches(
+  value: object,
+  key: string,
+  expected: unknown
+): boolean {
+  const descriptor = historyOwnDataPropertyDescriptor(value, key);
+  return descriptor !== undefined && descriptor.value === expected;
+}
+
+function historyOwnGetterMatches(
+  value: object,
+  key: string,
+  expected: unknown
+): boolean {
+  const descriptor = historyOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return false;
+  const getter = historyOwnDataPropertyDescriptor(descriptor, "get");
+  return getter !== undefined && getter.value === expected;
+}
+
 function assertTrustedOverlayHistoryCheckpointIntrinsics(): void {
-  if (Array.prototype !== TRUSTED_ARRAY_PROTOTYPE
-    || Array.isArray !== TRUSTED_ARRAY_IS_ARRAY
-    || Array.prototype.push !== TRUSTED_ARRAY_PUSH
-    || Function.prototype.call !== TRUSTED_FUNCTION_CALL
-    || Reflect.apply !== TRUSTED_REFLECT_APPLY
-    || Reflect.defineProperty !== TRUSTED_REFLECT_DEFINE_PROPERTY
-    || Number.isSafeInteger !== TRUSTED_NUMBER_IS_SAFE_INTEGER
-    || Object.prototype !== TRUSTED_OBJECT_PROTOTYPE
-    || Object.freeze !== TRUSTED_OBJECT_FREEZE
-    || Object.getPrototypeOf !== TRUSTED_OBJECT_GET_PROTOTYPE_OF
-    || Object.getOwnPropertyDescriptor !== TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR
-    || WeakMap.prototype.get !== TRUSTED_WEAK_MAP_GET
-    || WeakMap.prototype.set !== TRUSTED_WEAK_MAP_SET
-    || WeakMap.prototype.delete !== TRUSTED_WEAK_MAP_DELETE) {
-    overlayHistoryCheckpointError(
-      "prototype intrinsics changed since module initialization"
-    );
+  for (let index = 0; index < OVERLAY_HISTORY_DATA_INTRINSICS.length; index += 1) {
+    const intrinsic = OVERLAY_HISTORY_DATA_INTRINSICS[index]!;
+    if (!historyOwnDataPropertyMatches(intrinsic[0], intrinsic[1], intrinsic[2])) {
+      overlayHistoryCheckpointError(
+        "prototype intrinsics changed since module initialization"
+      );
+    }
+  }
+  for (let index = 0; index < OVERLAY_HISTORY_GETTER_INTRINSICS.length; index += 1) {
+    const intrinsic = OVERLAY_HISTORY_GETTER_INTRINSICS[index]!;
+    if (!historyOwnGetterMatches(intrinsic[0], intrinsic[1], intrinsic[2])) {
+      overlayHistoryCheckpointError(
+        "prototype intrinsics changed since module initialization"
+      );
+    }
   }
 }
 
@@ -327,8 +430,8 @@ function historyOwnDataProperty<T>(
   key: string,
   label: string
 ): T {
-  const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(value, key);
-  if (descriptor === undefined || !("value" in descriptor)) {
+  const descriptor = historyOwnDataPropertyDescriptor(value, key);
+  if (descriptor === undefined) {
     overlayHistoryCheckpointError(`${label}.${key} must be an own data property`);
   }
   return descriptor.value as T;
@@ -342,6 +445,69 @@ function assertOverlayHistoryBaseline(
     if (historyOwnDataProperty(owner.storage, key, "overlay storage")
       !== owner.baselineValues[index]) {
       overlayHistoryCheckpointError("overlay baseline changed after creation");
+    }
+  }
+}
+
+function overlayHistoryArrayLength(value: unknown, label: string): number {
+  if (!TRUSTED_ARRAY_IS_ARRAY(value)
+    || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== TRUSTED_ARRAY_PROTOTYPE) {
+    overlayHistoryCheckpointError(`${label} must be an ordinary Array`);
+  }
+  const descriptor = historyOwnDataPropertyDescriptor(value, "length");
+  if (descriptor === undefined
+    || typeof descriptor.value !== "number"
+    || !TRUSTED_NUMBER_IS_SAFE_INTEGER(descriptor.value)
+    || descriptor.value < 0) {
+    overlayHistoryCheckpointError(`${label}.length must be a safe integer`);
+  }
+  return descriptor.value;
+}
+
+function overlayHistoryMapSize(value: unknown, label: string): number {
+  if (value === null
+    || typeof value !== "object"
+    || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== TRUSTED_MAP_PROTOTYPE) {
+    overlayHistoryCheckpointError(`${label} must be an ordinary Map`);
+  }
+  return TRUSTED_REFLECT_APPLY(TRUSTED_MAP_SIZE_GETTER, value, []) as number;
+}
+
+function overlayHistorySetSize(value: unknown, label: string): number {
+  if (value === null
+    || typeof value !== "object"
+    || TRUSTED_OBJECT_GET_PROTOTYPE_OF(value) !== TRUSTED_SET_PROTOTYPE) {
+    overlayHistoryCheckpointError(`${label} must be an ordinary Set`);
+  }
+  return TRUSTED_REFLECT_APPLY(TRUSTED_SET_SIZE_GETTER, value, []) as number;
+}
+
+function assertOverlayHistoryLiveBase(
+  owner: OverlayHistoryCheckpointOwner
+): void {
+  const session = owner.baseSession;
+  if (TRUSTED_OBJECT_GET_PROTOTYPE_OF(session) !== TRUSTED_OBJECT_PROTOTYPE) {
+    overlayHistoryCheckpointError("live base session prototype changed");
+  }
+  const storage = owner.storage;
+  for (let index = 0; index < OVERLAY_HISTORY_LIVE_BASE_PROPERTIES.length; index += 1) {
+    const property = OVERLAY_HISTORY_LIVE_BASE_PROPERTIES[index]!;
+    if (historyOwnDataProperty(session, property[0], "base session")
+      !== historyOwnDataProperty(storage, property[1], "overlay storage")) {
+      overlayHistoryCheckpointError("live base session changed after overlay creation");
+    }
+  }
+  for (let index = 0; index < OVERLAY_HISTORY_LIVE_BASE_COUNTS.length; index += 1) {
+    const count = OVERLAY_HISTORY_LIVE_BASE_COUNTS[index]!;
+    const value = historyOwnDataProperty<unknown>(session, count[1], "base session");
+    const label = `base session.${count[1]}`;
+    const actual = count[0] === "array"
+      ? overlayHistoryArrayLength(value, label)
+      : count[0] === "map"
+        ? overlayHistoryMapSize(value, label)
+        : overlayHistorySetSize(value, label);
+    if (actual !== historyOwnDataProperty(storage, count[2], "overlay storage")) {
+      overlayHistoryCheckpointError("live base session changed after overlay creation");
     }
   }
 }
@@ -364,6 +530,7 @@ function requireOverlayHistoryCheckpointOwner(
     overlayHistoryCheckpointError("overlay or storage identity changed");
   }
   assertOverlayHistoryBaseline(owner);
+  assertOverlayHistoryLiveBase(owner);
   const commands = historyOwnDataProperty<unknown>(
     owner.storage,
     "appendedUndoCommands",
@@ -387,12 +554,11 @@ function readOverlayHistoryState(owner: OverlayHistoryCheckpointOwner): {
       "overlay storage.appendedUndoCommands must be an ordinary Array"
     );
   }
-  const lengthDescriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+  const lengthDescriptor = historyOwnDataPropertyDescriptor(
     commands,
     "length"
   );
   if (lengthDescriptor === undefined
-    || !("value" in lengthDescriptor)
     || !lengthDescriptor.writable
     || typeof lengthDescriptor.value !== "number"
     || !TRUSTED_NUMBER_IS_SAFE_INTEGER(lengthDescriptor.value)
@@ -401,12 +567,11 @@ function readOverlayHistoryState(owner: OverlayHistoryCheckpointOwner): {
       "overlay storage.appendedUndoCommands.length must be writable"
     );
   }
-  const nextCommandIdDescriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+  const nextCommandIdDescriptor = historyOwnDataPropertyDescriptor(
     owner.storage,
     "nextCommandId"
   );
   if (nextCommandIdDescriptor === undefined
-    || !("value" in nextCommandIdDescriptor)
     || !nextCommandIdDescriptor.writable
     || typeof nextCommandIdDescriptor.value !== "number"
     || !TRUSTED_NUMBER_IS_SAFE_INTEGER(nextCommandIdDescriptor.value)
@@ -442,8 +607,7 @@ function registerOverlayHistoryCheckpointOwner(
     storage,
     baseSession,
     baselineValues: TRUSTED_OBJECT_FREEZE(baselineValues),
-    appendedUndoCommands: storage.appendedUndoCommands,
-    checkpoints: []
+    appendedUndoCommands: storage.appendedUndoCommands
   };
   TRUSTED_REFLECT_APPLY(
     TRUSTED_WEAK_MAP_SET,
@@ -460,12 +624,11 @@ export function checkpointRefinementSessionOverlayHistory(
   const state = readOverlayHistoryState(owner);
   const commandPrefix: RefinementSessionCommand[] = [];
   for (let index = 0; index < state.length; index += 1) {
-    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    const descriptor = historyOwnDataPropertyDescriptor(
       state.commands,
       String(index)
     );
     if (descriptor === undefined
-      || !("value" in descriptor)
       || !descriptor.enumerable) {
       overlayHistoryCheckpointError(
         `overlay command history has an unsafe entry at index ${index}`
@@ -490,11 +653,6 @@ export function checkpointRefinementSessionOverlayHistory(
     preparedOverlayHistoryCheckpoints,
     [token, prepared]
   );
-  TRUSTED_REFLECT_APPLY(
-    TRUSTED_ARRAY_PUSH,
-    owner.checkpoints,
-    [token]
-  );
   return token;
 }
 
@@ -515,21 +673,16 @@ export function restoreRefinementSessionOverlayHistory(
   if (prepared.owner !== owner) {
     overlayHistoryCheckpointError("token belongs to a different overlay");
   }
-  const topIndex = owner.checkpoints.length - 1;
-  if (topIndex < 0 || owner.checkpoints[topIndex] !== checkpoint) {
-    overlayHistoryCheckpointError("nested checkpoints must be restored in LIFO order");
-  }
   const state = readOverlayHistoryState(owner);
   if (state.length < prepared.commandLength) {
     overlayHistoryCheckpointError("overlay command history is shorter than its checkpoint");
   }
   for (let index = 0; index < prepared.commandLength; index += 1) {
-    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    const descriptor = historyOwnDataPropertyDescriptor(
       state.commands,
       String(index)
     );
     if (descriptor === undefined
-      || !("value" in descriptor)
       || descriptor.value !== prepared.commandPrefix[index]) {
       overlayHistoryCheckpointError(
         `overlay command history prefix changed at index ${index}`
@@ -537,12 +690,11 @@ export function restoreRefinementSessionOverlayHistory(
     }
   }
   for (let index = prepared.commandLength; index < state.length; index += 1) {
-    const descriptor = TRUSTED_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(
+    const descriptor = historyOwnDataPropertyDescriptor(
       state.commands,
       String(index)
     );
     if (descriptor === undefined
-      || !("value" in descriptor)
       || !descriptor.enumerable
       || !descriptor.configurable) {
       overlayHistoryCheckpointError(
@@ -556,7 +708,6 @@ export function restoreRefinementSessionOverlayHistory(
     preparedOverlayHistoryCheckpoints,
     [checkpoint]
   );
-  owner.checkpoints.length = topIndex;
   TRUSTED_REFLECT_DEFINE_PROPERTY(state.commands, "length", {
     value: prepared.commandLength
   });
