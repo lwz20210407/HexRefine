@@ -232,16 +232,43 @@ test("reader active build exposes trusted mappings without concrete-session trus
   assert.equal(activeBuildCellIdByElementId(overlayBuild, 1), "e1");
   assert.throws(
     () => validateActiveBuildForSession(session, overlayBuild),
-    /metadata|provenance|tampered/i
+    /mapping-only|session-state/i
   );
   assert.throws(
     () => activeBuildElementIdByCellId(session, overlayBuild, "e1"),
-    /metadata|provenance|tampered/i
+    /mapping-only|session-state/i
   );
 
   const publicBuild = buildActiveMeshWithMap(session);
   assert.strictEqual(validateActiveBuildForSession(session, publicBuild), publicBuild);
   assert.equal(activeBuildElementIdByCellId(session, publicBuild, "e1"), 1);
+});
+
+test("reader active build cannot forge concrete-session trust from public provenance", () => {
+  const session = createRefinementSession(createHexUnitCubeMesh(1, 1, 1));
+  const options = { includeElementIdsByNodeId: true };
+  const overlayBuild = refinementSessionInternal
+    .buildActiveMeshWithMapFromSessionStateInternal(
+      createTestOverlay(session),
+      options
+    );
+  const publicBuild = buildActiveMeshWithMap(session, options);
+
+  assert.deepEqual(activeBuildStructure(overlayBuild), activeBuildStructure(publicBuild));
+  overlayBuild.provenance = {
+    ...publicBuild.provenance,
+    geometryResolution: overlayBuild.geometryResolution
+  };
+
+  assert.throws(
+    () => validateActiveBuildForSession(session, overlayBuild),
+    /mapping-only|session-state/i
+  );
+  assert.throws(
+    () => activeBuildElementIdByCellId(session, overlayBuild, "e1"),
+    /mapping-only|session-state/i
+  );
+  assert.equal(activeBuildCellIdByElementId(overlayBuild, 1), "e1");
 });
 
 test("explicit reader merge visits only unique active nodes", () => {

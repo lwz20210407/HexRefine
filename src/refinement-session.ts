@@ -229,6 +229,7 @@ interface TrustedSessionBuildGuard {
 
 const activeMeshBuildTrust = new WeakMap<ActiveMeshBuildResult, TrustedActiveMeshBuild>();
 const activeMeshBuildMappings = new WeakMap<ActiveMeshBuildResult, TrustedActiveMeshMappings>();
+const mappingOnlyActiveMeshBuilds = new WeakSet<ActiveMeshBuildResult>();
 const internalActiveMeshBuildTrust = new WeakMap<
   ActiveMeshBuildResult,
   {
@@ -776,6 +777,7 @@ function finalizeActiveMeshBuildFromSessionState(
     false,
     true
   );
+  mappingOnlyActiveMeshBuilds.add(result);
   return result;
 }
 
@@ -4341,6 +4343,12 @@ function validateActiveBuildSession(
   build: ActiveMeshBuildResult,
   diagnosticCellIds: readonly CellId[]
 ): ValidatedActiveBuildSession {
+  if (mappingOnlyActiveMeshBuilds.has(build)) {
+    throw sessionFaceResolutionError(
+      diagnosticCellIds,
+      "mapping-only session-state activeBuild cannot be validated for a concrete session"
+    );
+  }
   const token = refinementSessionToken(session);
   const mappings = ensureTrustedActiveMeshMappings(build, diagnosticCellIds);
   const internalTrust = internalActiveMeshBuildTrust.get(build);
