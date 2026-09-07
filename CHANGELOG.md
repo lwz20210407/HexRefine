@@ -4,10 +4,13 @@
 
 Private/custom performance edition.
 
+- Added persistent spatial indexing for incremental history conformance checks,
+  paired-interface ownership checks, and next-revision certificate publication.
+- Retained full final auditing when a nonconforming input baseline requires
+  interface repair; rejected operations do not publish a new certificate.
 - Scoped untouched-support and replay history planning builds to their affected
   transition contexts while retaining complete shared-node patch halos.
-- Added fixed-component/far-field regressions and exact delta preview counts;
-  retained the full final conformance audit pending incremental certification.
+- Added fixed-component/far-field regressions and exact delta preview counts.
 - Synchronized standalone embedded runtime modules with the Stage C sources.
 - Added replayable refinement-command recipes and component-local history
   closure planning.

@@ -106,9 +106,14 @@ then offline replay.
 
 History transactions use sparse overlays and component-scoped planning builds
 for both untouched-support and replayed transition shells. Preview counts are
-computed from active-leaf deltas. This reduces unrelated far-field reads during
-reconstruction, but context discovery and the final full-mesh conformance audit
-still have global costs. Incremental final certification is not yet enabled.
+computed from active-leaf deltas. The first valid baseline is checked globally
+and spatially indexed. Subsequent history checks query neighbors of changed
+geometry and verify local conformance plus retained interface ownership; a
+successful commit publishes the updated index for the new revision. Inputs
+whose near-coincident interfaces require repair retain a full final audit.
+Context discovery and public active-mesh preparation still have global costs.
+Certificate reuse assumes callers honor the read-only session contract rather
+than mutating session arrays or cells directly.
 
 The experimental `2:1` path supports two strategies. `section` mode uses
 TrueGrid-derived seven-Hex columns for one-direction, level-closed transition

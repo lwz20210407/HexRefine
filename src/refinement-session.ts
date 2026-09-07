@@ -24,8 +24,20 @@ import {
 } from "./refinement-planner-internal.js";
 import { checkNoHangingNodes, type ConformanceReport } from "./conformance.js";
 import {
-  currentRefinementSessionConformanceCertificate
+  currentRefinementSessionConformanceCertificate,
+  certifyRefinementSessionBaseline,
+  prepareIndexedConformanceBaseline,
+  publishIndexedConformanceCertificate,
+  BaselineConformanceError,
+  type IndexedConformanceCertificate,
+  type RefinementSessionConformanceMetadata
 } from "./refinement-conformance-certificate-internal.js";
+import {
+  auditIncrementalConformance,
+  buildConformanceSpatialIndex,
+  type ConformanceSpatialCell,
+  type ConformanceSpatialIndex
+} from "./refinement-incremental-conformance-internal.js";
 import {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality
@@ -1955,6 +1967,7 @@ function refineSessionPatchInternal(
             session,
             transaction.delta
           );
+          publishHistoryConformanceAfterCommit(session, transaction);
           const committedCommand = session.undoStack.at(-1);
           if (
             committedCommand === undefined
@@ -2775,6 +2788,132 @@ export interface RefinementSessionHistoryTransactionPlan {
   readonly delta: RefinementSessionOverlayDelta;
   readonly overlayStats: Readonly<RefinementSessionOverlayStats>;
   readonly preview: RefinementPreview<CellId>;
+  readonly conformanceAudit: {
+    readonly mode: "incremental" | "full-repair";
+    readonly checkedElementCount: number;
+    readonly requiredInterfaceCount: number;
+  };
+}
+
+interface HistoryConformanceProof {
+  readonly baseline: IndexedConformanceCertificate | undefined;
+  readonly mode: "incremental" | "full-repair";
+  readonly nextIndex: ConformanceSpatialIndex;
+  readonly metadata: RefinementSessionConformanceMetadata;
+  readonly checkedElementCount: number;
+  readonly requiredInterfaceCount: number;
+}
+
+const historyConformanceProofs = new WeakMap<RefinementSessionHistoryTransactionPlan, HistoryConformanceProof>();
+
+function publishHistoryConformanceAfterCommit(
+  session: RefinementSession,
+  transaction: RefinementSessionHistoryTransactionPlan
+): void {
+  const proof = historyConformanceProofs.get(transaction);
+  if (proof === undefined) throw new Error("history transaction has no conformance proof");
+  publishIndexedConformanceCertificate(session, Object.freeze({
+    certificate: certifyRefinementSessionBaseline(session, proof.metadata),
+    index: proof.nextIndex
+  }));
+}
+
+function finishHistoryConformancePlan(
+  session: RefinementSession,
+  plan: RefinementSessionHistoryTransactionPlan,
+  proof: HistoryConformanceProof
+): RefinementSessionHistoryTransactionPlan {
+  if (proof.baseline !== undefined) publishIndexedConformanceCertificate(session, proof.baseline);
+  historyConformanceProofs.set(plan, proof);
+  return plan;
+}
+
+function conformanceSpatialCell(state: RefinementSessionStateReader, id: CellId): ConformanceSpatialCell {
+  const cell = requiredSessionStateCell(state, id);
+  return {
+    id, ordinal: cell.ordinal,
+    points: cell.element.map((nodeId) => activeSessionStateNode(state, nodeId, id))
+  };
+}
+
+function auditHistoryConformance(
+  session: RefinementSession,
+  working: RefinementSessionOverlay,
+  removedIds: readonly CellId[],
+  addedIds: readonly CellId[],
+  resolution: SessionFaceResolution,
+  selectedIds: readonly CellId[],
+  action: TwoToOneCompensationAction<CellId>
+): HistoryConformanceProof {
+  const direct = createDirectRefinementSessionState(session, exactActiveMergeKey);
+  const options: BuildActiveMeshOptions = {
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    mergeTolerance: resolution.mergeTolerance ?? resolution.tolerance
+  };
+  const failure = (message: string) => freezeTwoToOnePlanningErrorDiagnostic(new TwoToOnePlanningError<CellId>(
+    "TWO_TO_ONE_CONFORMANCE", `history transaction final mesh is nonconforming: ${message}`,
+    {
+      conflictingCellIds: stableCellIds(selectedIds), conflictingInterfaces: [],
+      attemptedActions: [action], suggestion: { kind: "expand-selection" }
+    }
+  ));
+  let baseline: IndexedConformanceCertificate;
+  try {
+    baseline = prepareIndexedConformanceBaseline(session, resolution,
+      function* () {
+        for (const id of session.activeLeafIds) yield conformanceSpatialCell(direct, id);
+      },
+      () => checkNoHangingNodes(
+        buildActiveMeshWithMapFromSessionStateInternal(direct, options).mesh,
+        resolution.tolerance
+      )
+    );
+  } catch (error) {
+    if (!(error instanceof BaselineConformanceError)) throw error;
+    // Existing near-coincident interfaces can be repaired by shell rebuilding.
+    // An invalid baseline cannot justify skipping the full final audit.
+    const auditState = forkRefinementSessionOverlay(working);
+    const finalBuild = buildActiveMeshWithMapFromSessionStateInternal(auditState, options);
+    const report = checkNoHangingNodes(finalBuild.mesh, resolution.tolerance);
+    if (!report.ok) throw failure(report.hanging[0]?.message ?? "invalid repaired mesh");
+    const nextIndex = buildConformanceSpatialIndex((function* () {
+      for (const id of auditState.activeLeafIds()) yield conformanceSpatialCell(auditState, id);
+    })());
+    return {
+      baseline: undefined, nextIndex, mode: "full-repair",
+      metadata: { ...measureActiveMeshGeometryResolution(finalBuild.mesh), tolerance: resolution.tolerance },
+      checkedElementCount: finalBuild.mesh.elements.length, requiredInterfaceCount: 0
+    };
+  }
+  let finalMesh: ReadonlyMesh | undefined;
+  const result = auditIncrementalConformance(
+    baseline.index,
+    removedIds.map((id) => conformanceSpatialCell(direct, id)),
+    addedIds.map((id) => conformanceSpatialCell(working, id)),
+    resolution.tolerance,
+    (ids) => ({
+      cellIds: ids,
+      mesh: buildActiveMeshForStateCellIdsWithMap(direct, ids, options, resolution).mesh
+    }),
+    (ids) => {
+      finalMesh = buildActiveMeshForStateCellIdsWithMap(working, ids, options, resolution).mesh;
+      return { cellIds: ids, mesh: finalMesh };
+    }
+  );
+  if (!result.report.ok) throw failure(result.interfaceError ?? result.report.hanging[0]?.message ?? "invalid local interface");
+  const measured = measureActiveMeshGeometryResolution(finalMesh!);
+  return {
+    baseline, nextIndex: result.nextIndex, mode: "incremental",
+    metadata: {
+      tolerance: resolution.tolerance,
+      coordinateScale: Math.max(resolution.coordinateScale, measured.coordinateScale),
+      minimumElementEdgeLength: Math.min(resolution.minimumElementEdgeLength, measured.minimumElementEdgeLength)
+    },
+    checkedElementCount: result.checkedCellIds.length,
+    requiredInterfaceCount: result.requiredInterfaceCount
+  };
 }
 
 function resolveExistingTransitionShellRebuild(
@@ -3414,41 +3553,10 @@ export function planRefinementSessionHistoryTransaction(
   working.clearRedoCommands();
   working.setNextCommandId(session.nextCommandId + 1);
 
-  const finalAuditWorking = forkRefinementSessionOverlay(working);
-  const finalActive = buildActiveMeshWithMapFromSessionStateInternal(
-    finalAuditWorking,
-    {
-      mergeNodes: true,
-      includeSessionNodeIdByNodeId: false,
-      includeSessionNodeIdsByNodeId: false,
-      ...(faceResolution.mergeTolerance === undefined
-        ? {}
-        : { mergeTolerance: faceResolution.mergeTolerance })
-    }
+  const conformanceProof = auditHistoryConformance(
+    session, working, hiddenCellIds, [...activeCreatedCellIds, ...reactivatedCellIds],
+    faceResolution, validation.cellIds, attemptedAction
   );
-  const conformance = checkNoHangingNodes(
-    finalActive.mesh,
-    faceResolution.tolerance
-  );
-  if (!conformance.ok) {
-    throw freezeTwoToOnePlanningErrorDiagnostic(
-      new TwoToOnePlanningError<CellId>(
-        "TWO_TO_ONE_CONFORMANCE",
-        `history transaction final mesh is nonconforming: ${
-          conformance.hanging[0]?.message
-          ?? `${conformance.unmatchedInteriorBoundaryCount} unmatched interior boundaries`
-        }`,
-        {
-          conflictingCellIds: stableCellIds(validation.cellIds),
-          conflictingInterfaces: [],
-          attemptedActions: [attemptedAction],
-          suggestion: {
-            kind: "expand-selection"
-          }
-        }
-      )
-    );
-  }
   const localBuild = buildTransitionContextActiveMesh(
     working,
     context
@@ -3479,15 +3587,15 @@ export function planRefinementSessionHistoryTransaction(
   const overlayStats = Object.freeze(
     refinementSessionOverlayStats(working)
   );
-  return {
-    historyClosure,
-    context,
-    localBuild,
-    command,
-    delta: previewDelta,
-    overlayStats,
-    preview
-  };
+  return finishHistoryConformancePlan(session, {
+    historyClosure, context, localBuild, command,
+    delta: previewDelta, overlayStats, preview,
+    conformanceAudit: Object.freeze({
+      mode: conformanceProof.mode,
+      checkedElementCount: conformanceProof.checkedElementCount,
+      requiredInterfaceCount: conformanceProof.requiredInterfaceCount
+    })
+  }, conformanceProof);
 }
 
 function activeSelectedCommandOutputCellIds(
@@ -3901,39 +4009,10 @@ function planUntouchedTransitionShellHistoryTransaction(
   working.clearRedoCommands();
   working.setNextCommandId(session.nextCommandId + 1);
 
-  const finalAuditWorking = forkRefinementSessionOverlay(working);
-  const finalActive = buildActiveMeshWithMapFromSessionStateInternal(
-    finalAuditWorking,
-    {
-      mergeNodes: true,
-      includeSessionNodeIdByNodeId: false,
-      includeSessionNodeIdsByNodeId: false,
-      ...(faceResolution.mergeTolerance === undefined
-        ? {}
-        : { mergeTolerance: faceResolution.mergeTolerance })
-    }
+  const conformanceProof = auditHistoryConformance(
+    session, working, hiddenCellIds, [...activeCreatedCellIds, ...reactivatedCellIds],
+    faceResolution, validation.cellIds, attemptedAction
   );
-  const conformance = checkNoHangingNodes(
-    finalActive.mesh,
-    faceTolerance
-  );
-  if (!conformance.ok) {
-    throw freezeTwoToOnePlanningErrorDiagnostic(
-      new TwoToOnePlanningError<CellId>(
-        "TWO_TO_ONE_CONFORMANCE",
-        `history transaction final mesh is nonconforming: ${
-          conformance.hanging[0]?.message
-          ?? `${conformance.unmatchedInteriorBoundaryCount} unmatched interior boundaries`
-        }`,
-        {
-          conflictingCellIds: stableCellIds(validation.cellIds),
-          conflictingInterfaces: [],
-          attemptedActions: [attemptedAction],
-          suggestion: { kind: "expand-selection" }
-        }
-      )
-    );
-  }
   const localBuild = buildTransitionContextActiveMesh(
     working,
     context
@@ -3958,15 +4037,17 @@ function planUntouchedTransitionShellHistoryTransaction(
     twoToOne: cloneTwoToOneCapabilityReport(twoToOne),
     ...(quality === undefined ? {} : { quality })
   };
-  return {
-    historyClosure,
-    context,
-    localBuild,
-    command,
+  return finishHistoryConformancePlan(session, {
+    historyClosure, context, localBuild, command,
     delta: previewDelta,
     overlayStats: Object.freeze(refinementSessionOverlayStats(working)),
-    preview
-  };
+    preview,
+    conformanceAudit: Object.freeze({
+      mode: conformanceProof.mode,
+      checkedElementCount: conformanceProof.checkedElementCount,
+      requiredInterfaceCount: conformanceProof.requiredInterfaceCount
+    })
+  }, conformanceProof);
 }
 
 function traceLocalSupportCommandInputCellIds(

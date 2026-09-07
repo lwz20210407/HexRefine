@@ -1,5 +1,9 @@
 # Stage C closeout status, 2026-09-07
 
+Task 12 follow-up implementation and verification are tracked in
+[the incremental conformance checkpoint](2026-09-07-stage-c-incremental-conformance.md).
+The sections below record the preceding Task 11 checkpoint.
+
 ## Verified starting point
 
 The Stage A PR branch (`cf170de`) and Stage B history branch (`efdee51`)

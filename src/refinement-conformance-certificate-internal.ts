@@ -1,5 +1,10 @@
 import type { ConformanceReport } from "./conformance.js";
 import type { RefinementSession } from "./refinement-session.js";
+import {
+  buildConformanceSpatialIndex,
+  type ConformanceSpatialCell,
+  type ConformanceSpatialIndex
+} from "./refinement-incremental-conformance-internal.js";
 
 export interface RefinementSessionConformanceMetadata {
   readonly tolerance: number;
@@ -23,6 +28,54 @@ export interface RefinementSessionConformanceCertificate
 const certificatesBySession =
   new WeakMap<RefinementSession, RefinementSessionConformanceCertificate>();
 const issuedCertificates = new WeakSet<RefinementSessionConformanceCertificate>();
+
+export interface IndexedConformanceCertificate {
+  readonly certificate: RefinementSessionConformanceCertificate;
+  readonly index: ConformanceSpatialIndex;
+}
+
+const indexedCertificates = new WeakMap<RefinementSession, IndexedConformanceCertificate>();
+
+export class BaselineConformanceError extends Error {}
+
+export function indexedConformanceCertificate(
+  session: RefinementSession,
+  metadata: RefinementSessionConformanceMetadata
+): IndexedConformanceCertificate | undefined {
+  const indexed = indexedCertificates.get(session);
+  if (indexed === undefined || !certificateMatchesCurrentState(indexed.certificate)) return undefined;
+  const certificate = indexed.certificate;
+  return certificate.tolerance === metadata.tolerance
+    && certificate.coordinateScale === metadata.coordinateScale
+    && certificate.minimumElementEdgeLength === metadata.minimumElementEdgeLength
+    ? indexed : undefined;
+}
+
+/** Prepare without publishing: a rejected transaction must leave the cache unchanged. */
+export function prepareIndexedConformanceBaseline(
+  session: RefinementSession,
+  metadata: RefinementSessionConformanceMetadata,
+  cells: () => Iterable<ConformanceSpatialCell>,
+  check: () => ConformanceReport
+): IndexedConformanceCertificate {
+  validateMetadata(metadata);
+  const cached = indexedConformanceCertificate(session, metadata);
+  if (cached !== undefined) return cached;
+  const report = check();
+  if (!report.ok) throw new BaselineConformanceError(`baseline mesh is nonconforming: ${report.hanging[0]?.message ?? "invalid boundary"}`);
+  return Object.freeze({
+    certificate: certifyRefinementSessionBaseline(session, metadata),
+    index: buildConformanceSpatialIndex(cells())
+  });
+}
+
+export function publishIndexedConformanceCertificate(
+  session: RefinementSession,
+  indexed: IndexedConformanceCertificate
+): void {
+  publishRefinementSessionConformanceCertificate(session, indexed.certificate);
+  indexedCertificates.set(session, indexed);
+}
 
 export function certifyRefinementSessionBaseline(
   session: RefinementSession,

@@ -17,7 +17,10 @@ import {
 } from "../dist/refinement-session-overlay-internal.js";
 import {
   certifyRefinementSessionBaseline,
-  publishRefinementSessionConformanceCertificate
+  publishRefinementSessionConformanceCertificate,
+  currentRefinementSessionConformanceCertificate,
+  indexedConformanceCertificate,
+  prepareIndexedConformanceBaseline
 } from "../dist/refinement-conformance-certificate-internal.js";
 import {
   RefinementCellGeometryIndex
@@ -260,6 +263,7 @@ test(`history transaction local builds and overlays ignore disconnected far fiel
     smallPlan.localBuild.mesh.elements.length
   );
   assert.deepEqual(largePlan.overlayStats, smallPlan.overlayStats);
+  assert.deepEqual(largePlan.conformanceAudit, smallPlan.conformanceAudit);
   assert.equal(
     largePlan.preview.summary.changedInputElementCount,
     smallPlan.preview.summary.changedInputElementCount
@@ -274,6 +278,46 @@ test(`history transaction local builds and overlays ignore disconnected far fiel
   }));
 });
 }
+
+test("incremental history preview reuses its baseline and commit publishes the next certificate", () => {
+  const { session, candidate } = createTransitionShellRegressionFixture();
+  const request = createHistoryTransactionRequest(session);
+  const before = structuredClone(session);
+  const first = planRefinementSessionHistoryTransaction(
+    session, [candidate], request.resolvedOptions, request.faceResolution
+  );
+  const baseline = indexedConformanceCertificate(session, request.faceResolution);
+  assert.ok(baseline);
+  assert.deepEqual(session, before);
+  const second = planRefinementSessionHistoryTransaction(
+    session, [candidate], request.resolvedOptions, request.faceResolution
+  );
+  assert.strictEqual(indexedConformanceCertificate(session, request.faceResolution), baseline);
+  assert.deepEqual(first.conformanceAudit, second.conformanceAudit);
+  assert.deepEqual(first.preview, second.preview);
+  refineSessionPatch(session, [candidate], transitionShellRegressionOptions());
+  const certificate = currentRefinementSessionConformanceCertificate(session);
+  assert.ok(certificate);
+  assert.equal(certificate.revision, session.revision);
+  assert.notStrictEqual(certificate, baseline.certificate);
+  const next = prepareIndexedConformanceBaseline(session, certificate,
+    () => assert.fail("must reuse the derived spatial index"),
+    () => assert.fail("must not repeat the full baseline audit"));
+  assert.strictEqual(next.certificate, certificate);
+  assert.equal(checkNoHangingNodes(buildActiveMeshWithMap(session, { mergeNodes: true, mergeTolerance: 1e-9 }).mesh, 1e-9).ok, true);
+});
+
+test("incremental history rejection leaves the session and certificate unpublished", () => {
+  const fixture = createConsumedSupportHistoryFixture({ rawNonconformingDownstream: true });
+  const before = structuredClone(fixture.session);
+  const certificate = currentRefinementSessionConformanceCertificate(fixture.session);
+  for (const operation of [previewSessionPatch, refineSessionPatch]) {
+    assert.throws(() => operation(fixture.session, [fixture.boundaryCellId], transitionShellRegressionOptions()),
+      (error) => error.code === "TWO_TO_ONE_CONFORMANCE");
+    assert.deepEqual(fixture.session, before);
+    assert.strictEqual(currentRefinementSessionConformanceCertificate(fixture.session), certificate);
+  }
+});
 
 const {
   auditHexRefinementPatchQuality,
