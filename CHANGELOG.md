@@ -4,6 +4,11 @@
 
 Private/custom performance edition.
 
+- Scoped untouched-support and replay history planning builds to their affected
+  transition contexts while retaining complete shared-node patch halos.
+- Added fixed-component/far-field regressions and exact delta preview counts;
+  retained the full final conformance audit pending incremental certification.
+- Synchronized standalone embedded runtime modules with the Stage C sources.
 - Added replayable refinement-command recipes and component-local history
   closure planning.
 - Added atomic multi-command and partially refined 2:1 transition-shell

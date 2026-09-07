@@ -48,7 +48,7 @@ customize for research, engineering experiments, and selected project work:
   When a nested local patch reaches an existing transition shell, the session
   discovers the affected component and computes its replayable history closure.
   One or more refinement commands can be reversed, rebuilt, and replayed on a
-  clone when every affected downstream command stays wholly inside that
+  sparse overlay when every affected downstream command stays wholly inside that
   component. The exact irregular core is tried first; minimum logical-block
   completion is only a parity fallback. Preview, execution, and command replay
   share the transactional planner; undo and redo apply the recorded compound
@@ -103,6 +103,12 @@ contacts, and other analysis keywords remain the caller's responsibility.
 Large-mesh workflows are still an active engineering area. The GUI can guide
 large cases, but for production-size exports the recommended path is GUI first,
 then offline replay.
+
+History transactions use sparse overlays and component-scoped planning builds
+for both untouched-support and replayed transition shells. Preview counts are
+computed from active-leaf deltas. This reduces unrelated far-field reads during
+reconstruction, but context discovery and the final full-mesh conformance audit
+still have global costs. Incremental final certification is not yet enabled.
 
 The experimental `2:1` path supports two strategies. `section` mode uses
 TrueGrid-derived seven-Hex columns for one-direction, level-closed transition
