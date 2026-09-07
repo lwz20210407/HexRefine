@@ -232,6 +232,49 @@ test("transition rebuild context is immutable and closure scoped", () => {
   );
 });
 
+for (const consumedSupport of [false, true]) {
+test(`history transaction local builds and overlays ignore disconnected far field size (${consumedSupport ? "replay" : "untouched"})`, () => {
+  const createFixture = (farFieldDimension) => {
+    if (consumedSupport) return createConsumedSupportHistoryFixture({ farFieldDimension });
+    const fixture = createTransitionShellRegressionFixture(farFieldDimension);
+    return {
+      session: fixture.session,
+      boundaryCellId: fixture.candidate,
+      ...createHistoryTransactionRequest(fixture.session)
+    };
+  };
+  const small = createFixture(0);
+  const large = createFixture(7);
+  const plan = (fixture) => planRefinementSessionHistoryTransaction(
+    fixture.session,
+    [fixture.boundaryCellId],
+    fixture.resolvedOptions,
+    fixture.faceResolution
+  );
+
+  const smallPlan = plan(small);
+  const largePlan = plan(large);
+
+  assert.equal(
+    largePlan.localBuild.mesh.elements.length,
+    smallPlan.localBuild.mesh.elements.length
+  );
+  assert.deepEqual(largePlan.overlayStats, smallPlan.overlayStats);
+  assert.equal(
+    largePlan.preview.summary.changedInputElementCount,
+    smallPlan.preview.summary.changedInputElementCount
+  );
+  assert.equal(
+    largePlan.preview.summary.outputElementCount - smallPlan.preview.summary.outputElementCount,
+    7 ** 3
+  );
+  assert.ok(largePlan.delta.activeLeafRemovals.every((id) => {
+    const cell = large.session.cells.get(id);
+    return cell.element.every((nodeId) => large.session.nodes[nodeId - 1][0] < 2);
+  }));
+});
+}
+
 const {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality,
@@ -14132,8 +14175,30 @@ function duplicateOneNearCoincidentNeighborFace(
   throw new Error("selected core cell has no transition-face neighbor");
 }
 
-function createTransitionShellRegressionFixture() {
-  const mesh = createHexUnitCubeMesh(7, 7, 7);
+function createTransitionShellRegressionFixture(farFieldDimension = 0) {
+  const component = createHexUnitCubeMesh(7, 7, 7);
+  const farField = farFieldDimension > 0
+    ? createHexUnitCubeMesh(
+        farFieldDimension,
+        farFieldDimension,
+        farFieldDimension
+      )
+    : undefined;
+  const mesh = farField === undefined
+    ? component
+    : {
+        kind: "H1",
+        nodes: [
+          ...component.nodes.map((point) => [...point]),
+          ...farField.nodes.map(([x, y, z]) => [x + 2, y, z])
+        ],
+        elements: [
+          ...component.elements.map((element) => [...element]),
+          ...farField.elements.map((element) => element.map(
+            (nodeId) => nodeId + component.nodes.length
+          ))
+        ]
+      };
   const session = createRefinementSession(mesh);
   const initial = buildActiveMeshWithMap(session);
   const firstCore = idsInIndexBlock(
@@ -14165,13 +14230,14 @@ function createTransitionShellRegressionFixture() {
 function createConsumedSupportHistoryFixture({
   downstreamCompensationMode,
   genericDownstream = false,
-  rawNonconformingDownstream = false
+  rawNonconformingDownstream = false,
+  farFieldDimension = 0
 } = {}) {
   const {
     session,
     firstRefined,
     candidate: boundaryCellId
-  } = createTransitionShellRegressionFixture();
+  } = createTransitionShellRegressionFixture(farFieldDimension);
   const supportCommand = session.undoStack.at(-1);
   assert.ok(supportCommand);
   const centerCellId = supportCommand.createdCellIds

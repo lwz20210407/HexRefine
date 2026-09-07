@@ -456,6 +456,26 @@ export function buildActiveMeshWithMapFromSessionStateInternal(
   );
 }
 
+function buildActiveMeshForStateCellIdsWithMap(
+  state: RefinementSessionStateReader,
+  activeIds: readonly CellId[],
+  options: BuildActiveMeshOptions,
+  geometryResolution: ActiveMeshGeometryResolution
+): ActiveMeshBuildResult {
+  return buildActiveMeshForSessionStateCellIdsWithMap(
+    state,
+    activeIds,
+    options,
+    undefined,
+    (result, mergeTolerance) =>
+      finalizeActiveMeshBuildFromSessionState(
+        result,
+        mergeTolerance,
+        geometryResolution
+      )
+  );
+}
+
 function buildActiveMeshForCellIdsWithMap(
   session: RefinementSession,
   activeIds: readonly CellId[],
@@ -541,7 +561,9 @@ function buildActiveMeshForSessionStateCellIdsWithMap(
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
   const cellIdsByElementIdArray: CellId[] = new Array(activeIdCount + 1);
-  const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
+  const elementIdByCellOrdinalArray = new Int32Array(
+    localCellOrdinalArrayLength(state, activeIds, activeIdCount)
+  );
   const elements: Element[] = new Array(activeIdCount);
   for (let index = 0; index < activeIdCount; index += 1) {
     const cellId = planningArrayValue<CellId>(
@@ -721,7 +743,9 @@ function buildMergedActiveMeshDirect(
   const cellIdByElementId = new Map<number, CellId>();
   const elementIdByCellId = new Map<CellId, number>();
   const cellIdsByElementIdArray: CellId[] = new Array(activeIdCount + 1);
-  const elementIdByCellOrdinalArray = new Int32Array(Math.max(state.nextCellOrdinal + 1, state.cellCount + 1));
+  const elementIdByCellOrdinalArray = new Int32Array(
+    localCellOrdinalArrayLength(state, activeIds, activeIdCount)
+  );
   const nodeIdBySessionNodeId = new Map<number, number>();
   const sessionNodeIdByNodeId = includeSessionNodeIdByNodeId ? new Map<number, number>() : undefined;
   const sessionNodeIdsByNodeId = includeSessionNodeIdsByNodeId ? new Map<number, number[]>() : undefined;
@@ -1597,6 +1621,27 @@ function isValidCellOrdinal(ordinal: number | undefined): ordinal is number {
     && ordinal > 0;
 }
 
+function localCellOrdinalArrayLength(
+  state: RefinementSessionStateReader,
+  activeIds: readonly CellId[],
+  activeIdCount: number
+): number {
+  let maximumOrdinal = 0;
+  for (let index = 0; index < activeIdCount; index += 1) {
+    const cellId = planningArrayValue<CellId>(
+      activeIds,
+      index,
+      "reader planning active cell ids"
+    );
+    const ordinal = requiredSessionStateCell(state, cellId).ordinal;
+    if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
+      throw new Error(`cell ${cellId} has invalid ordinal ${ordinal}`);
+    }
+    maximumOrdinal = Math.max(maximumOrdinal, ordinal);
+  }
+  return maximumOrdinal + 1;
+}
+
 function recordActiveElementByCellOrdinal(
   elementIdByCellOrdinalArray: Int32Array,
   cell: RefinementSessionCell,
@@ -2214,7 +2259,8 @@ function resolveSessionPatchGeometry(
 function resolveSessionStatePatchOptions(
   state: RefinementSessionStateReader,
   diagnosticCellIds: readonly CellId[],
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  scope?: HistoryPlanningScope
 ): ResolvedRefinementSessionPatchOptions {
   const recipeCompensationCarrier =
     snapshotRecipeCompensationCarrier(options);
@@ -2230,7 +2276,7 @@ function resolveSessionStatePatchOptions(
     ...Object.defineProperties({}, optionDescriptors)
   };
   assertValidSessionFaceTolerance(optionsSnapshot.mergeTolerance);
-  const activeCellIds = sortedActiveLeafIdsFromSessionState(state);
+  const activeCellIds = scope?.activeCellIds ?? sortedActiveLeafIdsFromSessionState(state);
   const buildOptions: BuildActiveMeshOptions = {
     mergeNodes: true,
     includeSessionNodeIdByNodeId: false,
@@ -2241,7 +2287,7 @@ function resolveSessionStatePatchOptions(
   };
   let activeBuild: ActiveMeshBuildResult;
   try {
-    activeBuild = buildActiveMeshForSessionStateCellIdsWithMap(
+    activeBuild = scope === undefined ? buildActiveMeshForSessionStateCellIdsWithMap(
       state,
       activeCellIds,
       buildOptions,
@@ -2255,7 +2301,13 @@ function resolveSessionStatePatchOptions(
           mergeTolerance,
           measuredResolution
         )
-    );
+    ) : historyPlanningBuilds(state, scope).buildComplete({
+      ...buildOptions,
+      mergeTolerance: optionsSnapshot.mergeTolerance ?? effectiveSessionFaceTolerance(
+        scope.geometryResolution.minimumElementEdgeLength,
+        scope.geometryResolution.coordinateScale
+      )
+    });
   } catch (error) {
     if (
       error instanceof Error
@@ -2718,6 +2770,7 @@ export interface SessionFaceResolution {
 export interface RefinementSessionHistoryTransactionPlan {
   readonly historyClosure: RefinementHistoryClosure;
   readonly context: TransitionRebuildContext;
+  readonly localBuild: ActiveMeshBuildResult;
   readonly command: RefinementSessionCommand;
   readonly delta: RefinementSessionOverlayDelta;
   readonly overlayStats: Readonly<RefinementSessionOverlayStats>;
@@ -3087,7 +3140,8 @@ export function planRefinementSessionHistoryTransaction(
     rebuiltCoreParentIds,
     authorizedCompletionParentIds,
     supportCommandIds,
-    retryOptions
+    retryOptions,
+    historyPlanningScope(working, context)
   );
   validateRebuiltSupportPlanOwnershipFromState(
     working,
@@ -3122,7 +3176,11 @@ export function planRefinementSessionHistoryTransaction(
   const preReplayCurrentGeometryIndex =
     buildActiveRefinementGeometryIndexFromState(
       currentPlanningWorking,
-      faceResolution.tolerance
+      faceResolution.tolerance,
+      transitionContextActiveCellIdsFromOverlay(
+        currentPlanningWorking,
+        context
+      )
   );
   const preReplayRemappedCellIds =
     remapRefinementSessionHistoryRecipeCells(
@@ -3140,13 +3198,14 @@ export function planRefinementSessionHistoryTransaction(
       "current transition support",
       closureCommandIds
     );
-  const currentPatchPlan = buildResolvedRefinementSessionPatchPlanFromStateInternal(
+  const currentPatchPlan = buildHistoryRefinementPatchPlan(
     currentPlanningWorking,
     [...preReplayRemappedCellIds],
     replaySessionPatchOptions(
       currentRecipe.options,
       preReplayTransitionSupportCellIds
-    )
+    ),
+    context
   );
   refineSessionPatchOnStateInternal(
     currentPlanningWorking,
@@ -3176,7 +3235,11 @@ export function planRefinementSessionHistoryTransaction(
     }
     const geometryIndex = buildActiveRefinementGeometryIndexFromState(
       working,
-      faceResolution.tolerance
+      faceResolution.tolerance,
+      transitionContextActiveCellIdsFromOverlay(
+        working,
+        context
+      )
     );
     const selectedCellIds =
       remapRefinementSessionHistoryRecipeCells(
@@ -3200,6 +3263,12 @@ export function planRefinementSessionHistoryTransaction(
       replaySessionPatchOptions(
         recipe.options,
         transitionSupportCellIds
+      ),
+      buildHistoryRefinementPatchPlan(
+        working,
+        [...selectedCellIds],
+        replaySessionPatchOptions(recipe.options, transitionSupportCellIds),
+        context
       )
     );
     assertHistoryReplayCommandEquivalent(
@@ -3214,7 +3283,11 @@ export function planRefinementSessionHistoryTransaction(
   const currentGeometryIndex =
     buildActiveRefinementGeometryIndexFromState(
       working,
-      faceResolution.tolerance
+      faceResolution.tolerance,
+      transitionContextActiveCellIdsFromOverlay(
+        working,
+        context
+      )
     );
   const remappedCellIds =
     remapRefinementSessionHistoryRecipeCells(
@@ -3268,7 +3341,8 @@ export function planRefinementSessionHistoryTransaction(
         currentRecipe.options,
         remappedTransitionSupportCellIds
       ),
-      closureCommandIds
+      closureCommandIds,
+      historyPlanningScope(working, context)
     )
   );
 
@@ -3340,8 +3414,9 @@ export function planRefinementSessionHistoryTransaction(
   working.clearRedoCommands();
   working.setNextCommandId(session.nextCommandId + 1);
 
+  const finalAuditWorking = forkRefinementSessionOverlay(working);
   const finalActive = buildActiveMeshWithMapFromSessionStateInternal(
-    working,
+    finalAuditWorking,
     {
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
@@ -3374,6 +3449,12 @@ export function planRefinementSessionHistoryTransaction(
       )
     );
   }
+  const localBuild = buildTransitionContextActiveMesh(
+    working,
+    context
+  );
+  pruneInactiveRefinementSessionOverlayNodeOwners(working);
+  const previewDelta = snapshotRefinementSessionOverlayDelta(working);
   const inputElementCount =
     resolvedOptions.activeBuild.mesh.elements.length;
   const preview: RefinementPreview<CellId> = {
@@ -3388,21 +3469,22 @@ export function planRefinementSessionHistoryTransaction(
       changedInputElementCount: hiddenCellIds.length,
       preservedInputElementCount:
         inputElementCount - hiddenCellIds.length,
-      outputElementCount: finalActive.mesh.elements.length
+      outputElementCount: inputElementCount
+        - previewDelta.activeLeafRemovals.length
+        + previewDelta.activeLeafAdditions.length
     },
     twoToOne: cloneTwoToOneCapabilityReport(twoToOne),
     ...(quality === undefined ? {} : { quality })
   };
-  pruneInactiveRefinementSessionOverlayNodeOwners(working);
-  const delta = snapshotRefinementSessionOverlayDelta(working);
   const overlayStats = Object.freeze(
     refinementSessionOverlayStats(working)
   );
   return {
     historyClosure,
     context,
+    localBuild,
     command,
-    delta,
+    delta: previewDelta,
     overlayStats,
     preview
   };
@@ -3589,6 +3671,41 @@ function planUntouchedTransitionShellHistoryTransaction(
     );
   }
 
+  const affectedInputCellIds = traceLocalSupportCommandInputCellIds(
+    session,
+    supportCommand,
+    discovered.component.supportCellIds
+  );
+  const includedCommandIds = new Set([supportCommand.id]);
+  const boundaryCellIds = affectedInputCellIds.filter((cellId) => {
+    const creatorCommandId =
+      historyIndex.creatorCommandIdByCellId.get(cellId);
+    return creatorCommandId === undefined
+      || !includedCommandIds.has(creatorCommandId);
+  });
+  const historyClosure: RefinementHistoryClosure = Object.freeze({
+    supportCommandIds: Object.freeze([supportCommand.id]),
+    downstreamCommandIds: Object.freeze([]),
+    affectedInputCellIds: Object.freeze(affectedInputCellIds),
+    preservedCommandIds: Object.freeze(
+      session.undoStack
+        .filter((entry) => entry.id !== supportCommand.id)
+        .map((entry) => entry.id)
+    ),
+    boundaryCellIds: Object.freeze(boundaryCellIds)
+  });
+  const contextComponent = completeTransitionHistoryComponent(
+    session,
+    discovered,
+    collidingTransitionParentIds
+  );
+  const context = buildTransitionRebuildContext(
+    session,
+    validation.cellIds,
+    contextComponent.component,
+    historyClosure,
+    faceResolution
+  );
   const compoundCommandId = `cmd-${session.nextCommandId}`;
   const selectedGeometryKeys = validation.cellIds.map((cellId) =>
     refinementCellGeometryKeyFromState(
@@ -3662,7 +3779,8 @@ function planUntouchedTransitionShellHistoryTransaction(
       originalSupportParentIds,
       [supportCommand],
       selectedLevel - 1,
-      faceTolerance
+      faceTolerance,
+      historyPlanningScope(working, context).activeCellIds
     );
   const retryOptions: RefinementSessionPatchOptions = {
     ...effectiveOptions,
@@ -3675,7 +3793,8 @@ function planUntouchedTransitionShellHistoryTransaction(
     rebuiltCoreParentIds,
     authorizedCompletionParentIds,
     [supportCommand.id],
-    retryOptions
+    retryOptions,
+    historyPlanningScope(working, context)
   );
   validateRebuiltSupportPlanOwnershipFromState(
     working,
@@ -3716,7 +3835,8 @@ function planUntouchedTransitionShellHistoryTransaction(
   const currentRequestCommand = refineSessionPatchOnStateInternal(
     working,
     remappedCellIds,
-    retryOptions
+    retryOptions,
+    buildHistoryRefinementPatchPlan(working, remappedCellIds, retryOptions, context)
   );
   const {
     createdCellIds,
@@ -3781,8 +3901,9 @@ function planUntouchedTransitionShellHistoryTransaction(
   working.clearRedoCommands();
   working.setNextCommandId(session.nextCommandId + 1);
 
+  const finalAuditWorking = forkRefinementSessionOverlay(working);
   const finalActive = buildActiveMeshWithMapFromSessionStateInternal(
-    working,
+    finalAuditWorking,
     {
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
@@ -3813,41 +3934,12 @@ function planUntouchedTransitionShellHistoryTransaction(
       )
     );
   }
-  const affectedInputCellIds = traceLocalSupportCommandInputCellIds(
-    session,
-    supportCommand,
-    discovered.component.supportCellIds
+  const localBuild = buildTransitionContextActiveMesh(
+    working,
+    context
   );
-  const includedCommandIds = new Set([supportCommand.id]);
-  const boundaryCellIds = affectedInputCellIds.filter((cellId) => {
-    const creatorCommandId =
-      historyIndex.creatorCommandIdByCellId.get(cellId);
-    return creatorCommandId === undefined
-      || !includedCommandIds.has(creatorCommandId);
-  });
-  const historyClosure: RefinementHistoryClosure = Object.freeze({
-    supportCommandIds: Object.freeze([supportCommand.id]),
-    downstreamCommandIds: Object.freeze([]),
-    affectedInputCellIds: Object.freeze(affectedInputCellIds),
-    preservedCommandIds: Object.freeze(
-      session.undoStack
-        .filter((entry) => entry.id !== supportCommand.id)
-        .map((entry) => entry.id)
-    ),
-    boundaryCellIds: Object.freeze(boundaryCellIds)
-  });
-  const contextComponent = completeTransitionHistoryComponent(
-    session,
-    discovered,
-    collidingTransitionParentIds
-  );
-  const context = buildTransitionRebuildContext(
-    session,
-    validation.cellIds,
-    contextComponent.component,
-    historyClosure,
-    faceResolution
-  );
+  pruneInactiveRefinementSessionOverlayNodeOwners(working);
+  const previewDelta = snapshotRefinementSessionOverlayDelta(working);
   const inputElementCount = resolvedOptions.activeBuild.mesh.elements.length;
   const preview: RefinementPreview<CellId> = {
     kind: session.kind,
@@ -3859,18 +3951,19 @@ function planUntouchedTransitionShellHistoryTransaction(
       changedInputElementCount: hiddenCellIds.length,
       preservedInputElementCount:
         inputElementCount - hiddenCellIds.length,
-      outputElementCount: finalActive.mesh.elements.length
+      outputElementCount: inputElementCount
+        - previewDelta.activeLeafRemovals.length
+        + previewDelta.activeLeafAdditions.length
     },
     twoToOne: cloneTwoToOneCapabilityReport(twoToOne),
     ...(quality === undefined ? {} : { quality })
   };
-  pruneInactiveRefinementSessionOverlayNodeOwners(working);
-  const delta = snapshotRefinementSessionOverlayDelta(working);
   return {
     historyClosure,
     context,
+    localBuild,
     command,
-    delta,
+    delta: previewDelta,
     overlayStats: Object.freeze(refinementSessionOverlayStats(working)),
     preview
   };
@@ -4004,6 +4097,10 @@ function buildTransitionRebuildContext(
   ])) {
     let parentId = requiredCell(session, cellId).parentId;
     while (parentId !== undefined) {
+      if (!session.cells.has(parentId) && boundaryCellIdSet.has(cellId)) {
+        // Boundary provenance is checked by support-ownership validation.
+        break;
+      }
       if (ancestorCellIdSet.has(parentId)) {
         break;
       }
@@ -4036,6 +4133,70 @@ function buildTransitionRebuildContext(
     boundaryFaces,
     faceResolution
   });
+}
+
+function transitionContextActiveCellIdsFromOverlay(
+  overlay: RefinementSessionOverlay,
+  context: TransitionRebuildContext
+): CellId[] {
+  const candidateIds = new Set<CellId>([
+    ...context.selectedCellIds,
+    ...context.supportCellIds,
+    ...context.ancestorCellIds,
+    ...context.activeComponentCellIds,
+    ...context.boundaryCellIds,
+    ...overlay.storage.createdCells.keys(),
+    ...overlay.storage.activeLeafAdditions
+  ]);
+  // Include edge/corner neighbors of restored ancestors as well as face neighbors.
+  // Snapshot the seed list so this remains one ring, not a flood into the far field.
+  for (const id of [...candidateIds]) {
+    const cell = overlay.cell(id);
+    if (cell === undefined) continue;
+    for (const nodeId of cell.element) {
+      const point = activeSessionStateNode(overlay, nodeId, id);
+      for (const ownerId of overlay.activeOwnersByNodeKey(exactActiveMergeKey(point))) {
+        candidateIds.add(ownerId);
+      }
+    }
+  }
+  return [...candidateIds]
+    .filter((cellId) =>
+      overlay.cell(cellId) !== undefined
+      && overlay.hasActiveLeaf(cellId)
+    )
+    .sort((left, right) => {
+      const leftCell = requiredSessionStateCell(overlay, left);
+      const rightCell = requiredSessionStateCell(overlay, right);
+      return leftCell.ordinal - rightCell.ordinal
+        || compareCellIds(left, right);
+    });
+}
+
+function buildTransitionContextActiveMesh(
+  overlay: RefinementSessionOverlay,
+  context: TransitionRebuildContext
+): ActiveMeshBuildResult {
+  const mergeTolerance =
+    context.faceResolution.mergeTolerance
+    ?? context.faceResolution.tolerance;
+  return buildActiveMeshForStateCellIdsWithMap(
+    overlay,
+    transitionContextActiveCellIdsFromOverlay(overlay, context),
+    {
+      mergeNodes: true,
+      mergeTolerance,
+      includeSessionNodeIdByNodeId: true,
+      includeSessionNodeIdsByNodeId: true,
+      includeCellIdByElementId: true,
+      includeElementIdByCellId: true
+    },
+    {
+      coordinateScale: context.faceResolution.coordinateScale,
+      minimumElementEdgeLength:
+        context.faceResolution.minimumElementEdgeLength
+    }
+  );
 }
 
 function discoverTransitionHistorySupportComponent(
@@ -4613,10 +4774,12 @@ function buildActiveRefinementGeometryIndex(
 
 function buildActiveRefinementGeometryIndexFromState(
   state: RefinementSessionStateReader,
-  tolerance: number
+  tolerance: number,
+  activeCellIds: readonly CellId[] =
+    sortedActiveLeafIdsFromSessionState(state)
 ): RefinementCellGeometryIndex {
   const index = new RefinementCellGeometryIndex(tolerance);
-  for (const cellId of sortedActiveLeafIdsFromSessionState(state)) {
+  for (const cellId of activeCellIds) {
     index.add(
       cellId,
       refinementCellGeometrySnapshotFromState(state, cellId)
@@ -4750,24 +4913,26 @@ function rebaseRefinementSessionPatchPlanFromState(
   plan: RefinementSessionPatchPlanInternal,
   level: number,
   options: RefinementSessionPatchOptions,
-  historyCommandIds: readonly string[]
+  historyCommandIds: readonly string[],
+  scope?: HistoryPlanningScope
 ): RefinementSessionPatchPlanInternal {
   const parentCellIds = replacementParentCellIds(
     plan.planningActive,
     plan.replacements
   );
-  const sourceActive = buildActiveMeshWithMapFromSessionStateInternal(
-    state,
-    {
+  const builds = scope === undefined ? undefined : historyPlanningBuilds(state, scope);
+  const buildOptions: BuildActiveMeshOptions = {
       mergeNodes: true,
       includeSessionNodeIdByNodeId: false,
       includeSessionNodeIdsByNodeId: false,
       ...(options.mergeTolerance === undefined
         ? {}
         : { mergeTolerance: options.mergeTolerance })
-    }
-  );
-  const planningActive = buildSameLevelRefinementPlanningMeshFromState(
+    };
+  const sourceActive = builds?.buildComplete(buildOptions)
+    ?? buildActiveMeshWithMapFromSessionStateInternal(state, buildOptions);
+  const planningActive = builds?.buildSameLevel(level, options)
+    ?? buildSameLevelRefinementPlanningMeshFromState(
     state,
     level,
     options
@@ -4982,14 +5147,16 @@ function buildCompletedRebuiltSupportPlanFromState(
   initialCoreParentIds: readonly CellId[],
   authorizedCompletionParentIds: ReadonlySet<CellId>,
   historyCommandIds: readonly string[],
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  scope?: HistoryPlanningScope
 ): RefinementSessionPatchPlanInternal {
   const selectedCellIds = [...initialCoreParentIds].sort(compareCellIds);
   try {
     return buildResolvedRefinementSessionPatchPlanFromStateInternal(
       state,
       selectedCellIds,
-      options
+      options,
+      scope
     );
   } catch (error) {
     if (
@@ -5018,12 +5185,14 @@ function buildCompletedRebuiltSupportPlanFromState(
     validation.level,
     authorizedCompletionParentIds,
     historyCommandIds,
-    options
+    options,
+    scope
   );
   return buildResolvedRefinementSessionPatchPlanFromStateInternal(
     state,
     completedCellIds,
-    options
+    options,
+    scope
   );
 }
 
@@ -5094,9 +5263,11 @@ function completeLogicalSupportParentBlockFromState(
   level: number,
   authorizedCellIds: ReadonlySet<CellId>,
   historyCommandIds: readonly string[],
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  scope?: HistoryPlanningScope
 ): CellId[] {
-  const active = buildSameLevelRefinementPlanningMeshFromState(
+  const active = (scope === undefined ? undefined : historyPlanningBuilds(state, scope).buildSameLevel(level, options))
+    ?? buildSameLevelRefinementPlanningMeshFromState(
     state,
     level,
     options
@@ -5221,7 +5392,8 @@ function collectAuthorizedCompletionParentIdsFromState(
   originalSupportParentIds: readonly CellId[],
   supportCommands: readonly RefinementSessionCommand[],
   parentLevel: number,
-  tolerance: number
+  tolerance: number,
+  scopedActiveIds?: readonly CellId[]
 ): Set<CellId> {
   const authorized = new Set(originalSupportParentIds);
   const supportCreatedCellIds = new Set(
@@ -5236,7 +5408,7 @@ function collectAuthorizedCompletionParentIdsFromState(
       boundaryFaces.add(face);
     }
   }
-  for (const cellId of sortedActiveLeafIdsFromSessionState(state)) {
+  for (const cellId of scopedActiveIds ?? sortedActiveLeafIdsFromSessionState(state)) {
     if (authorized.has(cellId)) {
       continue;
     }
@@ -5377,7 +5549,9 @@ function findCollidingTransitionParentIdsFromState(
   const planningActive = buildSameLevelRefinementPlanningMeshFromState(
     state,
     level,
-    options
+    options,
+    stableCellIds([...supportLayerCellIds, ...selectedCellIds])
+      .filter((id) => state.hasActiveLeaf(id))
   );
   const selectedElementIds = selectedCellIds.map((cellId) => {
     const elementId = activeBuildElementIdByCellIdFromState(
@@ -6263,14 +6437,16 @@ export function buildRefinementSessionPatchPlanFromStateInternal(
 function buildResolvedRefinementSessionPatchPlanFromStateInternal(
   state: RefinementSessionStateReader,
   cellIds: CellId[],
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  scope?: HistoryPlanningScope
 ): RefinementSessionPatchPlanInternal {
   assertRefinementSessionStateReferencePublisherInternal(state);
   const staged = stageRefinementSessionPlanningReferences(state);
   const plan = buildRefinementSessionPatchPlanFromState(
     staged.reader,
     cellIds,
-    options
+    options,
+    scope === undefined ? undefined : historyPlanningBuilds(staged.reader, scope)
   );
   staged.commit();
   return plan;
@@ -6627,6 +6803,7 @@ function buildRefinementSessionPatchPlan(
     cellIds,
     options,
     {
+      baseSessionRecipes: true,
       buildComplete(buildOptions) {
         return buildActiveMeshWithMap(session, buildOptions);
       },
@@ -6649,6 +6826,7 @@ function buildRefinementSessionPatchPlan(
 }
 
 interface RefinementSessionPlanningActiveBuilds {
+  readonly baseSessionRecipes?: true;
   buildComplete(options: BuildActiveMeshOptions): ActiveMeshBuildResult;
   buildPatch(
     selectedCellIds: readonly CellId[],
@@ -6658,6 +6836,64 @@ interface RefinementSessionPlanningActiveBuilds {
     level: number,
     options: RefinementSessionPatchOptions
   ): ActiveMeshBuildResult;
+}
+
+interface HistoryPlanningScope {
+  readonly activeCellIds: readonly CellId[];
+  readonly geometryResolution: ActiveMeshGeometryResolution;
+}
+
+function historyPlanningScope(
+  overlay: RefinementSessionOverlay,
+  context: TransitionRebuildContext
+): HistoryPlanningScope {
+  return {
+    activeCellIds: transitionContextActiveCellIdsFromOverlay(overlay, context),
+    geometryResolution: context.faceResolution
+  };
+}
+
+function historyPlanningBuilds(
+  state: RefinementSessionStateReader,
+  scope: HistoryPlanningScope
+): RefinementSessionPlanningActiveBuilds {
+  const build = (ids: readonly CellId[], options: BuildActiveMeshOptions) =>
+    buildActiveMeshForStateCellIdsWithMap(state, ids, options, scope.geometryResolution);
+  const patchOptions = (options: RefinementSessionPatchOptions): BuildActiveMeshOptions => ({
+    mergeNodes: true,
+    includeSessionNodeIdByNodeId: false,
+    includeSessionNodeIdsByNodeId: false,
+    ...(options.mergeTolerance === undefined ? {} : { mergeTolerance: options.mergeTolerance })
+  });
+  return {
+    buildComplete: (options) => build(scope.activeCellIds, options),
+    buildPatch: (ids, options) => build(
+      collectRefinementPatchActiveCellIdsFromState(state, ids, scope.activeCellIds),
+      patchOptions(options)
+    ),
+    buildSameLevel: (level, options) => build(
+      scope.activeCellIds.filter((id) => {
+        const cell = requiredSessionStateCell(state, id);
+        return cell.level === level && isRefinableSessionCell(cell);
+      }),
+      patchOptions(options)
+    )
+  };
+}
+
+function buildHistoryRefinementPatchPlan(
+  overlay: RefinementSessionOverlay,
+  cellIds: CellId[],
+  options: RefinementSessionPatchOptions,
+  context: TransitionRebuildContext
+): RefinementSessionPatchPlanInternal {
+  const scope = historyPlanningScope(overlay, context);
+  const staged = stageRefinementSessionPlanningReferences(overlay);
+  const builds = historyPlanningBuilds(staged.reader, scope);
+  const resolved = resolveSessionStatePatchOptions(staged.reader, cellIds, options, scope);
+  const plan = buildRefinementSessionPatchPlanFromState(staged.reader, cellIds, resolved, builds);
+  staged.commit();
+  return plan;
 }
 
 function buildRefinementSessionPatchPlanFromState(
@@ -6822,7 +7058,7 @@ function buildRefinementSessionPatchPlanFromState(
         validation.cellIds
       )
     : undefined;
-  const recipe = concreteBuilds === undefined
+  const recipe = concreteBuilds?.baseSessionRecipes !== true
     ? createRefinementSessionCommandRecipeFromState(
         state,
         validation.cellIds,
@@ -7889,9 +8125,10 @@ function buildSameLevelRefinementPlanningMesh(
 function buildSameLevelRefinementPlanningMeshFromState(
   state: RefinementSessionStateReader,
   level: number,
-  options: RefinementSessionPatchOptions
+  options: RefinementSessionPatchOptions,
+  scopedActiveIds?: readonly CellId[]
 ): ActiveMeshBuildResult {
-  const sortedActiveIds = sortedActiveLeafIdsFromSessionState(state);
+  const sortedActiveIds = scopedActiveIds ?? sortedActiveLeafIdsFromSessionState(state);
   const activeIds: CellId[] = [];
   const activeIdCount = planningArrayLength(
     sortedActiveIds,
@@ -7954,7 +8191,8 @@ function collectRefinementPatchActiveCellIds(
 
 function collectRefinementPatchActiveCellIdsFromState(
   state: RefinementSessionStateReader,
-  selectedCellIds: readonly CellId[]
+  selectedCellIds: readonly CellId[],
+  scopedActiveIds?: readonly CellId[]
 ): CellId[] {
   const haloCellIds = new Set<CellId>();
   const selectedCellCount = planningArrayLength(
@@ -8010,7 +8248,12 @@ function collectRefinementPatchActiveCellIdsFromState(
     }
   }
 
-  const sortedActiveIds = sortedActiveLeafIdsFromSessionState(state);
+  const sortedActiveIds = scopedActiveIds === undefined
+    ? sortedActiveLeafIdsFromSessionState(state)
+    : [...haloCellIds].filter((id) => state.hasActiveLeaf(id)).sort((left, right) =>
+      requiredSessionStateCell(state, left).ordinal - requiredSessionStateCell(state, right).ordinal
+      || compareCellIds(left, right)
+    );
   const activeIds: CellId[] = [];
   const activeIdCount = planningArrayLength(
     sortedActiveIds,
