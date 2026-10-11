@@ -42,6 +42,8 @@ Orientation nodes are separate geometric helpers. NODE/SOLID/BEAM output uses
 per-record PIDs, globally distinct element IDs, and noncollinear N3 nodes.
 No material, section, steel diameter, load, or constraint cards are inferred.
 The applicable beam formulation remains the analyst's responsibility.
+Shared bar intersections may also share rotational degrees of freedom depending
+on the beam formulation/releases; this is not automatically a sliding joint.
 
 ## Mixed Keyword Contract
 

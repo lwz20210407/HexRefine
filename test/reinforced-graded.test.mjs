@@ -39,7 +39,7 @@ test('graded reinforcement fixes undefined source Z cover counter and reports ad
   assert.equal(p.beamCount,440);assert.ok(p.warnings.some(s=>s.includes('adjusted')));
 });
 test('graded reinforcement refuses unsafe or unverified combinations explicitly',()=>{
-  for(const patch of [{connectivity:'shared'},{includeZBars:1},{rebarMeshSize:0},{barCounts:[4,4,3]},
+  for(const patch of [{connectivity:'embedded'},{includeZBars:1},{rebarMeshSize:0},{barCounts:[4,4,3]},
     {cover:[0,0,0,0,0,0],barCounts:[8,5,3]},
     {cover:[2,2,-1,0,2,2]},{barCounts:[1000000000,5,3]},{concretePartId:2},{unknown:true}]){
     assert.throws(()=>planGradedReinforcement({...base,...patch}));

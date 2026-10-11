@@ -14,7 +14,7 @@ new GUI wiring have NOT been implemented.
 | F03 tilt | 984+, 994, 1200+ | Rectangular single/double and circular half/full implemented | Positive/negative TG probes; circular uses documented alternate mapping; quarter nonzero tilt pending |
 | F04 fractions | Each generator's vi branch | Explicit coverage for ported generators | Corrected circular quarter and cylinder full; no automatic solver BC |
 | F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Circular/cylindrical subsets plus circular correction/budget implemented | Cylinder radial switch/layers; circular quarter tilt, extreme-angle quality and GUI pending |
-| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform with budgets plus graded fractions/tilt/two-stage extensions | Uniform separate/shared; graded separate only; coupling/GUI and broader combinations pending |
+| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform budgets, graded fractions/tilt/two-stage and matched shared endpoints | Embedded coupling/GUI and broader combinations pending; unmatched shared endpoints rejected |
 | F07 2D | Code_Creat7/6, 2199+, 2386+ | Implemented under source-specific contracts | 12 rectangle and 3 circle TG cases; Q1/SHELL export, geometric sets |
 | F08 interfaces | repair chain, v15/v16/vv15/vv16 | Direct conformity for ported generators; baseline replay verified | General imported-K repair is NOT implemented |
 
@@ -48,8 +48,8 @@ Recovered source archives are not included in this repository.
 
 ## Verification and Honest Limits
 
-- Latest integrated full run: **748/748 passing** after uniform reinforcement
-  quantity optimization, including type checks and build.
+- Latest integrated full run: **755/755 passing** after strict graded shared
+  endpoints and uniform quantity optimization, including type checks and build.
 - Graded-reinforcement addition: initial full run **701/702 passing**, with only
   the stale embedded standalone bundle failing. After regeneration all seven
   browser smoke tests pass. Ten new graded tests and nine independent MATLAB/TG

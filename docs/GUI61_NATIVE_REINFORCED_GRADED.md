@@ -29,7 +29,7 @@ Quarter uses X>=0,Y>=0; half both X signs and Y>=0; full both X/Y signs.
 Z is [0,H]. Independent reductions, thickness on/off, one/two transitions
 and half/full tilt reuse the rectangular kernel and its failure guards.
 Quarter tilt follows its forced-zero rule with a warning. More than two
-transitions and shared-node steel remain unsupported. Code_Creat5 itself
+transitions remain unsupported. Shared endpoints have the strict contract below. Code_Creat5 itself
 has single-stage Z3 grading; other combinations are native extensions,
 recorded in `plan.sourceExtensions`.
 
@@ -49,12 +49,25 @@ or zero spacing are rejected. Off-center rows are clipped, not recentered. Resol
 spacing and positions are returned. Bars extend across their axial domain;
 cover locates the orthogonal families, not the ends of every straight bar.
 
-Independent nodes are retained per bar, including bar intersections. No
-coordinate merge, embedding, contact, bond-slip, material or section is
-inferred. Noncollinear helper N3 nodes are generated. Mechanical coupling
-must be supplied by the analyst; this mesh alone does not define reinforced
-concrete interaction. Common concrete/beam nodes cannot be assumed on a
-graded mesh merely because the uniform generator supports them.
+With `separate`, independent nodes are retained per bar, including intersections.
+No embedding, contact, bond-slip, material or section is inferred. Noncollinear
+N3 helpers are generated. The analyst must supply the physical interaction.
+
+With `shared`, every beam endpoint must coincide with an **active** concrete
+node. A lookup tolerance of minimum concrete edge length times 1e-9 accounts
+for numerical construction noise; it is not increased to force matches. Any
+unmatched endpoint rejects the entire generation before the CLI writes a K.
+The existing merge lookup is used only for identification; concrete coordinates,
+connectivity and IDs are retained verbatim. Unused concrete nodes are not valid
+coupling targets. N3 helpers remain separate, and duplicate physical endpoints
+at bar intersections reuse the same active node. Cell IDs/sets remain stable.
+
+This imposes common endpoint translations, not a bond-slip law or embedded
+integration-point coupling. Between endpoints a beam can span multiple solids;
+shared endpoints alone do not constrain every interior beam point. There are
+no added coupling keyword cards and no solver validation is implied.
+Intersecting beams also reuse nodes; their rotational/joint behavior depends on
+the chosen beam formulation and end releases and must be reviewed separately.
 
 ## Source Bug and Independent Evidence
 
@@ -130,6 +143,21 @@ These cases do not certify every real-valued combination. Tests live in
 `test/reinforced-graded-combinations.test.mjs`; PyDYNA independently checks
 the exported decks. Source incorrect-fraction cases remain failure evidence.
 
-Pending: shared/embedded coupling, more than two transitions, broader parameter
+## Shared-Node Evidence
+
+The generated 24x24x12 block, refined12x12, fine1/coarse3, bar segment3,
+barCounts3/3/3 and zero covers has matching endpoints for quarter/half/full
+with Z bars on/off. Twelve separate/shared decks were independently imported
+with PyDYNA. Every shared beam endpoint references an active solid node;
+all concrete coordinates/connectivity and beam EIDs are unchanged, and physical
+segments agree within the fixed numerical tolerance. Reported shared endpoint
+counts (Z off/on) are 48/56 quarter, 81/93 half and 135/153 full.
+
+An unmatched tilted case refuses instead of producing a partially shared deck.
+Tests: `test/reinforced-graded-shared.test.mjs`; evidence in `graded_shared_native`
+and `graded_shared_views`, with `GRADED_SHARED_NODES.html`. This is a native
+connectivity extension, not a replay of source Code_Creat5's independent nodes.
+
+Pending: embedded coupling, more than two transitions, broader parameter
 coverage, GUI wiring, industrial-scale and solver validation. Uniform-RC
-quantity optimization is separate. See `GUI61_PORT_TODO.md`.
+quantity optimization has a separate completed subset. See `GUI61_PORT_TODO.md`.

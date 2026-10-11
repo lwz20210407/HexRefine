@@ -5,6 +5,7 @@ import {generateRectangularGradedMesh} from "./graded-rectangle.js";
 import type {LsdynaMixedMesh,MixedBeamRecord} from "./lsdyna-mixed.js";
 import {validateLsdynaMixedMesh} from "./lsdyna-mixed.js";
 import {minimumHexCornerScaledJacobian} from "./hex-quality.js";
+import {mergeCoincidentNodesWithMap,minElementEdgeLength} from "./mesh.js";
 
 export interface GradedReinforcementSpec {
   concrete: RectangularGradingSpec;
@@ -14,8 +15,8 @@ export interface GradedReinforcementSpec {
   /** X low/high, Y low/high, Z low/high. These locate orthogonal bar families. */
   cover: readonly [number,number,number,number,number,number];
   includeZBars: boolean;
-  /** Independent endpoints; no implicit embedding, merging, or bond law. */
-  connectivity: "separate";
+  /** Shared requires every endpoint to coincide with an active concrete node. */
+  connectivity: "separate"|"shared";
   concretePartId?: number;
   rebarPartId?: number;
 }
@@ -24,7 +25,7 @@ export function planGradedReinforcement(spec:GradedReinforcementSpec) {
   const allowed=new Set(["concrete","rebarMeshSize","barCounts","cover","includeZBars","connectivity","concretePartId","rebarPartId"]);
   if(Object.keys(spec).some(k=>!allowed.has(k)))throw new RangeError("unknown graded reinforcement option");
   const concrete=planRectangularGrading(spec.concrete);
-  if(spec.connectivity!=="separate")throw new RangeError("graded reinforcement requires separate nodes; mesh-coincident shared endpoints are not implemented");
+  if(!["separate","shared"].includes(spec.connectivity))throw new RangeError("graded reinforcement connectivity must be separate or shared; embedding is not implemented");
   if(!Number.isFinite(spec.rebarMeshSize)||spec.rebarMeshSize<=0)throw new RangeError("rebarMeshSize must be positive");
   if(!Array.isArray(spec.barCounts)||spec.barCounts.length!==3||spec.barCounts.some(n=>!Number.isSafeInteger(n)||n<2))throw new RangeError("barCounts requires three integers of at least two");
   if(!Array.isArray(spec.cover)||spec.cover.length!==6||spec.cover.some(c=>!Number.isFinite(c)||c<0))throw new RangeError("cover requires six nonnegative distances");
@@ -75,7 +76,8 @@ export function planGradedReinforcement(spec:GradedReinforcementSpec) {
   return {concrete,actualSize:[...size],counts,beamSpacing:spacing,coverCounts,resolvedCover,barSpacing,locations,bounds,axisCoordinates,
     barGeometry:"global-axis-aligned; concrete grading tilt does not rotate reinforcement",sourceExtensions,
     axisBeamCounts,beamCount,concretePartId,rebarPartId,connectivity:spec.connectivity,
-    warnings:["Independent beam nodes: no embedding, bond, or contact constraints are generated.",...concrete.warnings,...sourceExtensions,
+    warnings:[spec.connectivity==="separate"?"Independent beam nodes: no embedding, bond, or contact constraints are generated.":
+      "All beam endpoints must reuse active solid nodes. Shared translations are not an embedded or bond-slip formulation.",...concrete.warnings,...sourceExtensions,
       ...(axisCoordinates.some((v,a)=>v.some((x,i)=>i>0&&Math.abs(x-v[i-1]!-spacing[a]!)>1e-10*size[a]!))?["Symmetry clipping truncates boundary beam segments; interior segment spacing is unchanged."]:[]),
       ...(resolvedCover.some((v,i)=>Math.abs(v-spec.cover[i]!)>1e-10*spec.rebarMeshSize)?["Cover distances adjusted to beam-count alignment; inspect resolvedCover."]:[])]};
 }
@@ -84,7 +86,8 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
   const plan=planGradedReinforcement(spec);
   const concrete=generateRectangularGradedMesh(spec.concrete),mesh=concrete.mesh;
   if(mesh.elements.length+plan.beamCount>2000000)throw new RangeError("combined graded reinforcement exceeds allocation limit");
-  const nodes:Point[]=mesh.nodes.map(p=>[...p]),beams:MixedBeamRecord[]=[];
+  let nodes:Point[]=mesh.nodes.map(p=>[...p]);
+  const beams:MixedBeamRecord[]=[];
   const lineSets:Record<string,number[]>={bars_x:[],bars_y:[],bars_z:[]};
   const endIds:number[]=[],orientationIds:number[]=[];
   const addLine=(axis:0|1|2,start:number[])=>{
@@ -93,7 +96,7 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
       const p=[...start];p[axis]=coordinate;
       ids.push(nodes.push(p));
     }
-    endIds.push(...ids);
+    for(const id of ids)endIds.push(id);
     const orientation=[...nodes[ids[0]!-1]!];orientation[(axis+1)%3]!+=plan.beamSpacing[axis]!;
     const orientationNode=nodes.push(orientation);orientationIds.push(orientationNode);
     for(let i=1;i<ids.length;i++){
@@ -105,6 +108,27 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
   for(const z of plan.locations[2]!)for(const x of plan.locations[0]!)addLine(1,[x,0,z]);
   if(spec.includeZBars)for(const y of plan.locations[1]!)for(const x of plan.locations[0]!)addLine(2,[x,y,0]);
   for(const z of plan.locations[2]!)for(const y of plan.locations[1]!)addLine(0,[0,y,z]);
+  let sharedEndpointNodes=0,sharedEndpointTolerance=0;
+  if(spec.connectivity==="shared"){
+    sharedEndpointTolerance=minElementEdgeLength(mesh)*1e-9;
+    const active=new Set<number>();for(const e of mesh.elements)for(const n of e)active.add(n);
+    // Lookup only: do not replace concrete coordinates/connectivity or merge N3 helpers.
+    const lookup=mergeCoincidentNodesWithMap({kind:"H1",nodes:[...mesh.nodes,...endIds.map(n=>nodes[n-1]!)],elements:mesh.elements},sharedEndpointTolerance);
+    for(let n=1;n<=mesh.nodes.length;n++)if(lookup.nodeIdByInputNodeId.get(n)!==n)throw new Error("shared-node lookup would renumber concrete nodes");
+    const remap=new Map<number,number>(),missing:number[]=[];
+    endIds.forEach((n,i)=>{
+      const target=lookup.nodeIdByInputNodeId.get(mesh.nodes.length+i+1)!;
+      if(!active.has(target))missing.push(n);else remap.set(n,target);
+    });
+    if(missing.length)throw new RangeError(`shared reinforcement has ${missing.length} endpoints without matching active solid nodes; first coordinate: ${nodes[missing[0]!-1]!.join(", ")}`);
+    const nextNodes:Point[]=mesh.nodes.map(p=>[...p]);
+    const nextOrientations=orientationIds.map(n=>{const id=nextNodes.push([...nodes[n-1]!]);remap.set(n,id);return id;});
+    for(const beam of beams){beam.nodes=[remap.get(beam.nodes[0])!,remap.get(beam.nodes[1])!];beam.orientationNode=remap.get(beam.orientationNode)!;}
+    const uniqueEndpoints=new Set(endIds.map(n=>remap.get(n)!));
+    endIds.length=0;for(const n of uniqueEndpoints)endIds.push(n);
+    orientationIds.length=0;for(const n of nextOrientations)orientationIds.push(n);
+    nodes=nextNodes;sharedEndpointNodes=endIds.length;
+  }
   const model:LsdynaMixedMesh={nodes,solids:mesh.elements.map((e,i)=>({id:i+1,partId:plan.concretePartId,nodes:e})),beams};
   validateLsdynaMixedMesh(model);
   if(beams.length!==plan.beamCount)throw new Error("graded beam count disagrees with plan");
@@ -122,5 +146,5 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
     cellSets:{concrete:model.solids.map(e=>e.id),...lineSets},
     quality:{...concrete.quality,regions,
       regionClassification:"core / refined outside-core support (including intermediate uniform cells in two-stage meshes) / unchanged far field",
-      sharedEndpointNodes:0,beamCount:beams.length,warnings:[...concrete.quality.warnings,...plan.warnings]}};
+      sharedEndpointNodes,sharedEndpointTolerance,beamEndpointNodes:endIds.length,beamCount:beams.length,warnings:[...concrete.quality.warnings,...plan.warnings]}};
 }
