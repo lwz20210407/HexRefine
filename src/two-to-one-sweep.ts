@@ -62,6 +62,19 @@ interface SweepPassResult {
 
 const AXIS_ORDER = [2, 1, 0] as const;
 
+/** Low-level generated-domain primitive; callers must supply a closed marking. */
+export function applyMarkedHalfSweep(
+  mesh: Mesh, markedNodeIds: readonly number[], tolerance: number
+): {mesh: Mesh; parentToChildren: number[][]} {
+  if (!(Number.isFinite(tolerance) && tolerance>0)
+    || markedNodeIds.some(n=>!Number.isInteger(n) || n<1 || n>mesh.nodes.length)) {
+    throw new RangeError("marked half-sweep nodes or tolerance are invalid");
+  }
+  const logical=mesh.nodes.map(p=>[p[0]!,p[1]!,p[2]!] as LogicalPoint);
+  const pass=applyRegularSweepPass(mesh,logical,new Set(markedNodeIds),tolerance,mesh.elements.map((_,i)=>i+1));
+  return {mesh:pass.mesh,parentToChildren:pass.parentToChildren};
+}
+
 /**
  * Build a local mapped-box 2:1 transition using the Owen/Shih three-sweep
  * construction. Returns undefined when the input is not a mapped logical
@@ -80,6 +93,27 @@ export function tryBuildLocalTwoToOneHexReplacements(
 export function tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
   mesh: Mesh,
   selected: NormalizedTwoToOneSelection
+): LocalTwoToOneReplacement[] | undefined {
+  return buildDirectionalReplacements(mesh, selected, AXIS_ORDER);
+}
+
+/** Internal anisotropic entry: axes refer to the recovered logical chart. */
+export function tryBuildDirectionalTwoToOneHexReplacements(
+  mesh: Mesh,
+  selectedElementIds: readonly number[],
+  axes: readonly (0 | 1 | 2)[]
+): LocalTwoToOneReplacement[] | undefined {
+  if (axes.length === 0 || new Set(axes).size !== axes.length
+    || axes.some(axis => axis !== 0 && axis !== 1 && axis !== 2)) {
+    throw new RangeError("directional half sweeps require distinct axes in 0..2");
+  }
+  return buildDirectionalReplacements(mesh, normalizeTwoToOneSelection(mesh, selectedElementIds), axes);
+}
+
+function buildDirectionalReplacements(
+  mesh: Mesh,
+  selected: NormalizedTwoToOneSelection,
+  axes: readonly (0 | 1 | 2)[]
 ): LocalTwoToOneReplacement[] | undefined {
   if (selected.length === 0) {
     return [];
@@ -112,7 +146,7 @@ export function tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
   let currentLogical = logicalCoordinates;
   let lineage = mesh.elements.map((_, index) => index + 1);
 
-  for (const axis of AXIS_ORDER) {
+  for (const axis of axes) {
     const patches = sweepPatches(logicalSelection, axis);
     const markedNodes = markedNodesForSweep(currentLogical, patches, tolerance);
     if (markedNodes.size === 0) {
@@ -155,7 +189,8 @@ export function tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
     lineage,
     new Set(selected),
     lattice,
-    logicalSelection
+    logicalSelection,
+    2 ** axes.length
   );
 }
 
@@ -875,7 +910,8 @@ function regroupByOriginalParent(
   lineage: readonly number[],
   selected: ReadonlySet<number>,
   lattice: HexElementLattice,
-  logicalSelection: LogicalSelection
+  logicalSelection: LogicalSelection,
+  expectedCoreChildren: number
 ): LocalTwoToOneReplacement[] {
   const childIndicesByParent = new Map<number, number[]>();
   lineage.forEach((parentId, childIndex) => {
@@ -902,9 +938,9 @@ function regroupByOriginalParent(
 
   for (const selectedParentId of selected) {
     const replacement = replacements.find((item) => item.elementId === selectedParentId);
-    if (!replacement || replacement.refinement.elements.length !== 8) {
+    if (!replacement || replacement.refinement.elements.length !== expectedCoreChildren) {
       throw new Error(
-        `local 2:1 core parent ${selectedParentId} must have exactly 8 children`
+        `local 2:1 core parent ${selectedParentId} must have exactly ${expectedCoreChildren} children`
       );
     }
   }
