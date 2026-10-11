@@ -381,7 +381,10 @@ function publicPlanningError(
   return new TwoToOnePlanningError(
     planningErrorCode(failure),
     failure.message,
-    planningDiagnostic(original, attemptedActions, candidate)
+    {
+      ...planningDiagnostic(original, attemptedActions, candidate),
+      conflictingInterfaces: failure.conflictingInterfaces
+    }
   );
 }
 

@@ -14,6 +14,7 @@ import {
   tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection
 } from "./two-to-one-sweep.js";
 import { DirectTwoToOnePlanningError } from "./two-to-one-capability.js";
+import { solveAffineTemplateDomains } from "./two-to-one-affine-domains-internal.js";
 import {
   normalizeTwoToOneSelection,
   type NormalizedTwoToOneSelection
@@ -162,6 +163,7 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
     incidence
   );
   const components = constraintComponents(variables.length, constraints);
+  const conflictingConstraints = new Set<number>();
   const solution = solveLevelField(
     cells,
     candidates,
@@ -169,13 +171,23 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
     constraints,
     externalFaces,
     components,
-    partition
+    partition,
+    indices => indices.forEach(index => conflictingConstraints.add(index))
   );
   if (!solution) {
     throw new DirectTwoToOnePlanningError(
       "parity",
       "no level-closed 2:1 seven-hex transition field exists",
-      variables
+      variables,
+      [...conflictingConstraints].sort((a, b) => a - b).map(index => {
+        const constraint = constraints[index]!;
+        const firstCellId = variables[constraint.first]!;
+        return {
+          firstCellId,
+          secondCellId: variables[constraint.second]!,
+          faceNodeIds: H1_FACES[constraint.firstFace]!.map(corner => mesh.elements[firstCellId - 1]![corner - 1]!)
+        };
+      })
     );
   }
 
@@ -336,7 +348,8 @@ function solveLevelField(
   constraints: readonly InterfaceConstraint[],
   externalFaces: ReadonlyMap<number, readonly number[]>,
   components: readonly (readonly number[])[],
-  partition: (variable: number, face: number, candidate: number) => string
+  partition: (variable: number, face: number, candidate: number) => string,
+  onAffineConflict: (indices: readonly number[]) => void
 ): number[] | undefined {
   const phaseCache = new Map<string, string>();
   const phase = (variable: number, face: number, candidate: number): string => {
@@ -382,7 +395,7 @@ function solveLevelField(
     domains: Array<Set<number>>
   ): number[] | undefined => {
     if (componentIndex === components.length) {
-      return searchDomains(domains, constraints, partition);
+      return searchDomains(domains, constraints, partition, onAffineConflict);
     }
     const component = components[componentIndex]!;
     for (const selectedPhase of phaseOptions[componentIndex]!) {
@@ -420,7 +433,8 @@ function solveLevelField(
 function searchDomains(
   sourceDomains: Array<Set<number>>,
   constraints: readonly InterfaceConstraint[],
-  partition: (variable: number, face: number, candidate: number) => string
+  partition: (variable: number, face: number, candidate: number) => string,
+  onAffineConflict: (indices: readonly number[]) => void
 ): number[] | undefined {
   const domains = sourceDomains.map((domain) => new Set(domain));
   const related = Array.from({ length: domains.length }, () => [] as number[]);
@@ -523,6 +537,16 @@ function searchDomains(
     return undefined;
   }
 
+  const affine = solveAffineTemplateDomains(
+    domains.map(domain => [...domain]), constraints, firstSupport
+  );
+  if (affine.kind === "unsatisfiable") {
+    onAffineConflict(affine.constraintIndices);
+    return undefined;
+  }
+  let decisions = 0;
+  let useAffineWitness = false;
+
   const supportScore = (variable: number, candidate: number): number =>
     related[variable]!.reduce((total, constraintId) => {
       const constraint = constraints[constraintId]!;
@@ -536,6 +560,7 @@ function searchDomains(
     }, 0);
 
   const searchComponent = (component: readonly number[]): boolean => {
+    if (useAffineWitness) return false;
     const unresolved = component
       .filter((variable) => domains[variable]!.size > 1)
       .sort((first, second) =>
@@ -552,6 +577,11 @@ function searchDomains(
       || first - second
     );
     for (const candidate of candidates) {
+      decisions += 1;
+      if (decisions > 512 && affine.kind === "satisfiable") {
+        useAffineWitness = true;
+        return false;
+      }
       const marker = trail.length;
       replaceDomain(variable, new Set([candidate]));
       if (
@@ -561,12 +591,14 @@ function searchDomains(
         return true;
       }
       restore(marker);
+      if (useAffineWitness) return false;
     }
     return false;
   };
 
   for (const component of constraintComponents(domains.length, constraints)) {
     if (!searchComponent(component)) {
+      if (useAffineWitness && affine.kind === "satisfiable") return affine.solution;
       return undefined;
     }
   }

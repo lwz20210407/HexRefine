@@ -18,17 +18,20 @@ export class DirectTwoToOnePlanningError extends Error {
   override readonly message: string;
   readonly kind: DirectTwoToOneFailureKind;
   readonly conflictingElementIds: number[];
+  readonly conflictingInterfaces: TwoToOnePlanningDiagnostic<number>["conflictingInterfaces"];
 
   constructor(
     kind: DirectTwoToOneFailureKind,
     message: string,
-    conflictingElementIds: readonly number[] = []
+    conflictingElementIds: readonly number[] = [],
+    conflictingInterfaces: TwoToOnePlanningDiagnostic<number>["conflictingInterfaces"] = []
   ) {
     super(message);
     this.name = "DirectTwoToOnePlanningError";
     this.message = message;
     this.kind = kind;
     this.conflictingElementIds = [...conflictingElementIds];
+    this.conflictingInterfaces = conflictingInterfaces.map(entry => ({ ...entry, faceNodeIds: [...entry.faceNodeIds] }));
   }
 }
 
