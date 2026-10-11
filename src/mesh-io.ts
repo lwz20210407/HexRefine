@@ -338,6 +338,9 @@ export function parseLsdynaKeywordMesh(text: string): Mesh {
       continue;
     }
     if (line.startsWith("*")) {
+      if (pendingElementFields.length > 0) {
+        throw new Error(`LS-DYNA import found an incomplete element record before line ${index + 1}`);
+      }
       pendingElementFields = [];
       if (/^\*NODE\b/i.test(line)) {
         section = "node";
@@ -371,7 +374,7 @@ export function parseLsdynaKeywordMesh(text: string): Mesh {
 
     if (section === "shell" || section === "solid") {
       const expected = section === "shell" ? 4 : 8;
-      pendingElementFields.push(...splitDelimitedRecord(rawLine));
+      pendingElementFields.push(...splitLsdynaElementRecord(rawLine));
       if (pendingElementFields.length < expected + 2) {
         continue;
       }
@@ -701,11 +704,11 @@ function splitDelimitedRecord(line: string): string[] {
 
 function splitLsdynaNodeRecord(line: string): string[] {
   const delimited = splitDelimitedRecord(line);
-  if (delimited.length >= 4 || line.includes(",") || line.length < 56) {
+  if (line.includes(",") || line.length < 56) {
     return delimited;
   }
   const nodeId = line.slice(0, 8).trim();
-  if (!nodeId) {
+  if (!/^\+?\d+$/.test(nodeId)) {
     return delimited;
   }
   const coordinates = [
@@ -713,7 +716,18 @@ function splitLsdynaNodeRecord(line: string): string[] {
     line.slice(24, 40),
     line.slice(40, 56)
   ].map((field) => field.trim() || "0");
-  return [nodeId, ...coordinates];
+  return coordinates.every(field => Number.isFinite(Number(field)))
+    ? [nodeId, ...coordinates] : delimited;
+}
+
+function splitLsdynaElementRecord(line: string): string[] {
+  if (!line.includes(",")) {
+    const fields = (line.trimEnd().match(/.{1,8}/g) ?? []).map(field => field.trim());
+    if (fields.length > 0 && fields.every(field => /^\+?\d+$/.test(field))) {
+      return fields;
+    }
+  }
+  return splitDelimitedRecord(line);
 }
 
 function parsePointFields(

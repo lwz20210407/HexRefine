@@ -62,6 +62,9 @@ export interface InpOptions {
 
 export interface LsdynaKeywordOptions {
   partId?: number;
+  /** Maximum fractional digits in scientific notation, reduced only to fit 16 columns. */
+  coordinatePrecision?: number;
+  coordinateFormat?: "scientific" | "compact";
 }
 
 interface BoundaryInpSets {
@@ -279,6 +282,12 @@ export function* iterateLsdynaKeywordLines(
   if (!Number.isInteger(partId) || partId <= 0) {
     throw new Error("LS-DYNA part id must be a positive integer");
   }
+  const precision=options.coordinatePrecision ?? 8;
+  if (!Number.isInteger(precision) || precision<1 || precision>12) {
+    throw new RangeError("LS-DYNA coordinatePrecision must be an integer in 1..12");
+  }
+  const coordinateFormat=options.coordinateFormat ?? "scientific";
+  if (coordinateFormat!=="scientific" && coordinateFormat!=="compact") throw new RangeError("invalid LS-DYNA coordinateFormat");
 
   yield "*KEYWORD";
   yield "*NODE";
@@ -291,9 +300,9 @@ export function* iterateLsdynaKeywordLines(
     const point = mesh.nodes[index]!;
     yield [
       fixedInteger(index + 1, 8, "node id"),
-      fixedFloat(point[0]!, 16),
-      fixedFloat(point[1]!, 16),
-      fixedFloat(point[2]!, 16)
+      fixedFloat(point[0]!, 16, precision, coordinateFormat),
+      fixedFloat(point[1]!, 16, precision, coordinateFormat),
+      fixedFloat(point[2]!, 16, precision, coordinateFormat)
     ].join("");
   }
   yield "*ELEMENT_SOLID";
@@ -318,6 +327,23 @@ export function meshToLsdynaKeyword(
   options: LsdynaKeywordOptions = {}
 ): string {
   return [...iterateLsdynaKeywordLines(mesh, options)].join("\n") + "\n";
+}
+
+/** Four-node shell mesh output only; no section thickness or solver conditions are inferred. */
+export function meshToLsdynaShellKeyword(mesh:Mesh|ExportMesh,options:LsdynaKeywordOptions={}):string {
+  if(mesh.kind!=="Q1" && mesh.kind!=="Q4")throw new Error("LS-DYNA shell export requires a Q1/Q4 mesh");
+  const part=options.partId??1,precision=options.coordinatePrecision??8,format=options.coordinateFormat??"scientific";
+  if(!Number.isSafeInteger(part)||part<1)throw new RangeError("invalid shell part ID");
+  if(!Number.isInteger(precision)||precision<1||precision>12)throw new RangeError("invalid shell coordinatePrecision");
+  if(format!=="compact"&&format!=="scientific")throw new RangeError("invalid shell coordinateFormat");
+  const lines=["*KEYWORD","*NODE"];
+  mesh.nodes.forEach((p,i)=>lines.push(fixedInteger(i+1,8,"node id")+[p[0]!,p[1]!,p[2]??0].map(v=>fixedFloat(v,16,precision,format)).join("")));
+  lines.push("*ELEMENT_SHELL");
+  mesh.elements.forEach((e,i)=>{
+    if(e.length!==4||new Set(e).size!==4||e.some(n=>!Number.isSafeInteger(n)||n<1||n>mesh.nodes.length))throw new Error("invalid four-node shell connectivity");
+    lines.push([i+1,part,...e].map(n=>fixedInteger(n,8,"shell record")).join(""));
+  });
+  lines.push("*END");return lines.join("\n")+"\n";
 }
 
 export function* iterateNativeSessionVtkLines(plan: NativeSessionExportPlan, options: VtkOptions = {}): Generator<string> {
@@ -1136,11 +1162,17 @@ function fixedInteger(value: number, width: number, label: string): string {
   return text.padStart(width);
 }
 
-function fixedFloat(value: number, width: number): string {
+function fixedFloat(value: number, width: number, precision=8, format="scientific"): string {
   if (!Number.isFinite(value)) {
     throw new Error(`LS-DYNA coordinate must be finite, got ${value}`);
   }
-  for (let digits = 8; digits >= 1; digits -= 1) {
+  if (format==="compact") {
+    for (let digits=17;digits>=1;digits-=1) {
+      const text=Number(value.toPrecision(digits)).toString();
+      if (text.length<=width) return text.padStart(width);
+    }
+  }
+  for (let digits = precision; digits >= 1; digits -= 1) {
     const text = value.toExponential(digits);
     if (text.length <= width) {
       return text.padStart(width);
