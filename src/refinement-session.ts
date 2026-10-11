@@ -1961,7 +1961,8 @@ function refineSessionPatchInternal(
               session,
               cellIds,
               resolvedOptions,
-              faceResolution
+              faceResolution,
+              false
             );
           commitRefinementSessionOverlay(
             session,
@@ -2821,9 +2822,10 @@ function publishHistoryConformanceAfterCommit(
 function finishHistoryConformancePlan(
   session: RefinementSession,
   plan: RefinementSessionHistoryTransactionPlan,
-  proof: HistoryConformanceProof
+  proof: HistoryConformanceProof,
+  publishBaseline: boolean
 ): RefinementSessionHistoryTransactionPlan {
-  if (proof.baseline !== undefined) publishIndexedConformanceCertificate(session, proof.baseline);
+  if (publishBaseline && proof.baseline !== undefined) publishIndexedConformanceCertificate(session, proof.baseline);
   historyConformanceProofs.set(plan, proof);
   return plan;
 }
@@ -2994,7 +2996,8 @@ export function planRefinementSessionHistoryTransaction(
   session: RefinementSession,
   cellIds: readonly CellId[],
   resolvedOptions: ResolvedRefinementSessionPatchOptions,
-  faceResolution: SessionFaceResolution
+  faceResolution: SessionFaceResolution,
+  publishBaseline = true
 ): RefinementSessionHistoryTransactionPlan {
   const validation = validateRefinementSessionSelection(
     session,
@@ -3038,7 +3041,8 @@ export function planRefinementSessionHistoryTransaction(
       resolvedOptions,
       faceResolution,
       supportDiscovery,
-      historyIndex
+      historyIndex,
+      publishBaseline
     );
   }
   const preliminaryHistoryClosure =
@@ -3595,7 +3599,7 @@ export function planRefinementSessionHistoryTransaction(
       checkedElementCount: conformanceProof.checkedElementCount,
       requiredInterfaceCount: conformanceProof.requiredInterfaceCount
     })
-  }, conformanceProof);
+  }, conformanceProof, publishBaseline);
 }
 
 function activeSelectedCommandOutputCellIds(
@@ -3685,7 +3689,8 @@ function planUntouchedTransitionShellHistoryTransaction(
   resolvedOptions: ResolvedRefinementSessionPatchOptions,
   faceResolution: SessionFaceResolution,
   discovered: DiscoveredTransitionHistoryComponent,
-  historyIndex: RefinementHistoryIndex
+  historyIndex: RefinementHistoryIndex,
+  publishBaseline: boolean
 ): RefinementSessionHistoryTransactionPlan {
   const compensation = resolvedOptions.normalizedTwoToOneCompensation;
   if (compensation === undefined) {
@@ -4047,7 +4052,7 @@ function planUntouchedTransitionShellHistoryTransaction(
       checkedElementCount: conformanceProof.checkedElementCount,
       requiredInterfaceCount: conformanceProof.requiredInterfaceCount
     })
-  }, conformanceProof);
+  }, conformanceProof, publishBaseline);
 }
 
 function traceLocalSupportCommandInputCellIds(

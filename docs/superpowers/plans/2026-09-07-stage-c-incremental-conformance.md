@@ -74,8 +74,13 @@ reported per run because empty test-file entries can appear in filtered runs.
 
 ## Next tasks
 
-Task 13 retains its final fault-injection review: stale/hostile commit state,
-replacement references and touched data, ownership corruption, quality failure,
-and consistency of certificate publication through rollback/history operations.
+Task 13 follow-up separated preview baseline caching from execution publication.
+An execution that is rejected during guarded commit now leaves the previous
+certificate unchanged. Eight fault combinations cover cached/uncached sessions
+with non-writable counters or revision, or non-extensible node/history storage;
+all passed with deep state and point/cell identity checks. Existing state and
+incremental tests passed 86/86; three-level undo/redo/replay also passed again.
+Existing overlay tests cover stale revisions, replacement collections, touched
+cell/node fingerprints, malformed owner storage and atomic commit failures.
 Task 14 must update the final package and perform engineering-scale time/memory
 measurements, separating first certification, repeated planning, and export.

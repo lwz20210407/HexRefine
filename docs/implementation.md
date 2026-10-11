@@ -105,7 +105,7 @@ far field is rejected rather than split. Connected support outputs may be owned
 by more than one refinement command; their provenance is joined only when the
 combined support remains inside the same authorized component.
 
-The operation runs on a cloned session. It reverses the closure in strict
+The operation runs on a sparse session overlay. It reverses the closure in strict
 reverse history order, restores the support parents, rebuilds the shell, replays
 downstream command recipes, and then applies the new request. The planner first
 tries the exact irregular core; only unsupported Owen corner signatures or
@@ -119,11 +119,13 @@ the rebuild. Undo returns exactly to the pre-request mesh and redo restores the
 complete result without replanning. The command quality summary audits the net
 transaction boundary (`before - after` parents against `after - before`
 children), so intermediate rebuilt cells are not counted twice. Non-positive
-oriented Jacobians or relative volume error above `1e-8` discard the clone
+oriented Jacobians or relative volume error above `1e-8` discard the overlay
 instead of committing it. After every downstream recipe and the new request
-have been replayed, the complete active mesh must also pass
-`checkNoHangingNodes`; a pre-existing raw nonconforming command is rejected
-rather than hidden inside a successful compound transaction.
+have been replayed, final conformance is verified against a certified baseline
+using a spatially queried local mesh and retained interface ownership. If the
+input baseline itself needs interface repair, the full final mesh is audited.
+A pre-existing raw nonconforming command cannot be hidden inside a successful
+compound transaction.
 
 Compound preview is explicitly aggregate: it returns an empty per-parent
 `plan`, exact final and changed-input counts, and the same net quality summary
@@ -223,11 +225,31 @@ cloning does not preserve custom diagnostics, so browser or worker transport
 must use that DTO when callers need the IDs. The IDs identify every command
 involved in a missing-recipe, remap, or component-crossing conflict.
 
-Temporary reverse, rebuild, and replay commands exist only in the cloned
-planning session and never enter public history. A successful operation replaces
+Temporary reverse, rebuild, and replay commands exist only in the planning
+overlay and never enter public history. A successful operation replaces
 them with one compound command. A new edit after undo clears the redo stack;
 ordinary undo and redo of the compound command apply its recorded delta without
 rerunning history planning.
+
+### Stage C conformance and commit
+
+The first valid baseline is fully checked and stored with a persistent spatial
+index. History checks query both removed and added cell bounds, include nearby
+coarse/fine, face, edge and corner neighbors, and check the resulting local mesh.
+Every previously paired interface to a retained cell must keep two owners.
+The source and output local meshes use the same merge kernel and tolerance.
+
+Successful previews may cache the valid baseline. Execution planning explicitly
+defers cache publication: only guarded delta commit followed by next-revision
+certificate publication may change that cache. Thus rejected writes to counters,
+revision, node storage or history storage leave both mesh and cache unchanged.
+
+Source baseline construction uses the read-only state builder, so a preview
+does not update the real session's sorting cache. The updated index is derived
+by path copying. Ordinary edits and undo/redo invalidate prior certificates by
+revision, collection identity and size. Direct writes that bypass the read-only
+session contract are unsupported. Context discovery and public active-mesh
+preparation can still have global cost.
 
 Stage B remains deliberately bounded:
 

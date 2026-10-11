@@ -319,6 +319,32 @@ test("incremental history rejection leaves the session and certificate unpublish
   }
 });
 
+for (const [fault, inject] of [
+  ["counter", (session) => Object.defineProperty(session, "nextCommandId", { writable: false })],
+  ["revision", (session) => Object.defineProperty(session, "revision", { writable: false })],
+  ["node storage", (session) => Object.preventExtensions(session.nodes)],
+  ["history storage", (session) => Object.preventExtensions(session.undoStack)]
+]) {
+  for (const cached of [false, true]) {
+    test(`incremental history commit rejection preserves cache and identity (${fault}, cached=${cached})`, () => {
+      const { session, candidate } = createTransitionShellRegressionFixture();
+      if (cached) previewSessionPatch(session, [candidate], transitionShellRegressionOptions());
+      inject(session);
+      const before = structuredClone(session);
+      const points = [...session.nodes];
+      const entries = [...session.cells];
+      const certificate = currentRefinementSessionConformanceCertificate(session);
+      assert.throws(() => refineSessionPatch(session, [candidate], transitionShellRegressionOptions()),
+        /writable|delta|commit|extensib/);
+      assert.deepEqual(session, before);
+      assert.ok(points.every((point, i) => session.nodes[i] === point));
+      assert.ok(entries.every(([id, cell]) => session.cells.get(id) === cell));
+      assert.equal(currentRefinementSessionConformanceCertificate(session) === certificate, true,
+        "a failed commit must not publish or replace the baseline certificate");
+    });
+  }
+}
+
 const {
   auditHexRefinementPatchQuality,
   auditHexRefinementQuality,

@@ -4,6 +4,8 @@
 
 Private/custom performance edition.
 
+- Deferred execution-path conformance cache publication until guarded commit
+  succeeds; added cached/uncached commit-failure identity regressions.
 - Added persistent spatial indexing for incremental history conformance checks,
   paired-interface ownership checks, and next-revision certificate publication.
 - Retained full final auditing when a nonconforming input baseline requires
