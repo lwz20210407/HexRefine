@@ -5,6 +5,12 @@ Status: experimental, validated on small single/two-physical-layer cases.
 arbitrary imported cylindrical K deck and does not generate shell elements.
 It has no MATLAB or TrueGrid runtime dependency.
 
+Here "solid" describes the ELEMENT_SOLID element type, not a filled circular
+cross-section. This is the hollow cylindrical-shell geometry of Code_Creat3.
+For a filled disk/cylinder, use [Code_Creat2's circular-solid generator](GUI61_NATIVE_CIRCLE.md).
+The original GUI has no separate menu item named "solid cylinder": its circular
+target has a freely specified thickness (default radius 50 and thickness 50).
+
 ## Contract
 
 ```javascript
