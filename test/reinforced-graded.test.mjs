@@ -40,11 +40,11 @@ test('graded reinforcement fixes undefined source Z cover counter and reports ad
 });
 test('graded reinforcement refuses unsafe or unverified combinations explicitly',()=>{
   for(const patch of [{connectivity:'shared'},{includeZBars:1},{rebarMeshSize:0},{barCounts:[4,4,3]},
-    {cover:[2,2,0,2,2,2]},{cover:[0,0,0,0,0,0],barCounts:[8,5,3]},
+    {cover:[0,0,0,0,0,0],barCounts:[8,5,3]},
     {cover:[2,2,-1,0,2,2]},{barCounts:[1000000000,5,3]},{concretePartId:2},{unknown:true}]){
     assert.throws(()=>planGradedReinforcement({...base,...patch}));
   }
-  for(const patch of [{modelFraction:'full'},{transitionStages:2},{angleDegrees:10},{thicknessTransition:false},{reductions:{x:3,y:3,z:2}}]){
+  for(const patch of [{modelFraction:'invalid'},{transitionStages:3},{angleDegrees:90},{thicknessTransition:1},{reductions:{x:3,y:3,z:4}}]){
     assert.throws(()=>planGradedReinforcement({...base,concrete:{...concrete,...patch}}));
   }
 });

@@ -82,6 +82,6 @@ prove mechanical coupling. A repeated N3 is not automatically a solver error
 for every formulation; native output avoids that ambiguity without claiming
 solver validation of the raw or generated decks.
 
-Pending: graded concrete reinforcement, asymmetric six-face covers, count-budget
+Pending in the uniform generator: asymmetric six-face covers, count-budget
 optimization, embedded/bond-slip coupling, sections/materials, GUI integration,
 large models and engineering solver validation.

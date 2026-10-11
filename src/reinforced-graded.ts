@@ -24,25 +24,22 @@ export function planGradedReinforcement(spec:GradedReinforcementSpec) {
   const allowed=new Set(["concrete","rebarMeshSize","barCounts","cover","includeZBars","connectivity","concretePartId","rebarPartId"]);
   if(Object.keys(spec).some(k=>!allowed.has(k)))throw new RangeError("unknown graded reinforcement option");
   const concrete=planRectangularGrading(spec.concrete);
-  if(spec.concrete.modelFraction!=="half" || spec.concrete.transitionStages!==1 ||
-    !spec.concrete.thicknessTransition || spec.concrete.reductions.z!==3 || (spec.concrete.angleDegrees??0)!==0)
-    throw new RangeError("graded reinforcement currently requires a zero-tilt half model, one transition stage and Z reduction 3");
   if(spec.connectivity!=="separate")throw new RangeError("graded reinforcement requires separate nodes; mesh-coincident shared endpoints are not implemented");
   if(!Number.isFinite(spec.rebarMeshSize)||spec.rebarMeshSize<=0)throw new RangeError("rebarMeshSize must be positive");
   if(!Array.isArray(spec.barCounts)||spec.barCounts.length!==3||spec.barCounts.some(n=>!Number.isSafeInteger(n)||n<2))throw new RangeError("barCounts requires three integers of at least two");
   if(!Array.isArray(spec.cover)||spec.cover.length!==6||spec.cover.some(c=>!Number.isFinite(c)||c<0))throw new RangeError("cover requires six nonnegative distances");
   if(typeof spec.includeZBars!=="boolean")throw new TypeError("includeZBars must be boolean");
-  if(spec.barCounts[1]%2!==1||spec.cover[2]!==spec.cover[3])throw new RangeError("half-model reinforcement requires odd full-body Y bar count and symmetric Y cover");
   const concretePartId=spec.concretePartId??3,rebarPartId=spec.rebarPartId??2;
   if([concretePartId,rebarPartId].some(n=>!Number.isSafeInteger(n)||n<1||n>99999999)||concretePartId===rebarPartId)throw new RangeError("distinct positive 8-column concrete/rebar PIDs required");
   const size=spec.concrete.fullSize;
   const counts=size.map(x=>Math.round(x/spec.rebarMeshSize));
   if(counts.some(n=>!Number.isSafeInteger(n)||n<1))throw new RangeError("invalid beam subdivision counts");
-  if(counts[1]!%2!==0)throw new RangeError("half-model Y beam subdivisions require an even full-body count");
-  const halfRows=(spec.barCounts[1]+1)/2;
-  const requestedBeamCount=counts[0]!*halfRows*spec.barCounts[2]+counts[1]!/2*spec.barCounts[0]*spec.barCounts[2]
-    +(spec.includeZBars?counts[2]!*spec.barCounts[0]*halfRows:0);
+  const requestedBeamCount=counts[0]!*spec.barCounts[1]*spec.barCounts[2]+counts[1]!*spec.barCounts[0]*spec.barCounts[2]
+    +(spec.includeZBars?counts[2]!*spec.barCounts[0]*spec.barCounts[1]:0);
   if(!Number.isSafeInteger(requestedBeamCount)||requestedBeamCount>2000000)throw new RangeError("graded reinforcement exceeds beam allocation limit");
+  const fraction=spec.concrete.modelFraction;
+  const bounds=[fraction==="quarter"?[0,size[0]/2]:[-size[0]/2,size[0]/2],
+    fraction==="full"?[-size[1]/2,size[1]/2]:[0,size[1]/2],[0,size[2]]];
   const spacing=size.map((v,a)=>v/counts[a]!);
   const resolvedCover:number[]=[],coverCounts:number[][]=[],barSpacing:number[]=[],locations:number[][]=[];
   for(const a of [0,1,2] as const){
@@ -54,21 +51,32 @@ export function planGradedReinforcement(spec:GradedReinforcementSpec) {
     const addition=(multiple-interior%multiple)%multiple;
     const lo=low-Math.floor(addition/2),hi=high-Math.ceil(addition/2);
     if(lo<0||hi<0)throw new RangeError("bar-count alignment would make a cover negative");
-    if(a===1 && lo!==hi)throw new RangeError("Y cover alignment would move the bar row off the half-model symmetry plane");
     coverCounts.push([lo,hi]);resolvedCover.push(lo*spacing[a]!,hi*spacing[a]!);
     const step=(interior+addition)/intervals;
     barSpacing.push(step*spacing[a]!);
     const lower=a===0?-size[0]/2:a===1?-size[1]/2:0;
     const all=Array.from({length:spec.barCounts[a]},(_,i)=>lower+(lo+i*step)*spacing[a]!);
-    locations.push(a===1?all.filter(v=>v>=-1e-10*size[1]).map(v=>Math.abs(v)<1e-10*size[1]?0:v):all);
+    const tolerance=1e-10*size[a];
+    locations.push(all.filter(v=>v>=bounds[a]![0]!-tolerance&&v<=bounds[a]![1]!+tolerance)
+      .map(v=>Math.abs(v-bounds[a]![0]!)<tolerance?bounds[a]![0]!:Math.abs(v-bounds[a]![1]!)<tolerance?bounds[a]![1]!:v));
   }
+  // Preserve full-body subdivision points. A symmetry cut may split just one segment.
+  const axisCoordinates=counts.map((n,a)=>{
+    const start=a===2?0:-size[a]!/2,lo=bounds[a]![0]!,hi=bounds[a]![1]!,tol=1e-10*size[a]!;
+    return [lo,...Array.from({length:n+1},(_,i)=>start+i*spacing[a]!).filter(v=>v>lo+tol&&v<hi-tol),hi];
+  });
+  const axisCounts=axisCoordinates.map(v=>v.length-1);
   const [bx,by,bz]=locations.map(v=>v.length);
-  const axisBeamCounts=[counts[0]!*by!*bz!,counts[1]!/2*bx!*bz!,spec.includeZBars?counts[2]!*bx!*by!:0];
+  const axisBeamCounts=[axisCounts[0]!*by!*bz!,axisCounts[1]!*bx!*bz!,spec.includeZBars?axisCounts[2]!*bx!*by!:0];
   const beamCount=axisBeamCounts.reduce((s,v)=>s+v,0);
   if(!Number.isSafeInteger(beamCount)||beamCount>2000000)throw new RangeError("graded reinforcement exceeds beam allocation limit");
-  return {concrete,actualSize:[...size],counts,beamSpacing:spacing,coverCounts,resolvedCover,barSpacing,locations,
+  const sourceExtensions=[...(fraction!=="half"?["Correct full/quarter steel geometry by clipping the full-body layout; the source emits half-model steel."]:[]),
+    ...(spec.concrete.transitionStages!==1||!spec.concrete.thicknessTransition||spec.concrete.reductions.z!==3?["Multi-stage or alternative thickness grading reuses the native concrete kernel; this extends Code_Creat5."]:[])];
+  return {concrete,actualSize:[...size],counts,beamSpacing:spacing,coverCounts,resolvedCover,barSpacing,locations,bounds,axisCoordinates,
+    barGeometry:"global-axis-aligned; concrete grading tilt does not rotate reinforcement",sourceExtensions,
     axisBeamCounts,beamCount,concretePartId,rebarPartId,connectivity:spec.connectivity,
-    warnings:["Independent beam nodes: no embedding, bond, or contact constraints are generated.",
+    warnings:["Independent beam nodes: no embedding, bond, or contact constraints are generated.",...concrete.warnings,...sourceExtensions,
+      ...(axisCoordinates.some((v,a)=>v.some((x,i)=>i>0&&Math.abs(x-v[i-1]!-spacing[a]!)>1e-10*size[a]!))?["Symmetry clipping truncates boundary beam segments; interior segment spacing is unchanged."]:[]),
       ...(resolvedCover.some((v,i)=>Math.abs(v-spec.cover[i]!)>1e-10*spec.rebarMeshSize)?["Cover distances adjusted to beam-count alignment; inspect resolvedCover."]:[])]};
 }
 
@@ -78,12 +86,11 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
   if(mesh.elements.length+plan.beamCount>2000000)throw new RangeError("combined graded reinforcement exceeds allocation limit");
   const nodes:Point[]=mesh.nodes.map(p=>[...p]),beams:MixedBeamRecord[]=[];
   const lineSets:Record<string,number[]>={bars_x:[],bars_y:[],bars_z:[]};
-  const endIds:number[]=[],orientationIds:number[]=[],[L,W,H]=plan.actualSize;
-  const axisLengths=[L!,W!/2,H!],axisStarts=[-L!/2,0,0],axisCounts=[plan.counts[0]!,plan.counts[1]!/2,plan.counts[2]!];
+  const endIds:number[]=[],orientationIds:number[]=[];
   const addLine=(axis:0|1|2,start:number[])=>{
     const ids:number[]=[];
-    for(let i=0;i<=axisCounts[axis]!;i++){
-      const p=[...start];p[axis]=axisStarts[axis]!+axisLengths[axis]!*i/axisCounts[axis]!;
+    for(const coordinate of plan.axisCoordinates[axis]!){
+      const p=[...start];p[axis]=coordinate;
       ids.push(nodes.push(p));
     }
     endIds.push(...ids);
@@ -109,7 +116,11 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
     region.count++;region.minimumCornerScaledJacobian=Math.min(region.minimumCornerScaledJacobian,minimumHexCornerScaledJacobian(e.map(n=>mesh.nodes[n-1]!)));
   });
   return {model,concreteMesh:mesh,plan,parentElementIds:concrete.parentElementIds,coreParentIds:concrete.coreParentIds,
-    nodeSets:{concrete:mesh.nodes.map((_,i)=>i+1),rebar_endpoints:endIds,rebar_orientation:orientationIds},
+    nodeSets:{concrete:mesh.nodes.map((_,i)=>i+1),rebar_endpoints:endIds,rebar_orientation:orientationIds,
+      rebar_cut_x0:spec.concrete.modelFraction==="quarter"?endIds.filter(n=>Math.abs(nodes[n-1]![0]!)<1e-10*plan.actualSize[0]!):[],
+      rebar_cut_y0:spec.concrete.modelFraction!=="full"?endIds.filter(n=>Math.abs(nodes[n-1]![1]!)<1e-10*plan.actualSize[1]!):[]},
     cellSets:{concrete:model.solids.map(e=>e.id),...lineSets},
-    quality:{...concrete.quality,regions,sharedEndpointNodes:0,beamCount:beams.length,warnings:[...concrete.quality.warnings,...plan.warnings]}};
+    quality:{...concrete.quality,regions,
+      regionClassification:"core / refined outside-core support (including intermediate uniform cells in two-stage meshes) / unchanged far field",
+      sharedEndpointNodes:0,beamCount:beams.length,warnings:[...concrete.quality.warnings,...plan.warnings]}};
 }
