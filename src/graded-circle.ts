@@ -18,17 +18,27 @@ export interface CircularGradingSpec {
   reductions: {x:TransitionReduction;y:TransitionReduction};
   modelFraction: ModelFraction;
   angleDegrees?: number;
+  /** Reduce an excessive magnitude toward zero on the requested 0.1-degree step lattice. */
+  angleCorrection?: boolean;
+  elementLimit?: number;
+  /** Seek the finest feasible size on a bounded 1%-of-requested-size lattice. */
+  approachElementLimit?: boolean;
 }
 
 /** Circular solid with fixed outer boundary; the recovered branch uses Z ratio 3. */
 export function generateCircularGradedMesh(spec: CircularGradingSpec) {
-  const allowed=new Set(["radius","thickness","coreHalfSize","fineSize","coarseSize","reductions","modelFraction","angleDegrees"]);
+  const allowed=new Set(["radius","thickness","coreHalfSize","fineSize","coarseSize","reductions","modelFraction","angleDegrees","angleCorrection","elementLimit","approachElementLimit"]);
   const unknown=Object.keys(spec).filter(key=>!allowed.has(key));
   if(unknown.length)throw new RangeError(`unsupported circular options: ${unknown.join(", ")}`);
   for (const value of [spec.radius,spec.thickness,spec.coreHalfSize,spec.fineSize,spec.coarseSize]) {
     if (!(Number.isFinite(value) && value>0)) throw new RangeError("circular dimensions must be finite and positive");
   }
-  const angle=spec.angleDegrees??0;
+  const requestedAngle=spec.angleDegrees??0;
+  let angle=requestedAngle;
+  if(spec.angleCorrection!==undefined&&typeof spec.angleCorrection!=="boolean")throw new TypeError("angleCorrection must be boolean");
+  if(spec.elementLimit!==undefined&&(!Number.isSafeInteger(spec.elementLimit)||spec.elementLimit<1))throw new RangeError("elementLimit must be a positive safe integer");
+  if(spec.approachElementLimit!==undefined&&typeof spec.approachElementLimit!=="boolean")throw new TypeError("approachElementLimit must be boolean");
+  if(spec.approachElementLimit&&spec.elementLimit===undefined)throw new RangeError("approachElementLimit requires elementLimit");
   if(!Number.isFinite(angle)||Math.abs(angle)>=90)throw new RangeError("circular angleDegrees must be finite and strictly between -90 and 90");
   if (!["quarter","half","full"].includes(spec.modelFraction)) throw new RangeError("invalid circular modelFraction");
   if(angle!==0&&spec.modelFraction==="quarter")throw new RangeError("tilted quarter-circle cut geometry is not defined by the recovered source; use half or full");
@@ -36,20 +46,28 @@ export function generateCircularGradedMesh(spec: CircularGradingSpec) {
   if (![2,3].includes(rx) || ![2,3].includes(ry)) throw new RangeError("circular X/Y reductions must be 2 or 3");
   if(Object.keys(spec.reductions).some(key=>key!=="x" && key!=="y"))throw new RangeError("circular thickness reduction is fixed at 3");
   const {radius:R,thickness:H,coreHalfSize:d}=spec;
-  const offset=H*Math.tan(angle*Math.PI/180);
+  let offset=H*Math.tan(angle*Math.PI/180);
   if ((d+spec.coarseSize)**2+d*d>=R*R) throw new RangeError("circular transition band does not fit inside the radius");
-  if((d+spec.coarseSize+Math.abs(offset)/2)**2+d*d>=R*R)throw new RangeError("circular tilt leaves insufficient room for the transition band");
+  const fits=(value:number)=>(d+spec.coarseSize+Math.abs(value)/2)**2+d*d<R*R;
+  if(!fits(offset)&&spec.angleCorrection){
+    const bound=Math.atan2(2*(Math.sqrt(R*R-d*d)-d-spec.coarseSize),H)*180/Math.PI;
+    // Direct bounded step count replaces the source's loop and corrects either sign.
+    let steps=Math.max(1,Math.floor((Math.abs(angle)-bound)/.1)+1);
+    angle=Math.sign(requestedAngle)*Math.max(0,Math.abs(requestedAngle)-steps*.1);
+    offset=H*Math.tan(angle*Math.PI/180);
+    if(!fits(offset)){
+      steps++;
+      angle=Math.sign(requestedAngle)*Math.max(0,Math.abs(requestedAngle)-steps*.1);
+      offset=H*Math.tan(angle*Math.PI/180);
+    }
+  }
+  if(!fits(offset))throw new RangeError("circular tilt leaves insufficient room for the transition band");
   const requestedRadial=(R-d)/spec.coarseSize,radial=Math.round(requestedRadial);
   if (!Number.isSafeInteger(radial) || Math.abs(requestedRadial-radial)>1e-10 || radial<2) {
     throw new RangeError("circular outer width requires at least two integral coarse intervals");
   }
-  const aligned=(extent:number,ratio:number)=>{
-    const initial=Math.round(extent/spec.fineSize),multiple=ratio===2 ? 4:3;
-    const count=Math.ceil(initial/multiple)*multiple;
-    if (initial<1 || !Number.isSafeInteger(count)) throw new RangeError("invalid circular fine count");
-    return count;
-  };
-  const fineCounts=[aligned(d,rx),aligned(d,ry),aligned(H,3)];
+  const budget=resolveCircularBudget(spec,radial);
+  const fineCounts=budget.fineCounts;
   const [nx,ny,nz]=[fineCounts[0]!/rx,fineCounts[1]!/ry,fineCounts[2]!/3];
   const xSigns=spec.modelFraction==="quarter" ? [1]:[1,-1];
   const ySigns=spec.modelFraction==="full" ? [1,-1]:[1];
@@ -122,12 +140,58 @@ export function generateCircularGradedMesh(spec: CircularGradingSpec) {
   }
   if (!checkNoHangingNodes(current.mesh,tolerance*10).ok) throw new Error("circular output is not conforming");
   const quality=auditCircularMesh(current.mesh,baseMesh,spec,tolerance*10);
+  if(current.mesh.elements.length!==budget.expectedElements)throw new Error("circular topology count does not match the budget plan");
+  if(spec.elementLimit!==undefined&&current.mesh.elements.length>spec.elementLimit)throw new Error("circular output exceeds elementLimit");
   return {mesh:current.mesh,baseMesh,parentElementIds:current.lineage,coreParentIds,
     plan:{fineCounts,fineSpacing:[d/fineCounts[0]!,d/fineCounts[1]!,H/fineCounts[2]!],radialCount:radial,
       effectiveReductions:[rx,ry,3],modelFraction:spec.modelFraction,
-      angleDegrees:angle,offset,
+      requestedAngleDegrees:requestedAngle,angleDegrees:angle,offset,
+      elementBudget:budget,
+      angleCorrection:{enabled:spec.angleCorrection??false,applied:angle!==requestedAngle,stepDegrees:0.1,
+        rule:"Reduce absolute angle until the transition band fits; final topology and Jacobian audit still required."},
       mapping:angle===0?"equal-angle circular boundary with transfinite radial interpolation":"affine core shear with radially tapered displacement to the fixed circular boundary",
-      warnings:spec.modelFraction==="quarter" ? ["Native quarter geometry is a quarter disk; recovered GUI vi=1 emits a half disk."]:[]},quality};
+      warnings:[...(spec.modelFraction==="quarter" ? ["Native quarter geometry is a quarter disk; recovered GUI vi=1 emits a half disk."]:[]),
+        ...(angle!==requestedAngle?[`Tilt reduced from ${requestedAngle} to ${angle} degrees to fit the circular transition band; this is not a quality optimizer.`]:[]),
+        ...(budget.stepIndex!==0?[`Fine size adjusted from ${spec.fineSize} to ${budget.effectiveFineSize} under the element budget; inspect actual fineSpacing.`]:[])]},quality};
+}
+
+function resolveCircularBudget(spec:CircularGradingSpec,radial:number){
+  const {coreHalfSize:d,thickness:H,fineSize}=spec,rx=spec.reductions.x,ry=spec.reductions.y;
+  const copies={quarter:1,half:2,full:4}[spec.modelFraction];
+  const at=(stepIndex:number)=>{
+    const effectiveFineSize=fineSize*(1+stepIndex/100);
+    const fineCounts=[d,d,H].map((extent,a)=>{
+      const initial=Math.round(extent/effectiveFineSize),multiple=[rx,ry,3][a]===2?4:3;
+      const n=Math.ceil(initial/multiple)*multiple;
+      if(initial<1||!Number.isSafeInteger(n))throw new RangeError("invalid circular fine count");
+      return n;
+    });
+    const [fx,fy,fz]=fineCounts,[nx,ny,nz]=[fx!/rx,fy!/ry,fz!/3];
+    // Each outer face column combines its in-plane ratio with fixed Z=3.
+    const expectedElements=copies*(fx!*fy!*fz!+(nx+ny)*(radial-1)*nz+((rx===2?9:13)*nx+(ry===2?9:13)*ny)*nz);
+    const allocationBound=copies*(nx*ny+radial*(nx+ny))*nz*rx*ry*3;
+    return {stepIndex,effectiveFineSize,fineCounts,expectedElements,allocationBound};
+  };
+  const initial=at(0);
+  let resolved=initial;
+  if(spec.elementLimit!==undefined){
+    const fits=(r:ReturnType<typeof at>)=>Number.isSafeInteger(r.expectedElements)&&r.expectedElements<=spec.elementLimit!&&r.allocationBound<=2000000;
+    if(spec.approachElementLimit||!fits(initial)){
+      let low=spec.approachElementLimit?-99:0;
+      // Above twice the smallest extent a source-rounded axis count becomes zero.
+      let high=Math.max(0,Math.ceil((2*Math.min(d,H)/fineSize-1)*100)-1);
+      if(!Number.isSafeInteger(high))throw new RangeError("circular budget search exceeds the safe step range");
+      if(!fits(at(high)))throw new RangeError("elementLimit cannot fit the minimum aligned circular mesh");
+      while(low<high){
+        const mid=low+Math.floor((high-low)/2);
+        if(fits(at(mid)))high=mid;else low=mid+1;
+      }
+      resolved=at(low);
+    }
+  }
+  return {...resolved,requestedFineSize:fineSize,elementLimit:spec.elementLimit??null,
+    approach:spec.approachElementLimit??false,stepSize:fineSize*.01,
+    policy:"Finest feasible candidate on the bounded 1% lattice; preserve geometry and recheck actual output count."};
 }
 
 function auditCircularMesh(mesh:Mesh,base:Mesh,spec:CircularGradingSpec,tolerance:number) {

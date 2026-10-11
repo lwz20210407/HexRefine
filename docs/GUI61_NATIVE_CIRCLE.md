@@ -60,9 +60,8 @@ GUI's numeric fraction values uniformly across generators.
 
 ## Not Implemented Here
 
-- Nonzero quarter-model tilt, automatic circular angle correction, and exact
+- Nonzero quarter-model tilt and exact
   replay of the source's angle-dependent outer block anchors.
-- The GUI's automatic fine-size search to approach an element-count limit.
 - Thickness-off or arbitrary Z ratios: this source branch fixes the Z ratio at 3.
 - Multiple transition bands, cylindrical shells, physical multilayers, or beams.
 
@@ -114,3 +113,63 @@ a trilinear element. Solver stability and solution sensitivity remain untested.
 Local evidence: `circle_tilt_matrix/{independent_audit,region_quality}.json`,
 `circle_tilt_views/manifest.json` and `CIRCLE_TILT_CASES.html` under the same
 dated validation directory. Tests: `test/graded-circle-tilt.test.mjs`.
+
+## Automatic Angle Correction
+
+`angleCorrection: true` opts into reducing the requested magnitude toward zero
+in steps of 0.1 degrees until the circular band fits. The step lattice starts
+at the requested angle (60.07 -> 55.27, not 55.2). Negative angles are treated
+symmetrically, fixing the source's signed-offset test. No correction is applied
+to a valid angle; without opt-in, excessive tilt is rejected. The plan records
+requested/effective angles, offset, application status and a warning.
+
+This is a geometric correction, not a quality optimizer. Final conformity,
+corner/Gauss positivity and volume checks still run; e.g. radius20/thickness6/
+coreHalf8/coarseSize2 at 80 degrees still fails after geometric correction.
+No failed output is written by the CLI. For coarseSize6, fineSize1, half model,
+all four XY ratios at +/-60.07 correct to +/-55.27 and pass these checks.
+Positive cases match the raw MATLAB result. Negative cases match a separate
+source copy correcting only the absolute-offset and toward-zero sign rules.
+
+The resulting extreme native cases have minimum SJ 0.0560-0.0653, below their
+corresponding corrected TG minima 0.0673-0.0859. These are **not covered by the
+accepted +/-15-degree quality baseline**. The capability is implemented and
+tested, but quality improvement of the extreme mapping remains a separate
+open task. The uncorrected negative source still emits a mesh at -60.07.
+
+## Element Budget and Approach
+
+Optional `elementLimit` caps final hex count. Without `approachElementLimit`,
+the requested fine size is retained when feasible, otherwise coarsened on
+steps of 1% of the originally requested size. With `approachElementLimit:true`,
+the finest feasible candidate is chosen on that same lattice. The finer search
+stops at 1% of the initial size; the coarse end stops before source-rounded
+axis counts become zero. A bounded binary search replaces repeated meshing.
+Impossible limits, invalid controls and unsafe search ranges are rejected.
+
+Counting uses the actual native topology: an in-plane 2:1 plus Z3 face column
+has 9 cells, a 3:1 plus Z3 column 13. The source's fixed-13 estimate is therefore
+not used for mixed ratios. The existing conservative two-million-cell allocation
+guard also constrains feasibility. Geometry and radius are unchanged; requested
+size, effective size, aligned counts, step index, expected count and actual
+fine spacing are disclosed. Final output count must equal the plan and not
+exceed the limit. This is a discrete size search, not a globally optimal mesh
+or quality optimization.
+
+Original MATLAB/TG 3/3 half-model probes at radius20, H6, d8, coarse2, fine1:
+
+| Mode | Limit | Resolved fine-size parameter | Hex count |
+| --- | ---: | ---: | ---: |
+| Cap only | 800 | 1.24 | 720 |
+| Approach | 1500 | 0.93 | 1404 |
+
+Native and source agree on these probes. The source approach temporarily
+overshoots and then backs off in its outer loop; the measured result is not
+an over-limit source bug. Twelve native fraction/ratio budget tests additionally
+verify count equality and that the preceding finer lattice step exceeds the
+limit. Budget and angle parameters are available through the same CLI.
+
+Evidence: `circle_controls_oracle`, `circle_controls_native`,
+`circle_controls_views` and `CIRCLE_CONTROLS_CASES.html` under the dated
+validation directory. Tests: `graded-circle-correction.test.mjs` and
+`graded-circle-budget.test.mjs`. GUI wiring remains pending.

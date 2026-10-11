@@ -38,7 +38,7 @@ test('circular generator refuses unsupported GUI options instead of ignoring the
   assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:10,modelFraction:'quarter'}),/tilted quarter/);
   assert.throws(()=>generateCircularGradedMesh({...base,thicknessTransition:false}),/unsupported circular options/);
   assert.throws(()=>generateCircularGradedMesh({...base,reductions:{x:3,y:3,z:2}}),/fixed at 3/);
-  assert.throws(()=>generateCircularGradedMesh({...base,elementLimit:500}),/unsupported circular options/);
+  assert.throws(()=>generateCircularGradedMesh({...base,elementLimit:0}),/positive safe integer/);
   assert.throws(()=>generateCircularGradedMesh({...base,radius:10}),/does not fit/);
 });
 

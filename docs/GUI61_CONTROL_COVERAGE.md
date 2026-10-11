@@ -51,8 +51,10 @@ single-band reference tests remain separately listed.
   cases**, with fixed thickness reduction 3:1. Native quarter geometry repairs
   the source's half-disk output. Another **16 +/-15-degree half/full cases**
   exercise the independent native core-shear mapping with original TG oracles.
-  Nonzero quarter tilt, circular angle correction and automatic element-budget
-  optimization remain unsupported. See the circular contract for mapping differences.
+  Nonzero quarter tilt remains unsupported. Circular angle correction and
+  bounded element-budget search now have native interfaces and separate
+  MATLAB/TG probes; GUI wiring and extreme-angle quality remain open.
+  See the circular contract for mapping differences and acceptance limits.
 - Shared UI controls cannot be assumed to affect every generator: the circle
   source fixes max_z=min_z/3; the cylinder has its own thickness switch and
   fixed other reductions. The 2D generators also have their own contracts.

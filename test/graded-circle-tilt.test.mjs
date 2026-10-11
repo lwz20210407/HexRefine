@@ -31,5 +31,5 @@ for(const modelFraction of ['half','full'])for(const x of [2,3])for(const y of [
 test('circular tilt rejects unsupported cut geometry and invalid angles',()=>{
   for(const angleDegrees of [90,-90,NaN,Infinity,85,-85])assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees}));
   assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:15,modelFraction:'quarter'}),/quarter/);
-  assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:15,angleCorrection:true}),/unsupported/);
+  assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:15,angleCorrection:1}),/boolean/);
 });
