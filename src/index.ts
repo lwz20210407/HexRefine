@@ -32,6 +32,8 @@ export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./gr
 export * from "./lsdyna-mixed.js";
 export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformReinforcementSpec } from "./reinforced-uniform.js";
 export { planGradedReinforcement, generateGradedReinforcedMesh, type GradedReinforcementSpec } from "./reinforced-graded.js";
+export * from "./gui61-generators.js";
+export {mountGui61Workbench} from "./gui61-workbench.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";
 export * from "./topology.js";

@@ -736,6 +736,7 @@
             <button id="help-open" class="text-button" type="button">Help</button>
           </div>
         </div>
+        <section id="gui61-controls"></section>
         <section>
           <h2>Grid</h2>
           <div class="controls">
@@ -1229,6 +1230,8 @@
     <script src="./runtime-config.js"></script>
     <script type="module">
       import {
+        generateGui61,
+        mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
         activeBuildHasSessionNodeIds,
@@ -1410,6 +1413,9 @@
         return `${actionLabel} mesh has ${elementCount} elements. GUI interaction is optimized for up to about ${limit} elements in public mode; larger models are recommended through Offline Job.`;
       }
 
+      let gui61Controller = null;
+      let gui61Preview = null;
+      let gui61ViewMode = "solid";
       let mesh = scaleMesh(createHexUnitCubeMesh(10, 2, 1), [10, 2, 1]);
       let refinementSession = createRefinementSession(mesh);
       let meshMergeTolerance = mergeToleranceFromBounds({ min: [0, 0, 0], max: [10, 2, 1] });
@@ -2312,6 +2318,16 @@
           camera.roll = 0;
           return;
         }
+        if (gui61Preview) {
+          const parameters = gui61Preview.request.parameters;
+          const fraction = parameters.concrete?.modelFraction ?? parameters.modelFraction ?? "full";
+          const eye = fraction === "quarter" ? [-1,-1,1] : [.15,-1,.65];
+          const length = Math.hypot(...eye);
+          camera.yaw = Math.atan2(eye[0],eye[2]);
+          camera.pitch = Math.asin(eye[1]/length);
+          camera.roll = Math.atan2(-Math.sin(camera.yaw),-Math.cos(camera.yaw)*Math.sin(camera.pitch));
+          return;
+        }
         camera.yaw = -0.7;
         camera.pitch = 0.46;
         camera.roll = 0;
@@ -2772,7 +2788,9 @@
         }
         try {
           await runWithBusyPause("Importing mesh...");
-          const importedMesh = parseMeshText(await file.text(), file.name);
+          const importedText = await file.text();
+          if (/^\s*\*ELEMENT_BEAM(?:[_\s,]|$)/mi.test(importedText)) throw new Error("普通细化导入不支持含梁K，已拒绝以避免丢失钢筋；参数模型请回导参数JSON。");
+          const importedMesh = parseMeshText(importedText, file.name);
           const overGuiGuidance = guiElementLimitExceeded(importedMesh.elements.length);
           meshMergeTolerance = mergeToleranceFromBounds(boundsOfMesh(importedMesh));
           resetRefinementSession(importedMesh);
@@ -2860,6 +2878,7 @@
       }
 
       async function applyRefine() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -2966,6 +2985,7 @@
       }
 
       async function undoRefineCommand() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -3014,6 +3034,7 @@
       }
 
       async function redoRefineCommand() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4140,6 +4161,7 @@
       }
 
       async function deleteSelectedElements() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4251,6 +4273,9 @@
         assignMaterialButton.disabled = value;
         deleteSetButton.disabled = value;
         restoreAutosaveButton.disabled = value;
+        if (gui61Preview) {
+          for (const control of [previewButton,refineButton,deleteButton,undoButton,redoButton,exportButton,exportInpButton,exportOfflineButton,exportScriptButton,previewBoundaryLayerButton,growBoundaryLayerButton,autoTemplateButton,previewTemplateButton,replaceTemplateButton,saveNodeSetButton,saveCellSetButton,assignMaterialButton,deleteSetButton]) control.disabled = true;
+        }
       }
 
       function emptyMeshForCurrentKind() {
@@ -4319,6 +4344,7 @@
       }
 
       function markMeshChanged() {
+        if (gui61Preview) {gui61Preview = null;gui61Controller?.invalidate();}
         meshVersion += 1;
         hiddenElements = new Set();
         renderVisibilityVersion += 1;
@@ -4465,6 +4491,7 @@
       }
 
       async function exportVtk() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4491,6 +4518,7 @@
       }
 
       async function exportInp() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4571,6 +4599,7 @@
       }
 
       async function exportOfflineJob() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4872,6 +4901,7 @@
       }
 
       function applyQ1BoundaryLayerGrow() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -4932,6 +4962,7 @@
       }
 
       function applyQ1RectangleCircleTemplate() {
+        if (gui61ReadOnly()) return;
         if (busy) {
           return;
         }
@@ -5651,6 +5682,9 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         fillCanvasBackground();
         clearWebglLayer();
+        if (gui61Preview?.model && gui61ViewMode === "bars") {
+          drawCoordinateAxesOverlay();drawModelRulersOverlay();return;
+        }
         const previewRoles = previewRoleMap();
         performanceStats.skippedTinyEdges = 0;
         if (usesUltraPointMode()) {
@@ -5794,6 +5828,7 @@
       }
 
       function drawCoordinateAxesOverlay() {
+        drawGui61Bars();
         const size = 68;
         const margin = 14;
         const origin = {
@@ -7878,6 +7913,44 @@
         invalidateWebglSurfaceProxies();
       }
 
+      function gui61ReadOnly() {
+        if (!gui61Preview) return false;
+        setStatus(gui61Preview.summary.beams ? "当前为钢筋模型生成快照，请使用生成K导出；不支持丢弃钢筋后自动细化。" : "当前为参数生成快照，请先转入局部细化。", false);
+        return true;
+      }
+
+      function installGui61Result(result) {
+        meshMergeTolerance = mergeToleranceFromBounds(boundsOfMesh(result.mesh));
+        resetRefinementSession(result.mesh);
+        resetDeleteHistory();selected = new Set();selectedNodes = new Set();
+        nodeSets.clear();cellSets.clear();cellSetMaterials.clear();
+        preview = null;q1OperationPreview = null;lastResult = null;lastPreparation = null;
+        syncKindControlsFromMesh();gui61Preview = result;
+        resetCameraAnglesForKind();projectionMode = "parallel";syncProjectionToggle();fitCameraToMesh();syncSliceControls();
+        setGridCommandFactoryToImported(result.mesh, result.request.kind + ".k");resetCommandScript("gui61-generate");
+        updateReport();
+        const plan = result.plan.concrete ?? result.plan;
+        reportEl.textContent = ["参数生成快照 · 只读",`nodes: ${result.summary.nodes}`,`solid / quad / beam: ${result.summary.solids} / ${result.summary.quads} / ${result.summary.beams}`,
+          `angle: ${plan.effectiveAngleDegrees ?? plan.angleDegrees ?? 0}`,
+          `offset: ${plan.offset ?? 0}`,
+          `min SJ: ${result.quality.minimumCornerScaledJacobian ?? result.quality.minimumCornerJacobian ?? "see report"}`,
+          `warnings: ${result.summary.warnings.length}`].join("\n");
+        setBusy(false);draw();setStatus(`参数网格已生成：${result.summary.solids} 实体 / ${result.summary.quads} 面 / ${result.summary.beams} 梁。`,true);
+      }
+
+      function drawGui61Bars() {
+        if (!gui61Preview?.model || gui61ViewMode === "solid") return;
+        if (sliceEnabledEl.checked && gui61ViewMode !== "bars") return;
+        const model = gui61Preview.model;
+        ctx.save();ctx.strokeStyle = "#159bbb";ctx.lineWidth = 1.5;ctx.beginPath();
+        for (const beam of model.beams) {
+          const a = projectPoint(model.nodes[beam.nodes[0]-1]);
+          const b = projectPoint(model.nodes[beam.nodes[1]-1]);
+          ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+        }
+        ctx.stroke();ctx.restore();
+      }
+
       function isTypingTarget(target) {
         return target instanceof HTMLInputElement ||
           target instanceof HTMLSelectElement ||
@@ -8452,6 +8525,19 @@
         kindEl.dispatchEvent(new Event("change"));
       }
 
+      gui61Controller = mountGui61Workbench(document.querySelector("#gui61-controls"), {
+        isBusy: () => busy,
+        run: async request => {
+          try {
+            await runWithBusyPause("正在生成参数网格…");
+            const response = await runRefinementWorker({kind:"gui61-generate",request});
+            return response.result;
+          } finally {setBusy(false);}
+        },
+        show: installGui61Result,
+        view: mode => {gui61ViewMode = mode;requestDraw();},
+        convert: () => {gui61Preview = null;gui61ViewMode = "solid";setBusy(false);updateReport();draw();}
+      });
       syncKindControls();
       syncExportKindOptions();
       setMiddleBox();

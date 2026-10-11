@@ -2,8 +2,10 @@
 
 Checkpoint: 2026-10-11. This reports actual native implementations and measured
 oracle coverage, not a claim of complete GUI_tg 6.1 equivalence. Native runtime
-is TypeScript/Node. Python can call the versioned CLI; a pure-Python kernel and
-new GUI wiring have NOT been implemented.
+is TypeScript/Node. Python can call the versioned CLI; a pure-Python kernel has
+NOT been implemented. All seven menu families now connect their implemented
+subsets to the existing browser workbench; see GUI61_WORKBENCH.md. This is not
+a claim that every original parameter combination has passed.
 
 ## Feature Matrix
 
@@ -13,8 +15,8 @@ new GUI wiring have NOT been implemented.
 | F02 double bands | 894, 1076/1129+, Creat_A/B/C/D | Implemented for rectangles | 16 cases, 0.618 allocation and count alignment; exactly two transitions |
 | F03 tilt | 984+, 994, 1200+ | Rectangular single/double and circular half/full implemented | Positive/negative TG probes; circular uses documented alternate mapping; quarter nonzero tilt pending |
 | F04 fractions | Each generator's vi branch | Explicit coverage for ported generators | Corrected circular quarter and cylinder full; no automatic solver BC |
-| F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Circular/cylindrical subsets plus circular correction/budget implemented | Cylinder radial switch/layers; circular quarter tilt, extreme-angle quality and GUI pending |
-| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform budgets, graded fractions/tilt/two-stage and matched shared endpoints | Embedded coupling/GUI and broader combinations pending; unmatched shared endpoints rejected |
+| F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Circular/cylindrical subsets plus circular correction/budget and GUI implemented | Cylinder radial switch/layers; circular quarter tilt and extreme-angle quality pending |
+| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform budgets, graded fractions/tilt/two-stage, matched shared endpoints and GUI | Broader combinations pending; unmatched shared endpoints rejected; embedded coupling deferred |
 | F07 2D | Code_Creat7/6, 2199+, 2386+ | Implemented under source-specific contracts | 12 rectangle and 3 circle TG cases; Q1/SHELL export, geometric sets |
 | F08 interfaces | repair chain, v15/v16/vv15/vv16 | Direct conformity for ported generators; baseline replay verified | General imported-K repair is NOT implemented |
 
@@ -91,11 +93,11 @@ now requires an explicit separate/shared-node choice, uses noncollinear N3
 nodes and does not generate physical solver cards or unconditional node merges.
 See [the uniform RC contract](GUI61_NATIVE_REINFORCED.md).
 
-1. Extend [graded reinforcement](GUI61_NATIVE_REINFORCED_GRADED.md): GUI wiring,
-   coupling interfaces and broader combined inputs. Fractions, half/full +/-10
+1. Extend [graded reinforcement](GUI61_NATIVE_REINFORCED_GRADED.md): broader
+   original combined inputs. Coupling extensions are deferred. Fractions, half/full +/-10
    tilt, asymmetric row clipping and three double-stage extensions now have
    an additional 14-case matrix, beyond the nine initial source comparisons.
-2. Uniform reinforcement broader input coverage and GUI wiring. Quantity
+2. Uniform reinforcement broader input coverage. Quantity
    optimization now has bounded native search, dimension-change guards and
    original/resolved-size source probes. Mixed NODE/SOLID/BEAM output is implemented; never use the original solid-only
    repair writer as a faithful mixed-deck exporter.
@@ -104,7 +106,7 @@ See [the uniform RC contract](GUI61_NATIVE_REINFORCED.md).
    now have native implementations and source probes. Half/full tilt has 16
    original MATLAB/TG comparisons and region-specific quality records; low SJ
    in the measured transition band is accepted with a retained warning.
-4. Supported imported-interface repair patterns, UI integration, documentation,
+4. Supported imported-interface repair patterns, documentation,
    engineering-scale cases and review before publication.
 
 Local evidence is retained at
@@ -112,3 +114,21 @@ Local evidence is retained at
 The earlier committed/pushed baseline is 5486d9e. The validated GUI61 batch is
 recorded in scoped local checkpoint commits. Remote publication is tracked
 separately and is not implied by a local commit or this feature matrix.
+
+## Browser Workbench Checkpoint
+
+The GUI batch full suite passed 764/764 before the final beam-import guard.
+Targeted tests passed 17/17 after the final guard (including its new regression).
+An actual beam-bearing K import was refused with the existing mesh unchanged.
+Seven real browser generation/download paths and eleven combination attempts
+(nine successful, two deliberately rejected) are recorded, along with mobile
+layout and offline standalone generation. Ordinary solid-only import refuses
+beam decks; mixed snapshots retain BEAM output and cannot silently enter the
+solid-only refinement engine. Local evidence is in gui61_workbench and
+GUI61_INTERACTIVE_WORKBENCH.html under the validation directory.
+
+The original four-parent repair benchmark has a scratch native-template probe,
+not a shipped repair API or a general repair certification. Remaining repair
+patterns and circular limitations stay open. Per user instruction, stop after
+this checkpoint and the requested push to the user's fork development branch,
+then wait for further instructions. Do not merge the main branch automatically.

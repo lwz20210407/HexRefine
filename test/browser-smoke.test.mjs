@@ -4,6 +4,14 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
+test("ordinary browser import rejects beam decks before solid-only parsing", async () => {
+  const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
+  const importer = extractNamedFunction(gui, "importMeshFile");
+  const guard = importer.indexOf("ELEMENT_BEAM");
+  assert.ok(guard >= 0 && guard < importer.indexOf("parseMeshText("));
+  assert.match(importer, /throw new Error\("普通细化导入不支持含梁K/);
+});
+
 function extractNamedFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `missing function ${name}`);

@@ -1,4 +1,5 @@
 import {
+  generateGui61,
   activeBuildCellIdByElementId,
   buildActiveMeshWithMap,
   buildRefinementSessionExport,
@@ -13,6 +14,12 @@ import {
 self.addEventListener("message", (event) => {
   const request = event.data;
   try {
+    if (request.kind === "gui61-generate") {
+      const start = performance.now();
+      const result = generateGui61(request.request);
+      self.postMessage({ok:true,kind:request.kind,result,elapsedMs:performance.now()-start});
+      return;
+    }
     if (request.kind === "check-hanging") {
       const start = performance.now();
       const report = checkNoHangingNodes(request.mesh, request.tolerance);

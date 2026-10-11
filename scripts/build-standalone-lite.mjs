@@ -37,6 +37,8 @@ function buildStandaloneHtml(html, importMap) {
   const runtimeScript = `<script>window.HEXREFINE_RUNTIME={appMode:"internal",guiElementLimit:null};window.COMFORMHEX_RUNTIME=window.HEXREFINE_RUNTIME;window.HEXREFINE_STANDALONE=true;window.COMFORMHEX_STANDALONE=true;</script>`;
   const importMapScript = `<script type="importmap">${JSON.stringify({ imports: importMap }, null, 2)}</script>`;
   const importBlock = `import {
+        generateGui61,
+        mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
         activeBuildHasSessionNodeIds,
@@ -71,6 +73,10 @@ function buildStandaloneHtml(html, importMap) {
         updateStats();
         const totalStart = performance.now();
         try {
+          if (request.kind === "gui61-generate") {
+            const result = generateGui61(request.request);
+            return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};
+          }
           if (request.kind === "check-hanging") {
             const report = checkNoHangingNodes(request.mesh, request.tolerance);
             return {
