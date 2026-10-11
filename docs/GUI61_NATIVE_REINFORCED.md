@@ -1,7 +1,8 @@
 # Native Uniform Reinforced Concrete
 
-Status: initial uniform-grid subset of Code_Creat4, not the graded Code_Creat5
-branch and not a complete runnable LS-DYNA analysis deck. Production generation
+Status: initial uniform-grid subset of Code_Creat4. The graded Code_Creat5
+subset has a [separate contract](GUI61_NATIVE_REINFORCED_GRADED.md). Neither is
+a complete runnable LS-DYNA analysis deck. Production generation
 uses only TypeScript/Node. MATLAB/TG remain independent development oracles.
 
 ## Explicit Choices

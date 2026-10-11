@@ -14,7 +14,7 @@ new GUI wiring have NOT been implemented.
 | F03 tilt | 984+, 994, 1200+ | Rectangular single/double and circular half/full implemented | Positive/negative TG probes; circular uses documented alternate mapping; quarter nonzero tilt pending |
 | F04 fractions | Each generator's vi branch | Explicit coverage for ported generators | Corrected circular quarter and cylinder full; no automatic solver BC |
 | F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Initial circular/cylindrical subsets implemented | Cylinder radial switch and separated physical layers; circular automatic angle correction/element-budget search pending |
-| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform subset implemented | Explicit separate/shared nodes, correct beam counts and mixed mesh export; graded/bond-slip/optimization pending |
+| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform and limited graded-half subsets implemented | Uniform separate/shared; graded separate only, zero tilt, one stage; further fractions/tilt/bond-slip/optimization pending |
 | F07 2D | Code_Creat7/6, 2199+, 2386+ | Implemented under source-specific contracts | 12 rectangle and 3 circle TG cases; Q1/SHELL export, geometric sets |
 | F08 interfaces | repair chain, v15/v16/vv15/vv16 | Direct conformity for ported generators; baseline replay verified | General imported-K repair is NOT implemented |
 
@@ -26,6 +26,7 @@ See the [control-by-control coverage ledger](GUI61_CONTROL_COVERAGE.md) before
 calling any branch complete. Same-geometry rectangular zero-angle coverage is
 now 72 combinations; the hollow-cylinder switch/fraction/physical-layer grid
 has 12. These do not certify every angle or every other GUI branch.
+The complete remaining checklist is [GUI61_PORT_TODO.md](GUI61_PORT_TODO.md).
 
 ## Bugs and Differences Are Not Copied Blindly
 
@@ -49,6 +50,10 @@ Recovered source archives are not included in this repository.
 
 - Latest completed integrated full run, including the cylinder addition:
   **692/692 passing** after circular half/full tilt, with type checks and build also passing.
+- Graded-reinforcement addition: initial full run **701/702 passing**, with only
+  the stale embedded standalone bundle failing. After regeneration all seven
+  browser smoke tests pass. Ten new graded tests and nine independent MATLAB/TG
+  comparisons pass; this is not described as a fresh 702/702 full run.
 - Cylinder addition: **9/9 focused tests passing**, plus CLI output coverage.
 - TrueGrid batch invocation is established (`i=... g=nogui s=...`), with
   dedicated output/session paths. Process success is separate from mesh validity.
@@ -86,10 +91,13 @@ now requires an explicit separate/shared-node choice, uses noncollinear N3
 nodes and does not generate physical solver cards or unconditional node merges.
 See [the uniform RC contract](GUI61_NATIVE_REINFORCED.md).
 
-1. Reinforced uniform/graded concrete: recover callback inputs; run small TG
-   oracles; determine actual bar-node coupling and hidden-Z-bar behavior.
-2. Add explicit mixed NODE/SOLID/BEAM output with PID and ID contracts; never
-   run the original solid-only repair writer as a faithful mixed-deck exporter.
+1. Extend the [graded reinforcement subset](GUI61_NATIVE_REINFORCED_GRADED.md):
+   angle, corrected fractions, unsupported cover/count patterns and GUI wiring.
+   Its nine initial cases already match source beam positions/segments and
+   resolved parameters, with separate beam nodes and explicit hidden-Z behavior.
+2. Uniform reinforcement budget optimization and broader input coverage. Mixed
+   NODE/SOLID/BEAM output is implemented; never use the original solid-only
+   repair writer as a faithful mixed-deck exporter.
 3. Circular quarter-tilt semantics, automatic angle correction and count-budget
    adjustment, followed by broader curved tests. Half/full tilt now has 16
    original MATLAB/TG comparisons and region-specific quality records; low SJ

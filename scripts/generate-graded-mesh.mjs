@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {generateRectangularGradedMesh,generateCircularGradedMesh,generateRectangularGradedQuadMesh,generateCircularGradedQuadMesh,generateCylindricalGradedMesh,
-  generateUniformReinforcedMesh,meshToLsdynaMixedKeyword,parseNativeLsdynaMixedKeyword,
+  generateUniformReinforcedMesh,generateGradedReinforcedMesh,meshToLsdynaMixedKeyword,parseNativeLsdynaMixedKeyword,
   meshToLsdynaKeyword,meshToLsdynaShellKeyword,parseMeshText,minElementEdgeLength} from '../dist/index.js';
 
 async function main() {
@@ -10,7 +10,7 @@ async function main() {
   const request=JSON.parse(await fs.readFile(path.resolve(inputPath),'utf8'));
   const generators=new Map([['rectangular-solid',generateRectangularGradedMesh],['circular-solid',generateCircularGradedMesh],
     ['rectangular-quad',generateRectangularGradedQuadMesh],['circular-quad',generateCircularGradedQuadMesh],['cylindrical-solid',generateCylindricalGradedMesh],
-    ['reinforced-uniform',generateUniformReinforcedMesh]]);
+    ['reinforced-uniform',generateUniformReinforcedMesh],['reinforced-graded',generateGradedReinforcedMesh]]);
   if (request.schemaVersion!==1 || !generators.has(request.kind) || !request.parameters) {
     throw new Error('Expected schemaVersion=1, a supported mesh kind, and parameters');
   }

@@ -31,6 +31,7 @@ export { generateCircularGradedQuadMesh, type CircularQuadSpec } from "./graded-
 export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./graded-cylinder.js";
 export * from "./lsdyna-mixed.js";
 export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformReinforcementSpec } from "./reinforced-uniform.js";
+export { planGradedReinforcement, generateGradedReinforcedMesh, type GradedReinforcementSpec } from "./reinforced-graded.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";
 export * from "./topology.js";
