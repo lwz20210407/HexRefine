@@ -11,9 +11,9 @@ new GUI wiring have NOT been implemented.
 | --- | --- | --- | --- |
 | F01 independent axes | GUI_tg.m 252/277/302, 978+ | Implemented for rectangular generation | 36 single-band ratio/thickness/fraction cases; not general imported-Hex anisotropy |
 | F02 double bands | 894, 1076/1129+, Creat_A/B/C/D | Implemented for rectangles | 16 cases, 0.618 allocation and count alignment; exactly two transitions |
-| F03 tilt | 984+, 994, 1200+ | Rectangular single/double implemented | Positive/negative TG probes; circular nonzero tilt pending |
+| F03 tilt | 984+, 994, 1200+ | Rectangular single/double and circular half/full implemented | Positive/negative TG probes; circular uses documented alternate mapping; quarter nonzero tilt pending |
 | F04 fractions | Each generator's vi branch | Explicit coverage for ported generators | Corrected circular quarter and cylinder full; no automatic solver BC |
-| F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Initial circular/cylindrical subsets implemented | Cylinder radial switch and separated physical layers; circular tilt/element-budget search pending |
+| F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Initial circular/cylindrical subsets implemented | Cylinder radial switch and separated physical layers; circular automatic angle correction/element-budget search pending |
 | F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform subset implemented | Explicit separate/shared nodes, correct beam counts and mixed mesh export; graded/bond-slip/optimization pending |
 | F07 2D | Code_Creat7/6, 2199+, 2386+ | Implemented under source-specific contracts | 12 rectangle and 3 circle TG cases; Q1/SHELL export, geometric sets |
 | F08 interfaces | repair chain, v15/v16/vv15/vv16 | Direct conformity for ported generators; baseline replay verified | General imported-K repair is NOT implemented |
@@ -48,7 +48,7 @@ Recovered source archives are not included in this repository.
 ## Verification and Honest Limits
 
 - Latest completed integrated full run, including the cylinder addition:
-  **675/675 passing** after uniform reinforcement and angle correction, with type checks and build also passing.
+  **692/692 passing** after circular half/full tilt, with type checks and build also passing.
 - Cylinder addition: **9/9 focused tests passing**, plus CLI output coverage.
 - TrueGrid batch invocation is established (`i=... g=nogui s=...`), with
   dedicated output/session paths. Process success is separate from mesh validity.
@@ -90,7 +90,10 @@ See [the uniform RC contract](GUI61_NATIVE_REINFORCED.md).
    oracles; determine actual bar-node coupling and hidden-Z-bar behavior.
 2. Add explicit mixed NODE/SOLID/BEAM output with PID and ID contracts; never
    run the original solid-only repair writer as a faithful mixed-deck exporter.
-3. Circular tilt and count-budget adjustment, followed by broader curved tests.
+3. Circular quarter-tilt semantics, automatic angle correction and count-budget
+   adjustment, followed by broader curved tests. Half/full tilt now has 16
+   original MATLAB/TG comparisons and region-specific quality records; low SJ
+   in the measured transition band is accepted with a retained warning.
 4. Supported imported-interface repair patterns, UI integration, documentation,
    engineering-scale cases and review before publication.
 

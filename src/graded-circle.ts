@@ -20,7 +20,7 @@ export interface CircularGradingSpec {
   angleDegrees?: number;
 }
 
-/** Zero-tilt circular solid. The recovered circular branch always uses Z ratio 3. */
+/** Circular solid with fixed outer boundary; the recovered branch uses Z ratio 3. */
 export function generateCircularGradedMesh(spec: CircularGradingSpec) {
   const allowed=new Set(["radius","thickness","coreHalfSize","fineSize","coarseSize","reductions","modelFraction","angleDegrees"]);
   const unknown=Object.keys(spec).filter(key=>!allowed.has(key));
@@ -28,13 +28,17 @@ export function generateCircularGradedMesh(spec: CircularGradingSpec) {
   for (const value of [spec.radius,spec.thickness,spec.coreHalfSize,spec.fineSize,spec.coarseSize]) {
     if (!(Number.isFinite(value) && value>0)) throw new RangeError("circular dimensions must be finite and positive");
   }
-  if ((spec.angleDegrees??0)!==0) throw new RangeError("circular tilt mapping is not implemented");
+  const angle=spec.angleDegrees??0;
+  if(!Number.isFinite(angle)||Math.abs(angle)>=90)throw new RangeError("circular angleDegrees must be finite and strictly between -90 and 90");
   if (!["quarter","half","full"].includes(spec.modelFraction)) throw new RangeError("invalid circular modelFraction");
+  if(angle!==0&&spec.modelFraction==="quarter")throw new RangeError("tilted quarter-circle cut geometry is not defined by the recovered source; use half or full");
   const rx=spec.reductions?.x,ry=spec.reductions?.y;
   if (![2,3].includes(rx) || ![2,3].includes(ry)) throw new RangeError("circular X/Y reductions must be 2 or 3");
   if(Object.keys(spec.reductions).some(key=>key!=="x" && key!=="y"))throw new RangeError("circular thickness reduction is fixed at 3");
   const {radius:R,thickness:H,coreHalfSize:d}=spec;
+  const offset=H*Math.tan(angle*Math.PI/180);
   if ((d+spec.coarseSize)**2+d*d>=R*R) throw new RangeError("circular transition band does not fit inside the radius");
+  if((d+spec.coarseSize+Math.abs(offset)/2)**2+d*d>=R*R)throw new RangeError("circular tilt leaves insufficient room for the transition band");
   const requestedRadial=(R-d)/spec.coarseSize,radial=Math.round(requestedRadial);
   if (!Number.isSafeInteger(radial) || Math.abs(requestedRadial-radial)>1e-10 || radial<2) {
     throw new RangeError("circular outer width requires at least two integral coarse intervals");
@@ -105,12 +109,24 @@ export function generateCircularGradedMesh(spec: CircularGradingSpec) {
     }
   }
   if (children.size!==baseMesh.elements.length) throw new Error("circular refinement lost original parents");
+  if(angle!==0){
+    // Keep the zero-angle topology. The core undergoes affine shear, tapering to
+    // zero displacement on the fixed circle; this is not a rigid rotation.
+    const map=(p:readonly number[])=>{
+      const m=Math.max(Math.abs(p[0]!),Math.abs(p[1]!)),r=Math.hypot(p[0]!,p[1]!);
+      const weight=m<=d?1:Math.max(0,Math.min(1,(R-r)/(R-r*d/m)));
+      return [p[0]!+offset*(p[2]!/H-.5)*weight,p[1]!,p[2]!];
+    };
+    current.mesh={...current.mesh,nodes:current.mesh.nodes.map(map)};
+    baseMesh.nodes=baseMesh.nodes.map(map);
+  }
   if (!checkNoHangingNodes(current.mesh,tolerance*10).ok) throw new Error("circular output is not conforming");
   const quality=auditCircularMesh(current.mesh,baseMesh,spec,tolerance*10);
   return {mesh:current.mesh,baseMesh,parentElementIds:current.lineage,coreParentIds,
     plan:{fineCounts,fineSpacing:[d/fineCounts[0]!,d/fineCounts[1]!,H/fineCounts[2]!],radialCount:radial,
       effectiveReductions:[rx,ry,3],modelFraction:spec.modelFraction,
-      mapping:"equal-angle circular boundary with transfinite radial interpolation",
+      angleDegrees:angle,offset,
+      mapping:angle===0?"equal-angle circular boundary with transfinite radial interpolation":"affine core shear with radially tapered displacement to the fixed circular boundary",
       warnings:spec.modelFraction==="quarter" ? ["Native quarter geometry is a quarter disk; recovered GUI vi=1 emits a half disk."]:[]},quality};
 }
 

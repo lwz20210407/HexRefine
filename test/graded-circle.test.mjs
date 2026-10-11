@@ -35,7 +35,7 @@ for(const modelFraction of ['quarter','half','full'])for(const x of [2,3])for(co
 }
 
 test('circular generator refuses unsupported GUI options instead of ignoring them',()=>{
-  assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:10}),/tilt/);
+  assert.throws(()=>generateCircularGradedMesh({...base,angleDegrees:10,modelFraction:'quarter'}),/tilted quarter/);
   assert.throws(()=>generateCircularGradedMesh({...base,thicknessTransition:false}),/unsupported circular options/);
   assert.throws(()=>generateCircularGradedMesh({...base,reductions:{x:3,y:3,z:2}}),/fixed at 3/);
   assert.throws(()=>generateCircularGradedMesh({...base,elementLimit:500}),/unsupported circular options/);

@@ -49,8 +49,10 @@ single-band reference tests remain separately listed.
   layers have gaps; this does not implement two successive transition bands.
 - Filled circular target: X/Y ratios 2/3 x three fractions gives **12 zero-angle
   cases**, with fixed thickness reduction 3:1. Native quarter geometry repairs
-  the source's half-disk output. Nonzero angle, circular angle correction and
-  automatic element-budget optimization remain outside the certified port.
+  the source's half-disk output. Another **16 +/-15-degree half/full cases**
+  exercise the independent native core-shear mapping with original TG oracles.
+  Nonzero quarter tilt, circular angle correction and automatic element-budget
+  optimization remain unsupported. See the circular contract for mapping differences.
 - Shared UI controls cannot be assumed to affect every generator: the circle
   source fixes max_z=min_z/3; the cylinder has its own thickness switch and
   fixed other reductions. The 2D generators also have their own contracts.
@@ -72,6 +74,12 @@ Pixel checks reject empty outputs but do NOT certify mesh quality. Mid-plane
 cuts are labeled by their plane, not all called fine-core cuts. Some planes
 cross the outer transition band rather than the refined core. Numeric audits
 and original-resolution visual inspection remain separate evidence.
+
+106 existing half/quarter solid cases additionally have cut-face-facing ISO
+and near-core thickness sections, embedded directly in the option tables.
+`lspp_front_views/manifest.json` records camera quaternions and section points.
+The new circular tilt page compares native/TG sections at Y=1.23 side by side.
+The original views remain available; the corrected camera does not modify K files.
 
 Mixed RC decks open, but combined beam/solid section projection crashes
 4.10.1 with 0xC0000005. Temporarily hiding the beam PID makes concrete sections

@@ -1,9 +1,11 @@
 # Native Circular Target: Initial Subset
 
 `generateCircularGradedMesh` is an experimental native TypeScript generator.
-It currently supports a zero-tilt circular solid with a square central fine
+It supports a circular solid with a square central fine
 region, independent X/Y reductions 2 or 3, and the circular source branch's
 fixed Z reduction 3. It does not use MATLAB or TrueGrid at runtime.
+Zero tilt supports quarter/half/full models. Nonzero tilt currently supports
+half/full only; the verified comparison matrix uses +/-15 degrees.
 
 ```json
 {
@@ -58,7 +60,8 @@ GUI's numeric fraction values uniformly across generators.
 
 ## Not Implemented Here
 
-- Circular tilt and its offset-dependent circular corner construction.
+- Nonzero quarter-model tilt, automatic circular angle correction, and exact
+  replay of the source's angle-dependent outer block anchors.
 - The GUI's automatic fine-size search to approach an element-count limit.
 - Thickness-off or arbitrary Z ratios: this source branch fixes the Z ratio at 3.
 - Multiple transition bands, cylindrical shells, physical multilayers, or beams.
@@ -72,3 +75,42 @@ of this generated domain; it is not a general imported-mesh selection planner.
 Local evidence: `temp/20261011-hexrefine-gui61-validation/circle_oracle` and
 `circle_cli` under the authorized workspace. Recovered source remains outside
 the repository.
+
+## Tilt Mapping and Region-Specific Quality
+
+Optional `angleDegrees` specifies a core shear, not rigid rotation. The core's
+top-to-bottom displacement is `thickness * tan(angleDegrees)`. Outside the
+square core, displacement tapers radially to zero on the fixed circle. The
+topology and core tensor-refinement lineage are unchanged, then geometry,
+corner SJ, Gauss Jacobians, conformity and discrete volume are re-audited.
+Invalid angles, insufficient band room, and nonzero quarter tilt are rejected.
+
+The original TG branch additionally moves outer block anchors along the
+circle. This native mapping is an independent alternative, not a node-for-node
+port. In the 16-case comparison at radius 20, thickness 6, core half-size 8,
+fine size 1 and coarse size 2, the maximum nearest-reference node distance is
+about 0.803. Core anchor displacement agrees to the TG writer precision
+(maximum error 2.43e-6); native core anchors agree to numerical precision.
+
+Half/full x X/Y reductions 2/3 x +/-15 degrees have original MATLAB-generated
+TG, executed TG reference K, native K and independent region-quality audits:
+
+| Region | Native minimum corner SJ across cases | TG reference |
+| --- | --- | --- |
+| Fine core | About 0.965926 | About 0.965925-0.965926 |
+| Transition, identified by parent lineage | 0.178834-0.191078 | Not separately labeled without source lineage |
+| Unrefined far field | 0.760249-0.765025 | Not separately labeled without source lineage |
+| All outside-core cells | Minimum occurs in transition | 0.170366-0.188519 |
+
+Every native case's minimum is no worse than its corresponding TG minimum.
+For this validated matrix, below-0.2 values are outside the fine core and are
+accepted with a retained warning, not an export blocker. No global tolerance
+or threshold was loosened. Nonpositive sampled Jacobians, unexpected internal
+free faces and nonconformity remain failures. This scoped acceptance is not
+solver validation or permission to ignore arbitrary poor transition elements.
+Corner and 2x2x2 Gauss samples are not a proof of positivity everywhere inside
+a trilinear element. Solver stability and solution sensitivity remain untested.
+
+Local evidence: `circle_tilt_matrix/{independent_audit,region_quality}.json`,
+`circle_tilt_views/manifest.json` and `CIRCLE_TILT_CASES.html` under the same
+dated validation directory. Tests: `test/graded-circle-tilt.test.mjs`.
