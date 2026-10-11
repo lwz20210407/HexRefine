@@ -25,6 +25,8 @@ export * from "./hex-quality.js";
 export * from "./grid.js";
 export { planRectangularGrading, type RectangularGradingSpec, type RectangularGradingPlan } from "./graded-rectangle-plan.js";
 export { generateRectangularGradedMesh, type GradedRectangleResult } from "./graded-rectangle.js";
+export { generateCircularGradedMesh, type CircularGradingSpec } from "./graded-circle.js";
+export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./graded-cylinder.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";
 export * from "./topology.js";
