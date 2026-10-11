@@ -8,6 +8,7 @@ import type {
 } from "./types.js";
 import { minElementEdgeLength } from "./mesh.js";
 import { inferHexElementLattice, type HexElementLattice } from "./regularization.js";
+import { recoverHexLogicalFrames } from "./hex-logical-frames-internal.js";
 import { H1_FACES } from "./topology.js";
 import {
   markedCornerSignature,
@@ -84,17 +85,23 @@ export function tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(
     return [];
   }
   const tolerance = minElementEdgeLength(mesh) * 0.000001;
-  const lattice = inferHexElementLattice(mesh, tolerance);
-  const logicalSelection = selectedLogicalSelection(selected, lattice);
-  if (
-    !logicalSelection
-    || spansFullSection(logicalSelection, lattice.dimensions)
-  ) {
+  let lattice = inferHexElementLattice(mesh, tolerance);
+  let logicalSelection = selectedLogicalSelection(selected, lattice);
+  if (logicalSelection && spansFullSection(logicalSelection, lattice.dimensions)) {
     return undefined;
   }
-  const logicalCoordinates = logicalNodeCoordinates(mesh, lattice, tolerance);
-  if (!logicalCoordinates) {
-    return undefined;
+  let logicalCoordinates = logicalSelection
+    ? logicalNodeCoordinates(mesh, lattice, tolerance) : undefined;
+  if (!logicalSelection || !logicalCoordinates) {
+    // Do not change the axis conventions of successful plans or shared history regularization.
+    const recovered = recoverHexLogicalFrames(mesh);
+    // Partial recovered charts can contain holes in compound-history support.
+    // Keep their established fallback until a bounded partial-chart planner exists.
+    if (!recovered || recovered.warnings.length > 0) return undefined;
+    lattice = recovered;
+    logicalSelection = selectedLogicalSelection(selected, lattice);
+    if (!logicalSelection || spansFullSection(logicalSelection, lattice.dimensions)) return undefined;
+    logicalCoordinates = recovered.nodeCoordinates;
   }
 
   let currentMesh: Mesh = {
