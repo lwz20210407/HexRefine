@@ -42,7 +42,7 @@ test('RC reports mesh-aligned cover and refuses implicit connectivity or unsuppo
   assert.deepEqual(plan.cover,[1,1,1]);assert.match(plan.warnings.join(' '),/Cover distances/);
   for(const patch of [{connectivity:undefined},{connectivity:'embedded'},{barCounts:[1,3,3]},
     {includeZBars:1},{cover:[11,1,1]},{meshSize:0},{concretePartId:2},{dimensionPolicy:undefined},
-    {maximumRelativeDimensionChange:-1},{size:[20,12]},{elementLimit:10000}]){
+    {maximumRelativeDimensionChange:-1},{size:[20,12]},{elementLimit:0}]){
     assert.throws(()=>planUniformReinforcement({...spec,...patch}));
   }
 });

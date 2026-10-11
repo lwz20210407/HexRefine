@@ -82,6 +82,79 @@ prove mechanical coupling. A repeated N3 is not automatically a solver error
 for every formulation; native output avoids that ambiguity without claiming
 solver validation of the raw or generated decks.
 
-Pending in the uniform generator: asymmetric six-face covers, count-budget
-optimization, embedded/bond-slip coupling, sections/materials, GUI integration,
+Pending in the uniform generator: asymmetric six-face covers,
+embedded/bond-slip coupling, sections/materials, GUI integration,
 large models and engineering solver validation.
+
+## Quantity Optimization
+
+`elementLimit` caps solids plus active beams (excluding hidden Z bars).
+Without `optimizeMeshSize: true`, exceeding it is an explicit error, not an
+implicit size change. With optimization, the planner chooses the finest
+feasible candidate on a bounded size lattice, without generating meshes for
+every candidate. Dimension error is nonmonotone under count rounding, so the
+planner enumerates bounded candidates rather than applying a monotone search
+to all constraints.
+
+```javascript
+{
+  // Other uniform reinforcement parameters as above.
+  elementLimit: 1800,
+  optimizeMeshSize: true,
+  dimensionPolicy: 'source-aligned',
+  maximumRelativeDimensionChange: 0.2,
+  meshSizeSearch: {
+    minimum: 0.5, maximum: 2, step: 0.001,
+    maximumTotalRelativeDimensionChange: 0.2
+  }
+}
+```
+
+The default interval is [0.5,2] times the requested size. Default step is
+`10^(trunc(log10(requestedSize))-3)`, based on the original initial-size
+scale. The lattice is anchored at the requested size. It is limited to
+100000 candidate indices; no feasible candidate means no output. This is
+not a claim that no solution exists outside the declared interval.
+
+Every candidate respects existing `dimensionPolicy`, an absolute per-axis
+relative dimension bound, the sum of those absolute errors, valid bar spacing,
+active-element limit and allocation guard. The total-error bound defaults to
+`maximumRelativeDimensionChange`. `preserve` never relaxes its geometry rule
+to satisfy an element budget. Counts, requested/effective mesh size, actual
+dimensions/covers/spacings, errors, search domain and evaluations are returned.
+Mesh generation and beam-length audits use the resolved size, not the request.
+
+For requested size20x12x8, meshSize1, barCounts4/3/3, cover1, limit1800 and
+per-axis/total error bounds0.2, the native size is **1.171**, dimensions
+**19.907x11.71x9.368**, 1360 solids and 369 beams (273 with Z bars hidden).
+Absolute relative error sum is about0.199817. This is a real dimension change,
+not rounding noise, and requires explicit source-aligned consent. With strict
+geometry preservation this particular budget/range is refused.
+
+Original MATLAB optimizer probes exposed two limitations: exact equality at
+the target reaches an undefined `T` in empty-list selection, and the 1800
+target above reports no feasible candidate. Replaying its unchanged parameter
+function at size1.171 succeeds and matches native dimensions/counts/covers.
+TG generated from that resolved-size replay, after the already documented
+X/Y beam-count correction in a copy, matches native beam geometry within
+reference writer precision. This is not described as successful replay of
+the original optimizer. The original raw failures remain evidence.
+
+At target3000 the tested source/native optimizer retains size1; native handles
+the exact2340 target without the source empty-list failure. Optimization-off
+over-limit and strict-dimension cases explicitly refuse. Native search may
+choose a different feasible candidate than other source inputs; it is a
+documented deterministic bounded implementation, not bitwise source replay.
+
+Validation: eight input states x separate/shared = twelve successful decks
+and four refusals; fixed source-parameter replay for the two1800 cases.
+Independent PyDYNA checks cover volumes, bounds, IDs, endpoint sharing,
+orientation and beam lengths. `test/reinforced-uniform-budget.test.mjs`
+checks both coupling choices, Z gating, exhaustive candidate agreement,
+dimension bounds and malformed/oversized searches. No TG/MATLAB runtime is
+required for the native tests or generator.
+
+Evidence: `uniform_budget_oracle`, `uniform_budget_native`,
+`uniform_budget_views`, `UNIFORM_REBAR_BUDGET.html` under the dated validation
+directory. The HTML distinguishes raw optimizer failure, resolved-size
+parameter replay, corrected TG and native results.

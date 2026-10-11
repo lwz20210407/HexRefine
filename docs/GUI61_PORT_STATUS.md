@@ -14,7 +14,7 @@ new GUI wiring have NOT been implemented.
 | F03 tilt | 984+, 994, 1200+ | Rectangular single/double and circular half/full implemented | Positive/negative TG probes; circular uses documented alternate mapping; quarter nonzero tilt pending |
 | F04 fractions | Each generator's vi branch | Explicit coverage for ported generators | Corrected circular quarter and cylinder full; no automatic solver BC |
 | F05 curved solids | Code_Creat2/3, 2482+, 3249+ | Circular/cylindrical subsets plus circular correction/budget implemented | Cylinder radial switch/layers; circular quarter tilt, extreme-angle quality and GUI pending |
-| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform plus graded fractions/tilt and native two-stage extensions | Uniform separate/shared; graded separate only; coupling/uniform optimization/GUI and broader combinations pending |
+| F06 reinforcement | Code_Creat4/5, 3577+, 3951+ | Uniform with budgets plus graded fractions/tilt/two-stage extensions | Uniform separate/shared; graded separate only; coupling/GUI and broader combinations pending |
 | F07 2D | Code_Creat7/6, 2199+, 2386+ | Implemented under source-specific contracts | 12 rectangle and 3 circle TG cases; Q1/SHELL export, geometric sets |
 | F08 interfaces | repair chain, v15/v16/vv15/vv16 | Direct conformity for ported generators; baseline replay verified | General imported-K repair is NOT implemented |
 
@@ -48,8 +48,8 @@ Recovered source archives are not included in this repository.
 
 ## Verification and Honest Limits
 
-- Latest integrated full run: **741/741 passing** after reinforcement fractions,
-  tilt and two-stage extension tests, including type checks and build.
+- Latest integrated full run: **748/748 passing** after uniform reinforcement
+  quantity optimization, including type checks and build.
 - Graded-reinforcement addition: initial full run **701/702 passing**, with only
   the stale embedded standalone bundle failing. After regeneration all seven
   browser smoke tests pass. Ten new graded tests and nine independent MATLAB/TG
@@ -95,8 +95,9 @@ See [the uniform RC contract](GUI61_NATIVE_REINFORCED.md).
    coupling interfaces and broader combined inputs. Fractions, half/full +/-10
    tilt, asymmetric row clipping and three double-stage extensions now have
    an additional 14-case matrix, beyond the nine initial source comparisons.
-2. Uniform reinforcement budget optimization and broader input coverage. Mixed
-   NODE/SOLID/BEAM output is implemented; never use the original solid-only
+2. Uniform reinforcement broader input coverage and GUI wiring. Quantity
+   optimization now has bounded native search, dimension-change guards and
+   original/resolved-size source probes. Mixed NODE/SOLID/BEAM output is implemented; never use the original solid-only
    repair writer as a faithful mixed-deck exporter.
 3. Circular quarter-tilt semantics and extreme-angle quality, followed by broader
    curved tests. Automatic angle correction and bounded count-budget search
