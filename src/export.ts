@@ -8,6 +8,7 @@ import type {
 } from "./refinement-session.js";
 import type { Element, ElementKind, Mesh, Point, ReadonlyMesh } from "./types.js";
 import { inferMeshKind } from "./mesh.js";
+import { fixedInteger, fixedFloat } from "./lsdyna-format-internal.js";
 
 export interface VtkOptions {
   title?: string;
@@ -1149,36 +1150,6 @@ function formatPoint3(point: Point): string {
     formatNumber(point[1] ?? 0),
     formatNumber(point[2] ?? 0)
   ].join(" ");
-}
-
-function fixedInteger(value: number, width: number, label: string): string {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`LS-DYNA ${label} must be a positive integer`);
-  }
-  const text = String(value);
-  if (text.length > width) {
-    throw new Error(`LS-DYNA ${label} ${value} exceeds the ${width}-column field`);
-  }
-  return text.padStart(width);
-}
-
-function fixedFloat(value: number, width: number, precision=8, format="scientific"): string {
-  if (!Number.isFinite(value)) {
-    throw new Error(`LS-DYNA coordinate must be finite, got ${value}`);
-  }
-  if (format==="compact") {
-    for (let digits=17;digits>=1;digits-=1) {
-      const text=Number(value.toPrecision(digits)).toString();
-      if (text.length<=width) return text.padStart(width);
-    }
-  }
-  for (let digits = precision; digits >= 1; digits -= 1) {
-    const text = value.toExponential(digits);
-    if (text.length <= width) {
-      return text.padStart(width);
-    }
-  }
-  throw new Error(`LS-DYNA coordinate ${value} exceeds the ${width}-column field`);
 }
 
 function formatNumber(value: number): string {

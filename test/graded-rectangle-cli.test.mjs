@@ -5,7 +5,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {createHexUnitCubeMesh,meshToLsdynaKeyword,parseMeshText} from '../dist/index.js';
+import {createHexUnitCubeMesh,meshToLsdynaKeyword,parseMeshText,parseNativeLsdynaMixedKeyword} from '../dist/index.js';
 
 test('K coordinate precision is opt-in and remains within sixteen columns',()=>{
   const mesh=createHexUnitCubeMesh(1,1,1);
@@ -71,4 +71,12 @@ test('versioned native rectangle CLI emits mesh-only K and refuses an existing o
   assert.equal(cylinder.nodes,1568);assert.equal(cylinder.elements,904);
   const layerSets=JSON.parse(await fs.readFile(path.join(cylinderOut,'cell_sets.json'),'utf8'));
   assert.equal(layerSets.layer_1.length,452);assert.equal(layerSets.layer_2.length,452);
+  await fs.writeFile(input,JSON.stringify({schemaVersion:1,kind:'reinforced-uniform',parameters:{
+    size:[4,4,4],meshSize:1,barCounts:[2,2,2],cover:[1,1,1],includeZBars:true,connectivity:'separate',dimensionPolicy:'preserve'}}));
+  const reinforcedOut=path.join(root,'reinforced');
+  const reinforced=JSON.parse(execFileSync(process.execPath,[cli,input,reinforcedOut],{encoding:'utf8'}));
+  assert.deepEqual(reinforced.elementCounts,{solid:64,beam:48});
+  const rcModel=parseNativeLsdynaMixedKeyword(await fs.readFile(path.join(reinforcedOut,'mesh.k'),'utf8'));
+  assert.equal(rcModel.beams.length,48);
+  await assert.rejects(fs.access(path.join(reinforcedOut,'lineage.json')));
 });
