@@ -22,6 +22,11 @@ Implementation guides: [rectangle](GUI61_NATIVE_RECTANGLE.md),
 [circular solid](GUI61_NATIVE_CIRCLE.md), [Q1](GUI61_NATIVE_QUAD.md),
 [cylinder](GUI61_NATIVE_CYLINDER.md).
 
+See the [control-by-control coverage ledger](GUI61_CONTROL_COVERAGE.md) before
+calling any branch complete. Same-geometry rectangular zero-angle coverage is
+now 72 combinations; the hollow-cylinder switch/fraction/physical-layer grid
+has 12. These do not certify every angle or every other GUI branch.
+
 ## Bugs and Differences Are Not Copied Blindly
 
 | Finding | Decision and regression protection |
@@ -63,7 +68,9 @@ Recovered source archives are not included in this repository.
   controls merely because the standalone native CLI supports them.
 - The raw mixed reinforced decks open/render in LS-PrePost 4.10.1, but section
   projection currently crashes that viewer with exit code 0xC0000005. These
-  four visual section checks are NOT passed. Cause/isolation is under investigation.
+  four combined section checks are NOT passed. Beam-only display and
+  concrete-only sections (beam PID hidden) have passed for all four cases;
+  this is an inspection workaround, not a fix for combined projection.
 
 ## Next Work
 
