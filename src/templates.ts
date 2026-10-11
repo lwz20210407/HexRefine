@@ -2,6 +2,13 @@ import type { Element, LocalRefinement, Point } from "./types.js";
 import { mergeCoincidentNodes } from "./mesh.js";
 import { add, lerp, mix, scale, sub } from "./vector.js";
 
+const HEX_REFERENCE_CORNERS: readonly Point[] = [
+  [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+  [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]
+];
+let hex4Reference: LocalRefinement | undefined;
+let hex13Reference: LocalRefinement | undefined;
+
 export function refineQ1To3x3(vertices: readonly Point[]): LocalRefinement {
   const [x1, x2, x3, x4] = quad(vertices);
   const x5 = lerp(x1, x2, 1 / 3);
@@ -90,20 +97,14 @@ export function refineHexTo8Hex(vertices: readonly Point[]): LocalRefinement {
 
 export function refineHexTo5Hex(vertices: readonly Point[]): LocalRefinement {
   const [x1, x2, x3, x4, x5, x6, x7, x8] = hex(vertices);
-  const y12 = sub(x2, x1);
-  const y14 = sub(x4, x1);
-  const y56 = sub(x6, x5);
-  const y58 = sub(x8, x5);
-  const y23 = sub(x3, x2);
-  const y67 = sub(x7, x6);
-  const x9 = lerp(x1, x5, 1 / 3);
-  const x10 = lerp(x1, x5, 2 / 3);
-  const x11 = add(x10, scale(y56, 0.5));
-  const x12 = add(x9, scale(y12, 0.5));
-  const x13 = add(x9, scale(y14, 0.5));
-  const x14 = add(x10, scale(y58, 0.5));
-  const x15 = add(x11, scale(y67, 0.5));
-  const x16 = add(x12, scale(y23, 0.5));
+  const x9 = trilinear(vertices, 0, 0, 1 / 3);
+  const x10 = trilinear(vertices, 0, 0, 2 / 3);
+  const x11 = trilinear(vertices, 0.5, 0, 2 / 3);
+  const x12 = trilinear(vertices, 0.5, 0, 1 / 3);
+  const x13 = trilinear(vertices, 0, 0.5, 1 / 3);
+  const x14 = trilinear(vertices, 0, 0.5, 2 / 3);
+  const x15 = trilinear(vertices, 0.5, 0.5, 2 / 3);
+  const x16 = trilinear(vertices, 0.5, 0.5, 1 / 3);
 
   return {
     kind: "H1",
@@ -120,6 +121,12 @@ export function refineHexTo5Hex(vertices: readonly Point[]): LocalRefinement {
 }
 
 export function refineHexTo4Hex(vertices: readonly Point[]): LocalRefinement {
+  hex4Reference ??= buildHex4ReferenceGeometry(HEX_REFERENCE_CORNERS);
+  return mapHexReferenceRefinement(vertices, hex4Reference);
+}
+
+// The vector construction is retained only in the unit reference domain.
+function buildHex4ReferenceGeometry(vertices: readonly Point[]): LocalRefinement {
   const [x1, x2, x3, x4, x5, x6, x7, x8] = hex(vertices);
   const y15 = sub(x5, x1);
   const y48 = sub(x8, x4);
@@ -148,25 +155,41 @@ export function refineHexTo4Hex(vertices: readonly Point[]): LocalRefinement {
 }
 
 export function refineHexTo13Hex(vertices: readonly Point[], mergeTolerance?: number): LocalRefinement {
-  const first = refineHexTo4Hex(vertices);
+  hex13Reference ??= buildHex13ReferenceGeometry();
+  const mapped = mapHexReferenceRefinement(vertices, hex13Reference);
+  const tolerance = mergeTolerance ?? estimateHexTolerance(vertices);
+  const merged = mergeCoincidentNodes(mapped, tolerance);
+  return { ...mapped, nodes: [...merged.nodes], elements: [...merged.elements] };
+}
+
+function buildHex13ReferenceGeometry(): LocalRefinement {
+  const first = buildHex4ReferenceGeometry(HEX_REFERENCE_CORNERS);
   const nodes: Point[] = [...first.nodes];
   const elements: Element[] = [first.elements[3]!];
 
   for (const element of first.elements.slice(0, 3)) {
     const subVertices = element.map((nodeId) => first.nodes[nodeId - 1]!);
-    const refined = refineHexTo4Hex(subVertices);
+    const refined = buildHex4ReferenceGeometry(subVertices);
     const offset = nodes.length;
     nodes.push(...refined.nodes);
     elements.push(...refined.elements.map((subElement) => subElement.map((nodeId) => nodeId + offset)));
   }
 
-  const tolerance = mergeTolerance ?? estimateHexTolerance(vertices);
-  const merged = mergeCoincidentNodes({ nodes, elements, kind: "H1" }, tolerance);
+  const merged = mergeCoincidentNodes({ nodes, elements, kind: "H1" }, 1e-12);
   return {
     kind: "H1",
     source: "RefineH1To13H1",
     nodes: [...merged.nodes],
     elements: [...merged.elements]
+  };
+}
+
+function mapHexReferenceRefinement(vertices: readonly Point[], reference: LocalRefinement): LocalRefinement {
+  const corners = hex(vertices);
+  return {
+    ...reference,
+    nodes: reference.nodes.map(([u, v, w]) => trilinear(corners, u!, v!, w!)),
+    elements: reference.elements.map(element => [...element])
   };
 }
 
