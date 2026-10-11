@@ -12,6 +12,8 @@ export interface RectangularGradingSpec {
   transitionStages: 1 | 2;
   modelFraction: ModelFraction;
   angleDegrees?: number;
+  /** Opt in to reducing an excessive tilt toward zero in 0.1-degree steps. */
+  angleCorrection?: boolean;
 }
 
 export interface GradingBlock {
@@ -48,7 +50,7 @@ export interface RectangularGradingPlan {
 }
 
 export function planRectangularGrading(input: RectangularGradingSpec): RectangularGradingPlan {
-  const allowed=new Set(["fullSize","refinedSize","fineSize","coarseSize","reductions","thicknessTransition","transitionStages","modelFraction","angleDegrees"]);
+  const allowed=new Set(["fullSize","refinedSize","fineSize","coarseSize","reductions","thicknessTransition","transitionStages","modelFraction","angleDegrees","angleCorrection"]);
   if(Object.keys(input).some(key=>!allowed.has(key)))throw new RangeError("unsupported rectangular grading option");
   if (!Array.isArray(input.fullSize) || input.fullSize.length !== 3
     || !Array.isArray(input.refinedSize) || input.refinedSize.length !== 2) {
@@ -65,6 +67,7 @@ export function planRectangularGrading(input: RectangularGradingSpec): Rectangul
   if (!["quarter", "half", "full"].includes(input.modelFraction)) throw new RangeError("unknown modelFraction");
   const angle = input.angleDegrees ?? 0;
   if (!Number.isFinite(angle) || Math.abs(angle) >= 90) throw new RangeError("angleDegrees must lie strictly between -90 and 90");
+  if(input.angleCorrection!==undefined && typeof input.angleCorrection!=="boolean")throw new TypeError("angleCorrection must be boolean");
   const spec: RectangularGradingSpec = { ...input,
     fullSize: [input.fullSize[0], input.fullSize[1], input.fullSize[2]],
     refinedSize: [input.refinedSize[0], input.refinedSize[1]], reductions: { ...input.reductions } };
@@ -88,9 +91,21 @@ export function planRectangularGrading(input: RectangularGradingSpec): Rectangul
   const interfaces: GradingInterface[] = [];
   const warnings: string[] = [];
   const issues: RectangularGradingPlan["issues"] = [];
-  const effectiveAngleDegrees = spec.modelFraction === "quarter" ? 0 : angle;
+  let effectiveAngleDegrees = spec.modelFraction === "quarter" ? 0 : angle;
   if (angle !== effectiveAngleDegrees) warnings.push("quarter model forces the angle to zero, following the rectangular GUI branch");
-  const offset = height * Math.tan(effectiveAngleDegrees * Math.PI / 180);
+  let offset = height * Math.tan(effectiveAngleDegrees * Math.PI / 180);
+  const middleY=spec.transitionStages===2?alignedCount(Math.round(.618*by),ry):0;
+  const middleX=spec.transitionStages===2?alignedCount(Math.round(.618*cx),rx):0;
+  if(spec.transitionStages===2 && (middleX>=cx||middleY>=by))throw new RangeError("the second transition band has no remaining coarse cells");
+  const weight=middleX/cx;
+  const maxOffset=spec.transitionStages===1?2*ox:Math.min(2*ox,
+    2*middleX*spec.coarseSize/(1-weight),2*(cx-middleX)*spec.coarseSize/weight);
+  if(spec.angleCorrection && Math.abs(offset)>=maxOffset){
+    const bound=Math.atan(maxOffset/height)*180/Math.PI;
+    effectiveAngleDegrees=Math.sign(effectiveAngleDegrees)*Math.max(0,Math.floor((bound-1e-9)*10)/10);
+    offset=height*Math.tan(effectiveAngleDegrees*Math.PI/180);
+    warnings.push(`Tilt reduced from ${angle} to ${effectiveAngleDegrees} degrees to preserve positive transition-band width; this repairs the source's unreachable correction branch.`);
+  }
   if (Math.abs(offset) / 2 >= ox) throw new RangeError("tilt collapses an outer X band");
   const add = (name: string, x0: number, x1: number, y0: number, y1: number, counts: Count3) => {
     if (x1 <= x0 || y1 <= y0 || counts.some(n => !Number.isSafeInteger(n) || n < 1)) {
@@ -120,7 +135,7 @@ export function planRectangularGrading(input: RectangularGradingSpec): Rectangul
     add("A", dx, length / 2, dy, width / 2, [cx, by, nz / rz]);
     connect("D", "B", 1); connect("D", "C", 0); connect("B", "A", 0); connect("C", "A", 1);
   } else {
-    const b1 = alignedCount(Math.round(.618 * by), ry), c1 = alignedCount(Math.round(.618 * cx), rx);
+    const b1 = middleY, c1 = middleX;
     if (b1 >= by || c1 >= cx) throw new RangeError("the second transition band has no remaining coarse cells");
     const xb = dx + c1 * spec.coarseSize, yb = dy + b1 * spec.coarseSize;
     add("B1", 0, dx, dy, yb, [nx / rx, b1, nz / rz]);

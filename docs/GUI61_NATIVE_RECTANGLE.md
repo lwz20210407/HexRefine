@@ -21,6 +21,16 @@ anisotropic refinement to every imported Hex mesh or to the existing session UI.
 - Mesh-only LS-DYNA K output: NODE and ELEMENT_SOLID with KEYWORD/END framing.
   PID defaults to 1. No material, contact, load, or boundary-condition cards.
 
+`angleCorrection: true` explicitly opts into reducing an excessive tilt toward
+zero on a 0.1-degree grid until every planned X band retains positive width.
+The requested angle stays in `plan.spec.angleDegrees`; the actual angle and a
+warning are returned separately. Default false still rejects invalid widths.
+This is a native improvement: the source rectangular `correction` checkbox is
+guarded by a literal `b8=0` and cannot reach its adjustment loop. It is not a
+quality optimizer: every corrected mesh still undergoes Jacobian/volume audits
+and can have low-SJ warnings near the geometric limit. Angles at/outside 90
+degrees remain rejected even with correction enabled.
+
 Unsupported or invalid inputs are rejected: fractional outer counts, collapsed
 bands, incompatible 4-to-2 interface counts, nonpositive Jacobians, internal free
 faces, hanging interfaces, and an estimated output above the experimental
