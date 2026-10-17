@@ -1,6 +1,6 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
-Checkpoint: 2026-10-11. This reports actual native implementations and measured
+Checkpoint: 2026-10-18. This reports actual native implementations and measured
 oracle coverage, not a claim of complete GUI_tg 6.1 equivalence. Native runtime
 is TypeScript/Node. Python can call the versioned CLI; a pure-Python kernel has
 NOT been implemented. All seven menu families now connect their implemented
@@ -117,6 +117,13 @@ separately and is not implied by a local commit or this feature matrix.
 
 ## Browser Workbench Checkpoint
 
+This section records the 2026-10-11 checkpoint; development resumed on
+2026-10-18 at the user's request. The first bounded native interface repair
+is now implemented; see [its contract](GUI61_INTERFACE_REPAIR.md). It repairs
+the four-parent rectangular benchmark with all original nodes unchanged and
+all 4340 output hex node sets matching the MATLAB repaired reference. Other
+repair families and the full-deck/GUI entry remain open.
+
 The GUI batch full suite passed 764/764 before the final beam-import guard.
 Targeted tests passed 17/17 after the final guard (including its new regression).
 An actual beam-bearing K import was refused with the existing mesh unchanged.
@@ -127,8 +134,10 @@ beam decks; mixed snapshots retain BEAM output and cannot silently enter the
 solid-only refinement engine. Local evidence is in gui61_workbench and
 GUI61_INTERACTIVE_WORKBENCH.html under the validation directory.
 
-The original four-parent repair benchmark has a scratch native-template probe,
-not a shipped repair API or a general repair certification. Remaining repair
+At the 2026-10-11 checkpoint, the original four-parent repair benchmark had a scratch native-template probe,
+not a shipped repair API or a general repair certification. The 2026-10-18
+bounded API and JSON CLI supersede that probe-only status, not the remaining
+repair limitations. Remaining repair
 patterns and circular limitations stay open. Per user instruction, stop after
 this checkpoint and the requested push to the user's fork development branch,
 then wait for further instructions. Do not merge the main branch automatically.
