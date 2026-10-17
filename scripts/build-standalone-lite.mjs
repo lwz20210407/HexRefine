@@ -38,6 +38,7 @@ function buildStandaloneHtml(html, importMap) {
   const importMapScript = `<script type="importmap">${JSON.stringify({ imports: importMap }, null, 2)}</script>`;
   const importBlock = `import {
         generateGui61,
+        generateGui61Repair,
         mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
@@ -73,6 +74,10 @@ function buildStandaloneHtml(html, importMap) {
         updateStats();
         const totalStart = performance.now();
         try {
+          if (request.kind === "gui61-repair") {
+            const result = generateGui61Repair(request.request);
+            return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};
+          }
           if (request.kind === "gui61-generate") {
             const result = generateGui61(request.request);
             return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};

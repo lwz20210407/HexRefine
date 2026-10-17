@@ -239,7 +239,7 @@ export function subdivideHex(
   return { kind: "H1", source, nodes, elements };
 }
 
-function trilinear(corners: readonly Point[], u: number, v: number, w: number): Point {
+export function trilinear(corners: readonly Point[], u: number, v: number, w: number): Point {
   const lower = relativeLerpPoint(
     relativeLerpPoint(corners[0]!, corners[1]!, u),
     relativeLerpPoint(corners[3]!, corners[2]!, u),

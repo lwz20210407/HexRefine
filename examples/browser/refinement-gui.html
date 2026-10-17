@@ -1231,6 +1231,7 @@
     <script type="module">
       import {
         generateGui61,
+        generateGui61Repair,
         mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
@@ -2319,7 +2320,7 @@
           return;
         }
         if (gui61Preview) {
-          const parameters = gui61Preview.request.parameters;
+          const parameters = gui61Preview.request.parameters ?? {};
           const fraction = parameters.concrete?.modelFraction ?? parameters.modelFraction ?? "full";
           const eye = fraction === "quarter" ? [-1,-1,1] : [.15,-1,.65];
           const length = Math.hypot(...eye);
@@ -2380,6 +2381,18 @@
         );
         const viewport = Math.max(240, Math.min(canvas.width || 900, canvas.height || 700));
         camera.zoom = viewport * 0.72 / span;
+        if (gui61Preview && projectionMode === "parallel") {
+          camera.zoom = 1;
+          let halfWidth = 1e-9, halfHeight = 1e-9;
+          for (const x of [bounds.min[0],bounds.max[0]])
+            for (const y of [bounds.min[1],bounds.max[1]])
+              for (const z of [bounds.min[2],bounds.max[2]]) {
+                const p = projectPoint([x,y,z]);
+                halfWidth = Math.max(halfWidth,Math.abs(p.x-canvas.width*.5));
+                halfHeight = Math.max(halfHeight,Math.abs(p.y-canvas.height*.5));
+              }
+          camera.zoom = Math.min(canvas.width*.8/(2*halfWidth),canvas.height*.72/(2*halfHeight));
+        }
       }
 
       function meshBounds() {
@@ -7915,7 +7928,7 @@
 
       function gui61ReadOnly() {
         if (!gui61Preview) return false;
-        setStatus(gui61Preview.summary.beams ? "当前为钢筋模型生成快照，请使用生成K导出；不支持丢弃钢筋后自动细化。" : "当前为参数生成快照，请先转入局部细化。", false);
+        setStatus(gui61Preview.model ? "当前快照含部件或钢筋信息，请使用生成K导出；不能无损转入普通细化。" : "当前为参数生成快照，请先转入局部细化。", false);
         return true;
       }
 
@@ -8527,6 +8540,13 @@
 
       gui61Controller = mountGui61Workbench(document.querySelector("#gui61-controls"), {
         isBusy: () => busy,
+        runRepair: async request => {
+          try {
+            await runWithBusyPause("正在修复网格接口…");
+            const response = await runRefinementWorker({kind:"gui61-repair",request});
+            return response.result;
+          } finally {setBusy(false);}
+        },
         run: async request => {
           try {
             await runWithBusyPause("正在生成参数网格…");

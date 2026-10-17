@@ -1,5 +1,6 @@
 import {
   generateGui61,
+  generateGui61Repair,
   activeBuildCellIdByElementId,
   buildActiveMeshWithMap,
   buildRefinementSessionExport,
@@ -14,6 +15,12 @@ import {
 self.addEventListener("message", (event) => {
   const request = event.data;
   try {
+    if (request.kind === "gui61-repair") {
+      const start = performance.now();
+      const result = generateGui61Repair(request.request);
+      self.postMessage({ok:true,kind:request.kind,result,elapsedMs:performance.now()-start});
+      return;
+    }
     if (request.kind === "gui61-generate") {
       const start = performance.now();
       const result = generateGui61(request.request);

@@ -1,9 +1,52 @@
 # Bounded GUI61 Interface Repair
 
-Date: 2026-10-18. This is the first shipped native repair subset, not a general
-hex repair engine and not completion of all v15/v16/vv15/vv16 branches.
+Date: 2026-10-18. The five-Hex subset is now supplemented by a separately
+validated 15-node/four-Hex corner family and a GUI JSON repair entry. This is
+not a general hex repair engine or completion of every v15/v16/vv15/vv16 case.
 
-## Contract
+## Corner Family and GUI
+
+`repairGui61Interfaces(mesh, options)` matches either the existing five-Hex
+family or the corner-four family. `repairGui61FiveHexInterfaces` retains its
+original restricted behavior for compatibility. Each result includes a
+`repairs` array identifying the actual template and child count per parent.
+
+The corner pattern uses 15 nodes, not the 16-node `refineHexTo4Hex` slab.
+Its two bottom-edge cut fractions may independently be 1/3, 1/2 or 2/3, with
+a half-height intermediate sheet. These fractions are local cut locations,
+not a claim of arbitrary mixed refinement ratios. One-wall repair treats the
+detected split wall as the primary bottom face, matching the v15 contract;
+two/three-wall cases must match all detected face partitions. Other fractions,
+cap heights and adjacent damaged-parent joint replacements remain unsupported.
+
+The recovered MATLAB v15 function was actually executed for all nine fraction
+pairs. All four native cells match the MATLAB cells by geometric node sets;
+minimum corner SJ matches (approximately 0.371 to 0.577), with volume error
+below 2e-16. Runtime cases were saved separately; recovered MATLAB source was
+not modified or copied into the repository. Native coordinate construction
+uses trilinear reference mapping instead of physical offset addition.
+
+`generateGui61Repair(request)` is the shared browser/CLI adapter. The workbench
+has an `接口修复 JSON` entry accepting the versioned request below, or its exported
+report archive. It previews and downloads validated NODE/SOLID K, including
+inherited PIDs. It does not directly import arbitrary full K decks. GUI request
+size is limited to 25 MiB; larger requests use the CLI.
+
+Repair snapshots cannot transfer into the ordinary geometry-only refinement
+session because that would drop their explicit part metadata. Failure leaves
+the old displayed geometry untouched and disables stale downloads. HTTP worker
+mode, archive replay, rejection, mobile layout, K download and offline standalone
+mode were exercised in a real browser. The ISO fit was corrected to use projected
+box extents so rotated small models remain fully framed.
+
+New evidence: `corner4_oracle.m`, `corner4_oracle/*.json`,
+`corner4_comparison.json`, `repair_gui/browser-results.json`, and
+`GUI61_CORNER_REPAIR_REVIEW.html` in the same 2026-10-18 validation directory.
+Full suite: 784/784 passed before the final camera-fit correction. After that
+correction and its regression test, repair/browser targeted tests passed 28/28
+and the actual HTTP/offline/mobile browser checks were repeated successfully.
+
+## Five-Hex Contract
 
 ```ts
 import {repairGui61FiveHexInterfaces} from "hexrefine";
@@ -104,7 +147,8 @@ error was approximately 3.97e-16.
 
 ## Still Open
 
-General v15/four-child and other parameterized repair patterns, damaged
-adjacent-parent joint solving, full-deck ID/set migration, automatic parent
-selection and repair GUI wiring are not yet implemented by this entry point.
+Other cut fractions/cap heights and parameterized repair patterns, damaged
+adjacent-parent joint solving, full-deck ID/set migration and automatic parent
+selection are not yet implemented by this entry point. GUI repair accepts a
+prepared mesh/parent JSON request, not arbitrary full K files.
 It must not be enabled automatically by the ordinary importer.

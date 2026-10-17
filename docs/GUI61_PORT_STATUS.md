@@ -122,7 +122,12 @@ This section records the 2026-10-11 checkpoint; development resumed on
 is now implemented; see [its contract](GUI61_INTERFACE_REPAIR.md). It repairs
 the four-parent rectangular benchmark with all original nodes unchanged and
 all 4340 output hex node sets matching the MATLAB repaired reference. Other
-repair families and the full-deck/GUI entry remain open.
+repair families, full-deck migration and automatic selection remain open.
+The four-Hex half-height corner family now also has nine MATLAB runtime
+comparisons, and the bounded JSON repair workflow is connected to the GUI.
+The new full-suite checkpoint is 784/784; after the final camera-fit correction,
+28/28 targeted repair/browser tests and repeated browser runs passed. The user
+requested a pause after this batch; further features await a new instruction.
 
 The GUI batch full suite passed 764/764 before the final beam-import guard.
 Targeted tests passed 17/17 after the final guard (including its new regression).

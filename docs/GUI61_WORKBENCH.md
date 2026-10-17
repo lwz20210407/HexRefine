@@ -36,8 +36,9 @@ its native PID/ID contracts. Report archives retain request, resolved plan,
 quality, sets and lineage when available. No solver materials/loads are inferred.
 
 Generation snapshots are read-only in the refinement workbench. Pure solid/Q1
-results may explicitly transfer into refinement; this invalidates snapshot
-downloads. Mixed beam/solid snapshots do not transfer into the solid-only
+results without explicit mixed-model metadata may transfer into refinement;
+this invalidates snapshot downloads. Mixed beam/solid and PID-bearing repair
+snapshots do not transfer into the geometry-only
 refinement engine, preventing accidental beam loss. The ordinary importer also
 refuses beam-bearing K instead of pretending it loaded the whole model.
 
@@ -69,3 +70,13 @@ Playwright installation without adding a new browser environment.
 Still pending: remaining original repair patterns, circular quarter nonzero
 tilt semantics, extreme circular quality and broader original control matrix
 coverage. Embedded coupling is not part of this workbench milestone.
+
+## Interface Repair Entry (2026-10-18)
+
+The separate `接口修复 JSON` button loads a versioned mesh/parent/tolerance request
+or its report archive, calls the shared native repair adapter, and offers K,
+lineage and report export. Tested four/five-Hex subsets are documented in
+GUI61_INTERFACE_REPAIR.md. Unsupported patterns and solver metadata are refused;
+this does not implement arbitrary full-K repair. Repair preserves PIDs in the
+download and cannot transfer to the ordinary geometry-only session. HTTP,
+offline, archive replay, failure safety and mobile rendering were tested.

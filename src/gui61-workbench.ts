@@ -2,6 +2,7 @@ import {defaultGui61Request,gui61Kinds,gui61Fields,gui61Value,updateGui61Value,t
 
 export function mountGui61Workbench(root:HTMLElement,options:{
   run:(request:Gui61Request)=>Promise<Gui61Generated>;
+  runRepair?:(request:unknown)=>Promise<Gui61Generated>;
   show:(result:Gui61Generated)=>void;
   view:(mode:string)=>void;
   convert:()=>void;
@@ -16,6 +17,11 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   const dialog=document.createElement("dialog");dialog.className="gui61-dialog";dialog.id="gui61-dialog";
   dialog.innerHTML=`<form><header class="gui61-header"><h2>HexRefine · 参数建模</h2><select class="gui61-kind" aria-label="算法选择"></select><button type="button" data-action="close" aria-label="关闭参数">关闭</button></header><div class="gui61-fields"></div><p class="gui61-error" role="alert"></p><div class="gui61-resolved"></div><footer class="gui61-footer"><label><input type="checkbox" data-action="enable-k" checked>导出K文件</label><button type="submit" data-action="generate">生成预览</button><button type="button" data-action="reset">恢复本算法默认值</button><button type="button" data-action="import">导入参数JSON</button><input type="file" accept=".json" hidden data-action="file"></footer></form>`;
   document.body.append(dialog);
+  const repairButton=document.createElement("button"),repairInput=document.createElement("input");
+  repairButton.type="button";repairButton.dataset.action="repair";repairButton.textContent="接口修复 JSON";
+  repairButton.title="加载带网格、待修复父单元和容差的JSON请求；不直接读取完整求解K";
+  repairInput.type="file";repairInput.accept=".json";repairInput.hidden=true;repairInput.dataset.action="repair-file";
+  root.insertBefore(repairButton,root.querySelector(".gui61-summary"));root.append(repairInput);
   const select=dialog.querySelector<HTMLSelectElement>(".gui61-kind")!;
   for(const [value,label] of gui61Kinds){const option=document.createElement("option");option.value=value;option.textContent=label;select.append(option);}
   const drafts=new Map<Gui61Kind,Gui61Request>();
@@ -25,7 +31,8 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   function sync(){
     (root.querySelector('[data-action="download"]') as HTMLButtonElement).disabled=pending||!snapshot||!exportEnabled.checked;
     (root.querySelector('[data-action="report"]') as HTMLButtonElement).disabled=pending||!snapshot;
-    (root.querySelector('[data-action="convert"]') as HTMLButtonElement).disabled=pending||!snapshot||snapshot.summary.beams>0;
+    (root.querySelector('[data-action="convert"]') as HTMLButtonElement).disabled=pending||!snapshot||!!snapshot.model;
+    repairButton.disabled=pending||!options.runRepair;
     view.disabled=!snapshot||snapshot.summary.beams===0;
   }
   function invalidate(){snapshot=null;output.textContent="参数已修改，待生成";sync();}
@@ -77,7 +84,21 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   root.querySelector('[data-action="report"]')!.addEventListener("click",()=>{
     if(snapshot)save(snapshot.request.kind+"-bundle.json",JSON.stringify({request:snapshot.request,ui:{exportK:exportEnabled.checked},files:Object.fromEntries(Object.entries(snapshot.files).filter(([name])=>name!=="mesh.k"))},null,2));
   });
-  root.querySelector('[data-action="convert"]')!.addEventListener("click",()=>{if(snapshot&&!snapshot.summary.beams){options.convert();snapshot=null;output.textContent="已转入局部细化";sync();}});
+  root.querySelector('[data-action="convert"]')!.addEventListener("click",()=>{if(snapshot&&!snapshot.model){options.convert();snapshot=null;output.textContent="已转入局部细化";sync();}});
+  repairButton.addEventListener("click",()=>{if(!pending&&!options.isBusy())repairInput.click();});
+  repairInput.addEventListener("change",async()=>{
+    if(pending||options.isBusy()||!options.runRepair)return;
+    const file=repairInput.files?.[0];if(!file)return;
+    pending=true;snapshot=null;sync();output.textContent="正在检查接口修复请求…";
+    try{
+      if(file.size>25*1024*1024)throw new Error("修复请求超过GUI的25MiB限额，请使用Node CLI");
+      const data=JSON.parse(await file.text());
+      const result=await options.runRepair(data?.request??data);
+      options.show(result);snapshot=result;view.value="solid";options.view("solid");
+      output.textContent=`接口修复完成 · 节点 ${result.summary.nodes} · 实体 ${result.summary.solids}`;
+    }catch(e){output.textContent=`接口修复失败，未导出：${e instanceof Error?e.message:String(e)}`;}
+    finally{pending=false;repairInput.value="";sync();}
+  });
   dialog.querySelector("form")!.addEventListener("submit",async e=>{
     e.preventDefault();if(pending||options.isBusy())return;
     pending=true;snapshot=null;sync();error.textContent="";resolved.textContent="生成中…";

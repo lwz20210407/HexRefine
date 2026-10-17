@@ -4,6 +4,23 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
+test("GUI61 parallel auto-fit contains rotated box corners on desktop and mobile", async () => {
+  const source = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
+  const project = extractNamedFunction(source, "projectPoint");
+  const fit = extractNamedFunction(source, "fitCameraToMesh");
+  for (const [width,height] of [[1180,1000],[390,490]]) {
+    const camera={center:[0,0,0],zoom:1,yaw:1.2,pitch:-.7,roll:.6};
+    const run = new Function("mesh","camera","canvas","meshBounds",`
+      const gui61Preview = {}, projectionMode = "parallel";
+      const perspectiveDistanceForViewport = () => 1;
+      ${project}\n${fit}\nfitCameraToMesh();return mesh.nodes.map(projectPoint);
+    `);
+    const nodes=[];for(const x of [-.5,1])for(const y of [-.5,1])for(const z of [-.5,1])nodes.push([x,y,z]);
+    const projected=run({nodes},camera,{width,height},()=>({min:[-.5,-.5,-.5],max:[1,1,1]}));
+    for(const p of projected){assert.ok(p.x>=width*.099&&p.x<=width*.901);assert.ok(p.y>=height*.139&&p.y<=height*.861);}
+  }
+});
+
 test("ordinary browser import rejects beam decks before solid-only parsing", async () => {
   const gui = await readFile(new URL("examples/browser/refinement-gui.html", projectRoot), "utf8");
   const importer = extractNamedFunction(gui, "importMeshFile");

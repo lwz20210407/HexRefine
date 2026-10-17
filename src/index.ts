@@ -90,4 +90,5 @@ export {
   type HexSessionSelectionRegularizationOptions,
   type RegularizedHexSessionSelection
 } from "./session-regularization.js";
-export {repairGui61FiveHexInterfaces, type Gui61InterfaceRepairOptions, type Gui61InterfaceRepairResult} from "./gui61-interface-repair.js";
+export {repairGui61Interfaces, repairGui61FiveHexInterfaces, type Gui61InterfaceRepairOptions, type Gui61InterfaceRepairResult} from "./gui61-interface-repair.js";
+export {generateGui61Repair, type Gui61RepairRequest} from "./gui61-repair.js";

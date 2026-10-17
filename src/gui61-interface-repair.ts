@@ -1,7 +1,8 @@
 import type {LocalRefinement, Mesh, Point, ReadonlyMesh} from "./types.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {H1_FACES} from "./topology.js";
-import {refineHexTo5Hex} from "./templates.js";
+import {refineHexTo5Hex, trilinear} from "./templates.js";
+import {gui61CornerFourHexTemplate} from "./gui61-repair-templates.js";
 import {auditHexRefinementQuality, hexElementSignedVolume, minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {hexJacobian} from "./hex-quality-internal.js";
 import {minElementEdgeLength} from "./mesh.js";
@@ -21,11 +22,13 @@ export interface Gui61InterfaceRepairResult {
   parentElementIds: number[];
   repairedParentIds: number[];
   addedNodeIds: number[];
+  repairs: {parentElementId: number; template: string; childElementCount: number}[];
   quality: {minimumCornerScaledJacobian: number; minimumGaussJacobian: number; maximumParentVolumeError: number};
 }
 
 const CUBE = [[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]];
-const reference = refineHexTo5Hex(CUBE);
+const fiveReference = refineHexTo5Hex(CUBE);
+const cornerReferences = [1/3,1/2,2/3].flatMap(a=>[1/3,1/2,2/3].map(b=>gui61CornerFourHexTemplate(CUBE,a,b)));
 const key = (ids: readonly number[]) => [...ids].sort((a,b)=>a-b).join(":");
 const distance = (a: Point,b: Point) => Math.hypot(...a.map((v,i)=>v-b[i]!));
 const reverse = (e: readonly number[]) => [e[1]!,e[0]!,e[3]!,e[2]!,e[5]!,e[4]!,e[7]!,e[6]!];
@@ -50,12 +53,14 @@ function boundaryFaces(elements: readonly (readonly number[])[]): number[][] {
   }
   return [...all.values()].filter(a=>a.length===1).map(a=>a[0]!);
 }
-const referenceBoundary = boundaryFaces(reference.elements);
-const referenceWalls = H1_FACES.map(face=>{
+function wallsOf(reference: LocalRefinement): number[][][] {
+  const referenceBoundary = boundaryFaces(reference.elements);
+  return H1_FACES.map(face=>{
   const axis=[0,1,2].find(a=>face.every(i=>CUBE[i-1]![a]===CUBE[face[0]!-1]![a]))!;
   const side=CUBE[face[0]!-1]![axis]!;
   return referenceBoundary.filter(f=>f.every(i=>Math.abs(reference.nodes[i-1]![axis]!-side)<1e-12));
-});
+  });
+}
 
 function determinant(m: number[][]): number {
   const [a,b,c]=m as [number[],number[],number[]];
@@ -97,6 +102,15 @@ interface Candidate {refinement: LocalRefinement; ids: number[]; supports: strin
  * selected face partitions may be reused. No global coordinate merge is used.
  */
 export function repairGui61FiveHexInterfaces(mesh: ReadonlyMesh, options: Gui61InterfaceRepairOptions): Gui61InterfaceRepairResult {
+  return repairWithTemplates(mesh, options, [fiveReference]);
+}
+
+/** Matches supported corner-four or five-Hex patterns; no automatic selection expansion. */
+export function repairGui61Interfaces(mesh: ReadonlyMesh, options: Gui61InterfaceRepairOptions): Gui61InterfaceRepairResult {
+  return repairWithTemplates(mesh, options, [fiveReference,...cornerReferences]);
+}
+
+function repairWithTemplates(mesh: ReadonlyMesh, options: Gui61InterfaceRepairOptions, references: readonly LocalRefinement[]): Gui61InterfaceRepairResult {
   if(!options||!Number.isFinite(options.tolerance)||options.tolerance<=0)
     throw new RangeError("positive explicit repair tolerance is required");
   if(!Array.isArray(options.parentElementIds)||!options.parentElementIds.length
@@ -129,11 +143,21 @@ export function repairGui61FiveHexInterfaces(mesh: ReadonlyMesh, options: Gui61I
   const chosen=new Map<number,Candidate>();
   for(const id of [...selected].sort((a,b)=>a-b)){
     const req=requirements.get(id)!;
-    if(req.size!==2)throw new Error(`parent ${id}: expected exactly two subdivided interface faces`);
+    if(req.size<1||req.size>3||(references.length===1&&req.size!==2))
+      throw new Error(`parent ${id}: unsupported number of subdivided interface faces`);
     const candidates=new Map<string,Candidate>();
-    for(const frame of FRAMES){
+    for(const reference of references) for(const frame of FRAMES){
       const corners=frame.map(i=>mesh.elements[id-1]![i]!);
-      const refinement=refineHexTo5Hex(corners.map(n=>mesh.nodes[n-1]!));
+      // In the one-wall v15 contract, the detected split wall is the primary
+      // bottom face; the half-height cap is derived, not another free choice.
+      if(reference.elements.length===4&&req.size===1
+          &&!req.has(key(H1_FACES[0]!.map(n=>corners[n-1]!))))continue;
+      const referenceWalls=wallsOf(reference);
+      const targetSizes=new Map(H1_FACES.map((face,i)=>[key(face.map(n=>corners[n-1]!)),referenceWalls[i]!.length]));
+      if(![...req].every(([face,target])=>target.size===targetSizes.get(face)))continue;
+      const vertices=corners.map(n=>mesh.nodes[n-1]!);
+      const refinement: LocalRefinement={...reference,
+        nodes:reference.nodes.map(p=>trilinear(vertices,p[0]!,p[1]!,p[2]!)),elements:reference.elements.map(e=>[...e])};
       if(hexElementSignedVolume(refinement.elements[0]!.map(n=>refinement.nodes[n-1]!))<0)
         refinement.elements=refinement.elements.map(reverse);
       const ids=refinement.nodes.map((p,i)=>{
@@ -152,7 +176,7 @@ export function repairGui61FiveHexInterfaces(mesh: ReadonlyMesh, options: Gui61I
       const signature=refinement.elements.map(e=>e.map(n=>ids[n-1]?`n${ids[n-1]}`:`s${supports[n-1]}`).sort().join("/")).sort().join("|");
       candidates.set(signature,{refinement,ids,supports});
     }
-    if(candidates.size!==1)throw new Error(`parent ${id}: ${candidates.size} distinct compatible 5-Hex repairs; exactly one required`);
+    if(candidates.size!==1)throw new Error(`parent ${id}: ${candidates.size} distinct compatible repairs; exactly one required`);
     chosen.set(id,[...candidates.values()][0]!);
   }
   const nodes=mesh.nodes.map(p=>[...p]), elements:number[][]=[], parentElementIds:number[]=[];
@@ -178,6 +202,7 @@ export function repairGui61FiveHexInterfaces(mesh: ReadonlyMesh, options: Gui61I
   validate(output);
   if(!checkNoHangingNodes(output,tolerance).ok)throw new Error("repair rejected: unresolved hanging interface remains; input unchanged");
   return {mesh:output,parentElementIds,repairedParentIds:[...chosen.keys()],
+    repairs:[...chosen].map(([id,c])=>({parentElementId:id,template:c.refinement.source,childElementCount:c.refinement.elements.length})),
     addedNodeIds:nodes.slice(mesh.nodes.length).map((_,i)=>mesh.nodes.length+i+1),
     quality:{...quality(output),maximumParentVolumeError}};
 }
