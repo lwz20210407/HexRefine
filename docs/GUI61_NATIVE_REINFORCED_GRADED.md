@@ -1,5 +1,10 @@
 # Native Graded Reinforcement
 
+2026-10-20 update: [RC completion and remaining scope](GUI61_RC_COMPLETION.md)
+records the 144-state matrix, paired middle-band source fix, shared beam
+quality metrics and verified named-set archive/replay. These are bounded
+contracts, not a claim of every continuous parameter or solver acceptance.
+
 `generateGradedReinforcedMesh` and `planGradedReinforcement` implement a bounded
 port of recovered Code_Creat5 with explicit native extensions. Runtime is TypeScript/Node, without MATLAB/TG.
 This is not a complete port of all reinforcement controls or a solver-ready deck.

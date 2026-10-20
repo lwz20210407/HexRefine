@@ -164,6 +164,10 @@ Copyright (c) 2026 Huilong Ren.
   GUI, count checks, trial/apply, parameter replay and K/INP downloads.
 - [TransitionMesh source assessment and Abaqus 2020 experiments](docs/TRANSITIONMESH_ASSESSMENT.md):
   implementation comparison, verified cases, provenance and remaining gaps.
+- [Reinforced concrete completion](docs/GUI61_RC_COMPLETION.md): original controls,
+  paired-band source defect, mixed beam/solid audits and verified set replay.
+- [Other open-source transition implementations](docs/OPEN_SOURCE_TRANSITION_SURVEY.md):
+  13 deduplicated GitHub/GitLab/Gitee projects, code evidence and reuse boundaries.
 
 - [Architecture](docs/architecture.md): module boundaries and data flow
 - [Features](docs/features.md): supported workflows and user-facing behavior

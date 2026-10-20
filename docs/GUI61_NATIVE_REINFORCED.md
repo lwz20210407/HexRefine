@@ -84,9 +84,11 @@ prove mechanical coupling. A repeated N3 is not automatically a solver error
 for every formulation; native output avoids that ambiguity without claiming
 solver validation of the raw or generated decks.
 
-Pending in the uniform generator: asymmetric six-face covers,
-embedded/bond-slip coupling, sections/materials, GUI integration,
-large models and engineering solver validation.
+GUI integration, quantity optimization and named-set archive/replay are now
+implemented. Still outside the uniform generator: asymmetric six-face covers,
+embedded/bond-slip coupling, sections/materials, industrial-scale acceptance
+and engineering solver validation. See [RC completion](GUI61_RC_COMPLETION.md)
+for current coverage rather than interpreting this as an unimplemented family.
 
 ## Quantity Optimization
 
