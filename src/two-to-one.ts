@@ -36,6 +36,10 @@ export interface DirectTwoToOnePlan {
   replacements: TwoToOneReplacement[];
   strategy: DirectTwoToOneStrategy;
 }
+export interface TwoToOnePhaseOptions {
+  /** Geometric symmetry-cut planes only; these faces still require exact conformance. */
+  exemptPlanes?:readonly {axis:0|1|2;coordinate:number}[];
+}
 
 interface FaceOwner {
   elementId: number;
@@ -92,18 +96,21 @@ let candidateCache: readonly Candidate[] | undefined;
  */
 export function buildDirectTwoToOneHexPlan(
   mesh: Mesh,
-  selectedElementIds: readonly number[]
+  selectedElementIds: readonly number[],
+  phaseOptions:TwoToOnePhaseOptions={}
 ): DirectTwoToOnePlan {
   return buildDirectTwoToOneHexPlanFromNormalizedSelection(
     mesh,
-    normalizeTwoToOneSelection(mesh, selectedElementIds)
+    normalizeTwoToOneSelection(mesh, selectedElementIds),phaseOptions
   );
 }
 
 export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
   mesh: Mesh,
-  selected: NormalizedTwoToOneSelection
+  selected: NormalizedTwoToOneSelection,
+  phaseOptions:TwoToOnePhaseOptions={}
 ): DirectTwoToOnePlan {
+  if(Object.keys(phaseOptions).some(k=>k!=="exemptPlanes")||(phaseOptions.exemptPlanes!==undefined&&(!Array.isArray(phaseOptions.exemptPlanes)||phaseOptions.exemptPlanes.some(p=>!p||Object.keys(p).some(k=>!["axis","coordinate"].includes(k))||![0,1,2].includes(p.axis)||!Number.isFinite(p.coordinate)))))throw new RangeError("invalid phase-exemption planes");
   const incidence = buildFaceIncidence(mesh);
   const localReplacements =
     tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(mesh, selected);
@@ -162,6 +169,12 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
     variableIndex,
     incidence
   );
+  if(phaseOptions.exemptPlanes?.length){
+    const tolerance=minPhaseTolerance(mesh);
+    for(const [variable,faces] of externalFaces){const e=mesh.elements[variables[variable]!-1]!;
+      externalFaces.set(variable,faces.filter(face=>!phaseOptions.exemptPlanes!.some(p=>H1_FACES[face]!.every(c=>Math.abs(mesh.nodes[e[c-1]!-1]![p.axis]!-p.coordinate)<=tolerance))));
+    }
+  }
   const components = constraintComponents(variables.length, constraints);
   const conflictingConstraints = new Set<number>();
   const solution = solveLevelField(
@@ -216,6 +229,8 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
     strategy: "seven-hex"
   };
 }
+
+function minPhaseTolerance(mesh:Mesh){const lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];let magnitude=0;for(const p of mesh.nodes)for(let a=0;a<3;a++){lo[a]=Math.min(lo[a]!,p[a]!);hi[a]=Math.max(hi[a]!,p[a]!);magnitude=Math.max(magnitude,Math.abs(p[a]!));}return Math.max(...hi.map((v,a)=>(v-lo[a]!)*1e-9),magnitude*Number.EPSILON*16);}
 
 export function buildTwoToOneHexReplacements(
   mesh: Mesh,
