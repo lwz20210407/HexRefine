@@ -46,6 +46,20 @@ test('GUI61 planning distinguishes divisibility by sixteen from cumulative reduc
   assert.equal(counts(plan).B2[2],counts(plan).D[2]/4);
 });
 
+test('double 4-to-2 middle bands compensate the source pairing defect without changing outer dimensions',()=>{
+  for(const full of [40,48]){
+    const input={...base,fullSize:[full,full,8],refinedSize:[8,8],fineSize:2,coarseSize:2,reductions:{x:2,y:2,z:2},transitionStages:2};
+    const p=planRectangularGrading(input);
+    assert.deepEqual(p.issues,[]);assert.deepEqual(p.spec.fullSize,input.fullSize);assert.deepEqual(p.spec.refinedSize,input.refinedSize);
+    const [c,b]=['C1','B1'].map(name=>p.blocks.find(block=>block.name===name));
+    assert.equal(c.counts[0]%4,0);assert.equal(b.counts[1]%4,0);
+    assert.equal(c.counts[0],full===40?4:8);assert.equal(b.counts[1],full===40?4:8);
+    assert.equal(p.warnings.filter(w=>w.includes('middle-band count adjusted')).length,2);
+    assert.ok(p.blocks.find(block=>block.name==='C2').counts[0]>0);
+  }
+  assert.throws(()=>planRectangularGrading({...base,fullSize:[24,24,8],refinedSize:[8,8],fineSize:2,coarseSize:2,reductions:{x:2,y:2,z:2},transitionStages:2}),/no room/);
+});
+
 test('GUI61 planning preserves input and distinguishes tilt parameters from geometry', () => {
   const input = structuredClone({...base,angleDegrees:10});
   const before = structuredClone(input);

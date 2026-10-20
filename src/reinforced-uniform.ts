@@ -4,6 +4,7 @@ import type {LsdynaMixedMesh,MixedBeamRecord} from "./lsdyna-mixed.js";
 import {validateLsdynaMixedMesh} from "./lsdyna-mixed.js";
 import {hexElementSignedVolume,minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {hexJacobian} from "./hex-quality-internal.js";
+import {auditReinforcementBeams} from "./reinforcement-quality.js";
 
 export interface UniformReinforcementSpec {
   size:readonly [number,number,number];
@@ -135,7 +136,7 @@ export function generateUniformReinforcedMesh(spec:UniformReinforcementSpec){
   const model:LsdynaMixedMesh={nodes,solids:concreteMesh.elements.map((e,i)=>({id:i+1,partId:plan.concretePartId,nodes:e})),beams};
   validateLsdynaMixedMesh(model);
   if(beams.length!==plan.beamCount||model.solids.length!==plan.solidCount)throw new Error("reinforcement counts disagree with plan");
-  let volume=0,minSJ=Infinity,minGauss=Infinity,minBeamLength=Infinity,maxBeamLength=0,minOrientationSine=Infinity;
+  let volume=0,minSJ=Infinity,minGauss=Infinity;
   for(const e of concreteMesh.elements){
     const v=e.map(n=>nodes[n-1]!);volume+=hexElementSignedVolume(v);minSJ=Math.min(minSJ,minimumHexCornerScaledJacobian(v));
     for(const u of [-1/Math.sqrt(3),1/Math.sqrt(3)])for(const s of [-1/Math.sqrt(3),1/Math.sqrt(3)])for(const t of [-1/Math.sqrt(3),1/Math.sqrt(3)]){
@@ -143,20 +144,12 @@ export function generateUniformReinforcedMesh(spec:UniformReinforcementSpec){
       minGauss=Math.min(minGauss,a[0]!*(b[1]!*c[2]!-b[2]!*c[1]!)-a[1]!*(b[0]!*c[2]!-b[2]!*c[0]!)+a[2]!*(b[0]!*c[1]!-b[1]!*c[0]!));
     }
   }
-  for(const beam of beams){
-    const p=nodes[beam.nodes[0]-1]!,q=nodes[beam.nodes[1]-1]!,r=nodes[beam.orientationNode-1]!;
-    const a=q.map((x,i)=>x-p[i]!),b=r.map((x,i)=>x-p[i]!);
-    const length=Math.hypot(...a),cross=[a[1]!*b[2]!-a[2]!*b[1]!,a[2]!*b[0]!-a[0]!*b[2]!,a[0]!*b[1]!-a[1]!*b[0]!];
-    minBeamLength=Math.min(minBeamLength,length);maxBeamLength=Math.max(maxBeamLength,length);
-    minOrientationSine=Math.min(minOrientationSine,Math.hypot(...cross)/(length*Math.hypot(...b)));
-  }
+  const beamQuality=auditReinforcementBeams(model,spec.connectivity);
   const relativeVolumeError=Math.abs(volume-L*W*H)/(L*W*H);
   if(!(minSJ>0&&minGauss>0&&relativeVolumeError<1e-8))throw new Error("reinforced concrete volume audit failed");
-  if(Math.max(Math.abs(minBeamLength-plan.effectiveMeshSize),Math.abs(maxBeamLength-plan.effectiveMeshSize))>1e-8*plan.effectiveMeshSize)throw new Error("beam subdivision does not follow its physical axis");
-  const endIds=[...beamEndNodes],shared=endIds.filter(n=>n<=concreteMesh.nodes.length).length;
-  if(spec.connectivity==="shared"?shared!==endIds.length:shared!==0)throw new Error("reinforcement connectivity policy was violated");
+  if(Math.max(Math.abs(beamQuality.minimumBeamLength!-plan.effectiveMeshSize),Math.abs(beamQuality.maximumBeamLength!-plan.effectiveMeshSize))>1e-8*plan.effectiveMeshSize)throw new Error("beam subdivision does not follow its physical axis");
+  const endIds=[...beamEndNodes];
   return {model,concreteMesh,plan,nodeSets:{concrete:concreteMesh.nodes.map((_,i)=>i+1),rebar_endpoints:endIds,rebar_orientation:orientationNodes},
     cellSets:{concrete:model.solids.map(e=>e.id),...lineSets},
-    quality:{volume,relativeVolumeError,minimumCornerScaledJacobian:minSJ,minimumGaussDeterminant:minGauss,sharedEndpointNodes:shared,beamEndNodes:endIds.length,
-      minimumBeamLength:minBeamLength,maximumBeamLength:maxBeamLength,minimumBeamOrientationSine:minOrientationSine,warnings:plan.warnings}};
+    quality:{volume,relativeVolumeError,minimumCornerScaledJacobian:minSJ,minimumGaussDeterminant:minGauss,...beamQuality,beamEndNodes:endIds.length,warnings:plan.warnings}};
 }

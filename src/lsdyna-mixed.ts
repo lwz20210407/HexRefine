@@ -11,6 +11,18 @@ export interface LsdynaMixedMesh {
 }
 export interface MixedKeywordOptions {coordinatePrecision?:number;coordinateFormat?:"scientific"|"compact";}
 
+/** Sets stay in a sidecar; writing a mesh-only K must not invent solver cards. */
+export function validateLsdynaMixedSets(model:LsdynaMixedMesh,sets:{nodeSets?:Record<string,readonly number[]>;cellSets?:Record<string,readonly number[]>}):void {
+  const elements=new Set([...model.solids,...model.beams].map(e=>e.id));
+  for(const [kind,groups] of Object.entries(sets)){
+    if(!["nodeSets","cellSets"].includes(kind)||!groups||typeof groups!=="object"||Array.isArray(groups))throw new Error("invalid mixed mesh set collection");
+    for(const [name,ids] of Object.entries(groups)){
+      if(!name.trim()||!Array.isArray(ids)||new Set(ids).size!==ids.length)throw new Error("invalid or duplicate mixed set members");
+      if(ids.some(n=>!Number.isSafeInteger(n)||(kind==="nodeSets"?n<1||n>model.nodes.length:!elements.has(n))))throw new Error(`mixed set ${name} has an invalid ${kind==="nodeSets"?"node":"element"} reference`);
+    }
+  }
+}
+
 export function validateLsdynaMixedMesh(model:LsdynaMixedMesh):void {
   if(!model.nodes.length||!model.solids.length)throw new Error("mixed mesh requires nodes and solid elements");
   for(const p of model.nodes)if(p.length!==3||p.some(x=>!Number.isFinite(x)))throw new Error("mixed mesh requires finite 3D nodes");

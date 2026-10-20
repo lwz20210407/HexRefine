@@ -6,7 +6,7 @@ import {generateGradedReinforcedMesh} from "./reinforced-graded.js";
 import {generateRectangularGradedQuadMesh} from "./graded-quad.js";
 import {generateCircularGradedQuadMesh} from "./graded-circle-quad.js";
 import {meshToLsdynaKeyword,meshToLsdynaShellKeyword} from "./export.js";
-import {meshToLsdynaMixedKeyword,parseNativeLsdynaMixedKeyword} from "./lsdyna-mixed.js";
+import {meshToLsdynaMixedKeyword,parseNativeLsdynaMixedKeyword,validateLsdynaMixedSets} from "./lsdyna-mixed.js";
 import {parseMeshText} from "./mesh-io.js";
 import {minElementEdgeLength} from "./mesh.js";
 import type {Mesh} from "./types.js";
@@ -25,7 +25,15 @@ export interface Gui61Field {
   path:string;label:string;group:string;type:"number"|"choice"|"toggle";
   options?:readonly (readonly [string|number,string])[];
   on?:boolean|number;off?:boolean|number;disabled?:boolean;
+  optional?:boolean;
 }
+// Match kernel defaults, not the larger demonstration values in the GUI presets.
+const optionalFields:Partial<Record<Gui61Kind,Record<string,number|boolean|undefined>>>={
+  "rectangular-solid":{angleDegrees:0,angleCorrection:false},
+  "circular-solid":{angleDegrees:0,angleCorrection:false,elementLimit:undefined,approachElementLimit:false},
+  "reinforced-uniform":{maximumRelativeDimensionChange:0,elementLimit:undefined,optimizeMeshSize:false},
+  "reinforced-graded":{"concrete.angleDegrees":0,"concrete.angleCorrection":false}
+};
 const rectangle={fullSize:[80,80,16],refinedSize:[32,32],fineSize:1,coarseSize:2,reductions:{x:3,y:3,z:3},
   thicknessTransition:true,transitionStages:1,modelFraction:"half",angleDegrees:0,angleCorrection:false};
 const defaults:Record<Gui61Kind,Record<string,unknown>>={
@@ -44,14 +52,16 @@ export function defaultGui61Request(kind:Gui61Kind):Gui61Request {
 export function gui61Value(request:Gui61Request,path:string):unknown {
   let value:unknown=request.parameters;
   for(const key of path.split(".")){if(!value||typeof value!=="object")return undefined;value=(value as Record<string,unknown>)[key];}
-  return value;
+  return value===undefined?optionalFields[request.kind]?.[path]:value;
 }
 export function updateGui61Value(request:Gui61Request,path:string,value:unknown):Gui61Request {
   if(!gui61Fields(request).some(f=>f.path===path))throw new RangeError("unknown GUI61 field");
   const next=structuredClone(request),keys=path.split(".");
   let target=next.parameters;
   for(const key of keys.slice(0,-1))target=target[key] as Record<string,unknown>;
-  target[keys.at(-1)!]=value;return next;
+  if(value===undefined&&Object.hasOwn(optionalFields[request.kind]??{},path))delete target[keys.at(-1)!];
+  else target[keys.at(-1)!]=value;
+  return next;
 }
 export function gui61Fields(request:Gui61Request):Gui61Field[]{
   const fields:Gui61Field[]=[];
@@ -95,6 +105,7 @@ export function gui61Fields(request:Gui61Request):Gui61Field[]{
     for(const [p,l] of [["positiveSize","正半轴范围"],["fineRegionSize","加密区正半轴范围"],["coarseCounts","粗网格计数"]])for(const [i,a] of ["X","Y"].entries())n(`${p}.${i}`,a+l);
     ratio("reductions.x","X向倍率");ratio("reductions.y","Y向倍率");fraction();
   }else throw new RangeError("unknown GUI61 generator");
+  for(const field of fields)if(Object.hasOwn(optionalFields[request.kind]??{},field.path))field.optional=true;
   return fields;
 }
 export interface Gui61Generated {
@@ -110,6 +121,7 @@ export function generateGui61(request:Gui61Request):Gui61Generated {
   // Native entry points own parameter validation; never drop unknown fields here.
   const r=generator(request.parameters as never);
   const mesh="mesh" in r?r.mesh:r.concreteMesh,model="model" in r?r.model:undefined;
+  if(model&&"nodeSets" in r&&"cellSets" in r)validateLsdynaMixedSets(model,{nodeSets:r.nodeSets,cellSets:r.cellSets});
   const keyword=model?meshToLsdynaMixedKeyword(model,{coordinateFormat:"compact"}):mesh.kind==="Q1"?meshToLsdynaShellKeyword(mesh,{coordinateFormat:"compact"}):meshToLsdynaKeyword(mesh,{coordinateFormat:"compact"});
   const back=model?parseNativeLsdynaMixedKeyword(keyword):parseMeshText(keyword,"generated.k");
   const points=model?model.nodes:mesh.nodes;

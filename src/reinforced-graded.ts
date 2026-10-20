@@ -6,6 +6,7 @@ import type {LsdynaMixedMesh,MixedBeamRecord} from "./lsdyna-mixed.js";
 import {validateLsdynaMixedMesh} from "./lsdyna-mixed.js";
 import {minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {mergeCoincidentNodesWithMap,minElementEdgeLength} from "./mesh.js";
+import {auditReinforcementBeams} from "./reinforcement-quality.js";
 
 export interface GradedReinforcementSpec {
   concrete: RectangularGradingSpec;
@@ -132,6 +133,8 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
   const model:LsdynaMixedMesh={nodes,solids:mesh.elements.map((e,i)=>({id:i+1,partId:plan.concretePartId,nodes:e})),beams};
   validateLsdynaMixedMesh(model);
   if(beams.length!==plan.beamCount)throw new Error("graded beam count disagrees with plan");
+  const beamQuality=auditReinforcementBeams(model,spec.connectivity);
+  if(beamQuality.sharedEndpointNodes!==sharedEndpointNodes)throw new Error("graded endpoint audit disagrees with assembly");
   const parents=new Map<number,number>();for(const id of concrete.parentElementIds)parents.set(id,(parents.get(id)??0)+1);
   const core=new Set(concrete.coreParentIds);
   const regions={core:{count:0,minimumCornerScaledJacobian:Infinity},transition:{count:0,minimumCornerScaledJacobian:Infinity},farField:{count:0,minimumCornerScaledJacobian:Infinity}};
@@ -146,5 +149,5 @@ export function generateGradedReinforcedMesh(spec:GradedReinforcementSpec){
     cellSets:{concrete:model.solids.map(e=>e.id),...lineSets},
     quality:{...concrete.quality,regions,
       regionClassification:"core / refined outside-core support (including intermediate uniform cells in two-stage meshes) / unchanged far field",
-      sharedEndpointNodes,sharedEndpointTolerance,beamEndpointNodes:endIds.length,beamCount:beams.length,warnings:[...concrete.quality.warnings,...plan.warnings]}};
+      ...beamQuality,sharedEndpointTolerance,warnings:[...concrete.quality.warnings,...plan.warnings]}};
 }

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "reinforced-graded",
+  "parameters": {
+    "concrete": {
+      "fullSize": [48, 48, 8],
+      "refinedSize": [8, 8],
+      "fineSize": 2,
+      "coarseSize": 2,
+      "reductions": {"x": 2, "y": 2, "z": 2},
+      "thicknessTransition": true,
+      "transitionStages": 2,
+      "modelFraction": "half"
+    },
+    "rebarMeshSize": 2,
+    "barCounts": [3, 3, 3],
+    "cover": [2, 2, 2, 2, 2, 2],
+    "includeZBars": true,
+    "connectivity": "separate"
+  }
+}

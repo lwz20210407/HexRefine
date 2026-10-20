@@ -1,4 +1,5 @@
 import {defaultGui61Request,gui61Kinds,gui61Fields,gui61Value,updateGui61Value,type Gui61Generated,type Gui61Kind,type Gui61Request} from "./gui61-generators.js";
+import {parseGui61ParameterFile,createGui61ParameterArchive,verifyGui61ParameterReplay,type Gui61ParameterImport} from "./gui61-archive.js";
 
 export function mountGui61Workbench(root:HTMLElement,options:{
   run:(request:Gui61Request)=>Promise<Gui61Generated>;
@@ -28,6 +29,7 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   for(const [value,label] of gui61Kinds){const option=document.createElement("option");option.value=value;option.textContent=label;select.append(option);}
   const drafts=new Map<Gui61Kind,Gui61Request>();
   let current=defaultGui61Request("rectangular-solid"),snapshot:Gui61Generated|null=null,pending=false;
+  let replay:Gui61ParameterImport|undefined;
   const output=root.querySelector<HTMLElement>(".gui61-summary")!,error=dialog.querySelector<HTMLElement>(".gui61-error")!,resolved=dialog.querySelector<HTMLElement>(".gui61-resolved")!;
   const exportEnabled=dialog.querySelector<HTMLInputElement>('[data-action="enable-k"]')!,view=root.querySelector<HTMLSelectElement>('[data-action="view"]')!;
   const canExportK=()=>snapshot?.request.kind==="transition-mesh"||exportEnabled.checked;
@@ -39,7 +41,7 @@ export function mountGui61Workbench(root:HTMLElement,options:{
     repairButton.disabled=pending||!options.runRepair;
     view.disabled=!snapshot||snapshot.summary.beams===0;
   }
-  function invalidate(){snapshot=null;output.textContent="参数已修改，待生成";sync();}
+  function invalidate(){snapshot=null;replay=undefined;output.textContent="参数已修改，待生成";sync();}
   function renderFields(){
     const host=dialog.querySelector(".gui61-fields")!;host.replaceChildren();
     const groups=new Map<string,HTMLElement>();
@@ -53,11 +55,11 @@ export function mountGui61Workbench(root:HTMLElement,options:{
       if(input instanceof HTMLSelectElement){
         for(const [v,title] of field.options!){const option=document.createElement("option");option.value=String(v);option.textContent=title;input.append(option);}input.value=String(value);
       }else if(field.type==="toggle"){input.type="checkbox";input.checked=value===field.on;label.className="toggle";}
-      else{input.type="number";input.step=/barCounts|coarseCounts|layers|elementLimit/.test(field.path)?"1":"any";input.required=true;input.value=String(field.disabled&&field.path.endsWith("angleDegrees")?0:value??"");}
+      else{input.type="number";input.step=/barCounts|coarseCounts|layers|elementLimit/.test(field.path)?"1":"any";input.required=!field.optional;input.value=String(field.disabled&&field.path.endsWith("angleDegrees")?0:value??"");}
       input.addEventListener(field.type==="number"?"input":"change",()=>{
         let value:unknown=input.value;
         if(field.type==="toggle")value=(input as HTMLInputElement).checked?field.on:field.off;
-        else if(field.type==="number")value=(input as HTMLInputElement).valueAsNumber;
+        else if(field.type==="number")value=field.optional&&input.value===""?undefined:(input as HTMLInputElement).valueAsNumber;
         else value=field.options!.find(([v])=>String(v)===input.value)![0];
         current=updateGui61Value(current,field.path,value);drafts.set(current.kind,current);invalidate();error.textContent="";
         if(field.type!=="number")renderFields();
@@ -74,11 +76,11 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   const file=dialog.querySelector<HTMLInputElement>('[data-action="file"]')!;
   dialog.querySelector('[data-action="import"]')!.addEventListener("click",()=>file.click());
   file.addEventListener("change",async()=>{
-    try{const f=file.files?.[0];if(!f)return;const data=JSON.parse(await f.text());const parsed=(data?.schemaVersion?data:data?.request) as Gui61Request;
-      if(parsed.schemaVersion!==1||!gui61Kinds.some(([k])=>k===parsed.kind)||!parsed.parameters||typeof parsed.parameters!=="object"||Array.isArray(parsed.parameters)||Object.keys(parsed).some(k=>!["schemaVersion","kind","parameters"].includes(k)))throw new Error("参数文件格式无效");
-      for(const field of gui61Fields(parsed))if(gui61Value(parsed,field.path)===undefined)throw new Error(`参数文件缺少 ${field.path}`);
-      current=structuredClone(parsed);select.value=current.kind;drafts.set(current.kind,current);invalidate();
-      if(typeof data?.ui?.exportK==="boolean")exportEnabled.checked=data.ui.exportK;
+    try{const f=file.files?.[0];if(!f)return;
+      if(f.size>25*1024*1024)throw new Error("参数文件超过GUI的25MiB限额，请使用Node接口");
+      const parsed=parseGui61ParameterFile(JSON.parse(await f.text()));
+      current=parsed.request;select.value=current.kind;drafts.set(current.kind,current);invalidate();replay=parsed;
+      if(parsed.exportK!==undefined)exportEnabled.checked=parsed.exportK;
       renderFields();sync();error.textContent="";
     }catch(e){error.textContent=String(e);}finally{file.value="";}
   });
@@ -87,7 +89,7 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   root.querySelector('[data-action="download"]')!.addEventListener("click",()=>{if(snapshot&&canExportK())save(snapshot.request.kind+".k",snapshot.files["mesh.k"]!);});
   inpButton.addEventListener("click",()=>{if(snapshot?.files["mesh.inp"])save(snapshot.request.kind+".inp",snapshot.files["mesh.inp"]);});
   root.querySelector('[data-action="report"]')!.addEventListener("click",()=>{
-    if(snapshot)save(snapshot.request.kind+"-bundle.json",JSON.stringify({request:snapshot.request,ui:{exportK:canExportK()},files:Object.fromEntries(Object.entries(snapshot.files).filter(([name])=>name!=="mesh.k"))},null,2));
+    if(snapshot)save(snapshot.request.kind+"-bundle.json",JSON.stringify(gui61Kinds.some(([kind])=>kind===snapshot!.request.kind)?createGui61ParameterArchive(snapshot,canExportK()):{request:snapshot.request,ui:{exportK:canExportK()},files:Object.fromEntries(Object.entries(snapshot.files).filter(([name])=>name!=="mesh.k"))},null,2));
   });
   root.querySelector('[data-action="convert"]')!.addEventListener("click",()=>{if(snapshot&&!snapshot.model){options.convert();snapshot=null;output.textContent="已转入局部细化";sync();}});
   repairButton.addEventListener("click",()=>{if(!pending&&!options.isBusy())repairInput.click();});
@@ -109,7 +111,7 @@ export function mountGui61Workbench(root:HTMLElement,options:{
     pending=true;snapshot=null;sync();error.textContent="";resolved.textContent="生成中…";
     dialog.querySelectorAll<HTMLInputElement|HTMLButtonElement|HTMLSelectElement>("input,button,select").forEach(e=>e.disabled=true);
     try{
-      const result=await options.run(structuredClone(current));options.show(result);snapshot=result;
+      const result=await options.run(structuredClone(current));if(replay)verifyGui61ParameterReplay(replay,result);options.show(result);snapshot=result;
       output.textContent=`${gui61Kinds.find(([k])=>k===result.request.kind)![1]} · 节点 ${result.summary.nodes} · 实体 ${result.summary.solids} · 面 ${result.summary.quads} · 梁 ${result.summary.beams}`;
       resolved.textContent=JSON.stringify({plan:result.plan,quality:result.quality},null,2);
       view.value=result.summary.beams?"both":"solid";options.view(view.value);dialog.close();

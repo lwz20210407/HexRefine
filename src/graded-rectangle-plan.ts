@@ -94,8 +94,18 @@ export function planRectangularGrading(input: RectangularGradingSpec): Rectangul
   let effectiveAngleDegrees = spec.modelFraction === "quarter" ? 0 : angle;
   if (angle !== effectiveAngleDegrees) warnings.push("quarter model forces the angle to zero, following the rectangular GUI branch");
   let offset = height * Math.tan(effectiveAngleDegrees * Math.PI / 180);
-  const middleY=spec.transitionStages===2?alignedCount(Math.round(.618*by),ry):0;
-  const middleX=spec.transitionStages===2?alignedCount(Math.round(.618*cx),rx):0;
+  const middle=(total:number,reduction:number,axis:string)=>{
+    const sourceCount=alignedCount(Math.round(.618*total),reduction);
+    if(reduction!==2||sourceCount%4===0&&sourceCount<total)return sourceCount;
+    // The source only aligns by 2 here, but the second 4-to-2 interface needs pairs.
+    const maximum=4*Math.floor((total-1)/4);
+    if(maximum<4)throw new RangeError("the second transition band has no room for a paired 4-to-2 middle band");
+    const resolved=Math.min(alignedCount(Math.round(.618*total),4),maximum);
+    warnings.push(`${axis} middle-band count adjusted from ${sourceCount} to ${resolved} for paired 4-to-2 compatibility; outer dimensions and refined extent are unchanged.`);
+    return resolved;
+  };
+  const middleY=spec.transitionStages===2?middle(by,ry,"Y"):0;
+  const middleX=spec.transitionStages===2?middle(cx,rx,"X"):0;
   if(spec.transitionStages===2 && (middleX>=cx||middleY>=by))throw new RangeError("the second transition band has no remaining coarse cells");
   const weight=middleX/cx;
   const maxOffset=spec.transitionStages===1?2*ox:Math.min(2*ox,
