@@ -158,6 +158,11 @@ Copyright (c) 2026 Huilong Ren.
 
 ## Documentation
 
+- [Native straight/annular transition bands](docs/TRANSITION_BANDS.md): per-stage
+  2:1/3:1 ratios, explicit widths, fine-side reversal, sectors and straight Hex extrusion.
+- [TransitionMesh source assessment and Abaqus 2020 experiments](docs/TRANSITIONMESH_ASSESSMENT.md):
+  implementation comparison, verified cases, provenance and remaining gaps.
+
 - [Architecture](docs/architecture.md): module boundaries and data flow
 - [Features](docs/features.md): supported workflows and user-facing behavior
 - [Mesh Import](docs/import-mesh.md): supported JSON and VTK starting-mesh formats
