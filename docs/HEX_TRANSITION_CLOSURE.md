@@ -175,3 +175,8 @@ mesh hashes are checked; the page was opened on desktop/mobile and every
 image loaded successfully. The real notched-tension transition has minimum
 SJ about0.149, below its original0.622; it is disclosed as a quality warning,
 not automatically accepted by earlier low-SJ engineering decisions.
+
+The subsequent opt-in full-section extrusion path and complete original
+compression ROI evidence are documented in [OGRID_FULL_ROI.md](OGRID_FULL_ROI.md).
+It adds symmetry-cut phase semantics and bounded circular sheet redistribution,
+not a claim that every harvested corner sample is a complete macro.
