@@ -158,8 +158,10 @@ Copyright (c) 2026 Huilong Ren.
 
 ## Documentation
 
-- [Native straight/annular transition bands](docs/TRANSITION_BANDS.md): per-stage
-  2:1/3:1 ratios, explicit widths, fine-side reversal, sectors and straight Hex extrusion.
+- [Native transition meshes](docs/TRANSITION_BANDS.md): straight/annular bands,
+  same-stage hybrid blocks, 2:1/3:1 rectangular rings, axial tubes and Hex extrusion.
+- [Transition mesh workbench](docs/TRANSITION_MESH_WORKBENCH.md): five-mode
+  GUI, count checks, trial/apply, parameter replay and K/INP downloads.
 - [TransitionMesh source assessment and Abaqus 2020 experiments](docs/TRANSITIONMESH_ASSESSMENT.md):
   implementation comparison, verified cases, provenance and remaining gaps.
 

@@ -1,6 +1,6 @@
 # Native Transition Bands
 
-These APIs construct new isolated transition bands. They do not refine an
+These APIs construct new transition meshes. They do not refine an
 arbitrary existing Hex mesh, preserve a CAD partition history, or replace
 the GUI61 target generators. Research motivation and provenance are in
 [TRANSITIONMESH_ASSESSMENT.md](TRANSITIONMESH_ASSESSMENT.md).
@@ -21,7 +21,47 @@ const annulus = generateAnnularTransitionBand({
 const solid = extrudeTransitionBand(annulus, 4, 3);
 ```
 
-All four functions (`planTransitionBand` included) are exported by `index.ts`.
+Additional modes:
+
+```ts
+const mixed = generateHybridTransitionBand({
+  length: 14, depth: 2, fineSegments: 14, coarseSegments: 6,
+  blocks: ["pair2", "single3", "pair2", "single3"]
+});
+const rectangle = generateRectangularTransitionRings({
+  innerSize: [12, 8], fineSegments: [12, 8], stages: 2,
+  ratio: 2, includeCore: true
+});
+const axial = generateAxialTransitionTube({
+  innerRadius: 10, outerRadius: 12, length: 6,
+  radialLayers: 2, fineSegments: 72, ratios: [2, 2],
+  fineEnd: "end", axis: [1, 2, 3], origin: [0, 0, 0]
+});
+```
+
+Hybrid blocks occupy one stage: `single3` consumes 3 fine and 1 coarse port,
+`pair2` consumes 4 fine and 2 coarse ports. Counts must satisfy port balance,
+including paired 2:1 columns. Grouped/interleaved orders or explicit blocks
+are accepted. Coarse widths are 2h or 3h; a uniform coarse pitch is not implied.
+
+Rectangular rings include dedicated three-quad 2:1 corners; 3:1 corners are
+regular quads. Optional core fill is exactly the requested Nx by Ny grid.
+Before a subsequent stage, regular collars pad the prior interface by whole
+cells until the next template tiles exactly. All previous interfaces remain
+shared. `plan.outerSize` is derived, not a fixed external-size input. For the
+3:1 two-stage 9x9 example, explicit collars produce outer size 45x45, unlike
+the source plugin's 33x33 FREE-meshed branch. This is a different construction
+with its own reported geometry, not an identical replay.
+
+Axial tubes reduce circumferential counts along the cylinder axis. Radial wall
+layers are independent. Full-circle seams share IDs at every axial interface;
+sectors expose separate side sets. `axis` defines an arbitrary spatial frame,
+while `fineEnd` chooses the axial start or end. Positive corner and Gauss
+Jacobians, expected boundary faces, and volume from bilinear boundary
+integration are checked against the Hex Gauss integral. Analytic-cylinder
+volume error is recorded separately from discrete conservation.
+
+All functions shown above, including the count planners, are exported by `index.ts`.
 Planar `fineSide` is bottom/top in its local frame; annular is inner/outer.
 Planar rotation is in XY, not the GUI61 thickness-dependent tilt. Annuli can be
 full circles or positive sectors up to 360 degrees; inner radius must be positive.
@@ -91,12 +131,34 @@ NODE/SHELL or NODE/SOLID, with no inferred material/load/coupling cards. INP use
 the existing native Q4/H8 exporter and stage/node sets; it does not silently
 choose the source plugin's reduced-integration solver formulation.
 
-This API/CLI is not yet a new GUI mode. Same-stage hybrid blocks, rectangle
-corner/collar rings, axial cylinder bands, arbitrary spatial planes and curved
-sweep paths remain explicitly outside this first integration milestone.
+The versioned CLI accepts `planar`, `annular`, `hybrid`, `rectangular-rings`
+and `axial` through `generateTransitionMeshRequest`. Optional `extrusion`
+applies to the first four modes; axial already generates Hexes and rejects
+a second extrusion. Core cells have a `core` set; transition cells retain
+stage sets and lineage.
+
+The browser/offline workbench exposes these modes under `过渡带参数`; see
+[TRANSITION_MESH_WORKBENCH.md](TRANSITION_MESH_WORKBENCH.md). CAD partition/seed
+preservation, re-location of arbitrary existing model regions and curved
+sweep paths remain outside these independent generators.
 
 Validation checkpoint (2026-10-20): full suite 801/801, including 16 new
 band/CLI tests; five actual Abaqus 2020 planar source cases matched native
 geometry/connectivity. Eight separately audited native cases were opened in
 LS-PrePost and rendered to 16 views. This does not certify every continuous
 parameter combination or high-count performance.
+
+Continuation checkpoint: final full suite 837/837; axial interface
+height/count assertions passed in the 12-case axial suite. Five follow-up
+source cases (two hybrid orders, 2:1 rings L2/L3, 3:1 ring L1) matched native
+cell geometry after normalizing the picked fine-edge direction. Twelve GUI
+generations plus the rejected-width case passed; count/trial/apply, stale
+trial invalidation, archive replay, mobile and offline paths were exercised.
+Independent NumPy auditing passed every downloaded mesh, with selected models
+also opened/rendered in LS-PrePost.
+
+`suggestTransitionMeshCounts` returns an explicit count adjustment plus a new
+request. It preserves geometry and explicit block order, rejects noninteger
+data and does not mutate the original request. The workbench's suggestion
+button applies that adjustment and invalidates a stale trial. Committed
+requests are in [examples/transition-mesh](../examples/transition-mesh/README.md).
