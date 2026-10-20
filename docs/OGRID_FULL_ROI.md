@@ -115,6 +115,12 @@ Evidence root: `F:/PythonWoking/temp/20261021-hexrefine-ogrid-full-roi/`.
 | Same iron full central60% level1 plus full-section Z9.5..10.5 level2 | 686592 H8;4608 deepest completed core parents each64 exact quarter-grid children;25344 coarse parents remain;minSJ0.17598;independent8-Gauss/face/volume audit passed. Existing outer level1 provides support, so this is not a real weak-gap promotion benchmark. |
 | TC4 same complete region requested at level2 | **Rejected**, patch volume error1.353e-8 exceeds1e-8; no level2 K exported. Do not claim all mapped multi-level requests work. |
 
+Subsequent opt-in fix: [MAPPED_TRANSITION_CONSERVATION.md](MAPPED_TRANSITION_CONSERVATION.md)
+documents the warped-face flux defect and two complete TC4 level2 outputs.
+Default trilinear mapping still rejects the old request; explicit conservative
+face geometry passes without a widened gate. The new full-band direct31 mode
+does not imply arbitrary weak-balance/corner coverage.
+
 Fixed tests include exact core counts, unchanged far field/input, axis
 permutations, K roundtrip, explicit odd-sheet consent/budgets, full-band
 weak-to-strong completion and the quarter-section symmetry-phase regression.

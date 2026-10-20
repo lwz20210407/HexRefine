@@ -170,6 +170,9 @@ Copyright (c) 2026 Huilong Ren.
   13 deduplicated GitHub/GitLab/Gitee projects, code evidence and reuse boundaries.
 - [Bounded Hex corner closure and multilevel refinement](docs/HEX_TRANSITION_CLOSURE.md):
   opt-in 2:1/3:1 completion, explicit support redistribution, target levels and mesh-only K CLI.
+- [Conservative mapped faces and complete two-level shells](docs/MAPPED_TRANSITION_CONSERVATION.md):
+  opt-in warped-face flux conservation, full-section 31-Hex parent macros,
+  actual TC4 verification and explicit remaining weak-balance/corner limits.
 
 - [Architecture](docs/architecture.md): module boundaries and data flow
 - [Features](docs/features.md): supported workflows and user-facing behavior
