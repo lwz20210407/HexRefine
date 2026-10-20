@@ -75,8 +75,8 @@ export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: rea
           mesh,
           replacements,
           mergeTolerance,
-          (options.includeTransitions ?? true)
-            && options.hexRefinementRatio === 2
+          options.includeTransitions ?? true,
+          options.hexRefinementRatio??3
         )
       : {
           mesh: replaceElements(mesh, replacements, mergeTolerance),
@@ -330,8 +330,8 @@ function buildRefinementPreview(
         mesh,
         replacements,
         options.mergeTolerance ?? minElementEdgeLength(mesh) * 0.0005,
-        (options.includeTransitions ?? true)
-          && options.hexRefinementRatio === 2
+        options.includeTransitions ?? true,
+        options.hexRefinementRatio??3
       ).quality
     : undefined;
   const plan: RefinementPlanItem[] = replacements

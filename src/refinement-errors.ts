@@ -38,6 +38,14 @@ export class HexPatchQualityError extends Error {
   }
 }
 
+export class HexTransitionConformanceError extends Error {
+  readonly code="HEX_TRANSITION_CONFORMANCE";
+  readonly conflictingParentIds:number[];
+  constructor(message:string,parentIds:readonly number[]){
+    super(message);this.name="HexTransitionConformanceError";this.conflictingParentIds=[...parentIds];
+  }
+}
+
 export function assertHexPatchQuality(
   sourceMesh: Mesh,
   replacements: readonly ReplaceElement[],
@@ -168,10 +176,11 @@ export function buildAuditedHexRefinementOutput(
   sourceMesh: Mesh,
   replacements: readonly ReplaceElement[],
   mergeTolerance: number,
-  requireConforming: boolean
+  requireConforming: boolean,
+  ratio:2|3=2
 ): { mesh: Mesh; quality: HexRefinementQualitySummary } {
   const mesh = replaceElements(sourceMesh, replacements, mergeTolerance);
-  return {
+  try{return {
     mesh,
     quality: assertHexPatchQuality(
       sourceMesh,
@@ -179,7 +188,12 @@ export function buildAuditedHexRefinementOutput(
       mesh,
       requireConforming
     )
-  };
+  };}catch(error){
+    if(ratio===3&&error instanceof TwoToOnePlanningError&&error.code==="TWO_TO_ONE_CONFORMANCE"){
+      throw new HexTransitionConformanceError(error.message,error.diagnostic.conflictingCellIds);
+    }
+    throw error;
+  }
 }
 
 export function asTwoToOneFlatPlanningError(

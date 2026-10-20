@@ -13,7 +13,7 @@ import type {
   RefineOptions,
   RegularizedHexSelection
 } from "./types.js";
-import { previewRefinementByElementIds } from "./refinement-ops.js";
+import {buildDefaultRefinementReplacements} from "./refinement-planner.js";
 import {
   regularizeHexSelection,
   regularizeTwoToOneHexSelection
@@ -185,11 +185,12 @@ export function prepareSessionRefineSelection(
   const outerElementIds = uniqueSorted(successfulComponents.flatMap((component) => component.regularization.selectedElementIds));
   const regularization = combineRegularizedComponents(successfulComponents.map((component) => component.regularization));
 
-  const containmentPreview = previewRefinementByElementIds(mutableMeshView(active.mesh), boundedElementIds, {
+  // This is only a support-containment estimate. The session validates its assembled transaction.
+  const containmentPlan = buildDefaultRefinementReplacements(mutableMeshView(active.mesh), boundedElementIds, {
     ...options,
     regularizeHexSelection: false
   });
-  const escaped = countTransitionEscapes(containmentPreview.plan, outerElementIds);
+  const escaped = countTransitionEscapes(containmentPlan.map(p=>({parentElementId:p.elementId,role:p.role})), outerElementIds);
   const expandedCandidateCount = regularizedComponents.reduce((total, component) => total + component.expandedCandidateCount, 0);
   const grewAnyComponent = successfulComponents.some((component) => component.grewTopologyLayer);
 

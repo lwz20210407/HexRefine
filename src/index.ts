@@ -34,6 +34,9 @@ export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformRe
 export { planGradedReinforcement, generateGradedReinforcedMesh, type GradedReinforcementSpec } from "./reinforced-graded.js";
 export * from "./gui61-generators.js";
 export * from "./gui61-archive.js";
+export {refineHexWithTransitionClosure,classifyHexTransitionBoundary,HexTransitionClosureError,type HexTransitionClosureOptions,type HexBoundaryState} from "./hex-transition-closure.js";
+export {HexTransitionConformanceError} from "./refinement-errors.js";
+export {refineHexMultilevel,type HexTargetLevel,type HexMultilevelOptions} from "./hex-multilevel-closure.js";
 export {mountGui61Workbench} from "./gui61-workbench.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";
