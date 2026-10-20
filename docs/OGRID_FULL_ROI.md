@@ -124,9 +124,12 @@ positive corner/8-Gauss Jacobians and unexpected internal free faces. Native
 LS-PrePost axial/transverse/full-model views are kept beside candidate K files.
 `OGRID_FULL_ROI_REVIEW.html` contains all three audited outputs and9 LSPP views;
 desktop1440x1000/mobile390x844, image/link completeness and the model filter were
-checked. Initial full suite:881/881 passed; subsequent interface-hardening
-regressions distinguish parent coverage from physical-domain coverage and
-remove the accidental public arbitrary-plan apply entry. No new GUI integration is implied by the
+checked. Initial full suite:881/881 passed; after interface hardening the full
+suite passed883/883. New regressions distinguish parent coverage from
+physical-domain coverage, remove the accidental public arbitrary-plan apply
+entry and check exact output counts before assembly. Older original iron run
+reports are retained with separate coverage-semantics corrections; metadata
+correction is not represented as a new mesh-generation run. No new GUI integration is implied by the
 standalone runtime rebuild.
 
 ## Harvested Nine-Hex Sample Is Not A Complete Macro
