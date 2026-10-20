@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "mode": "axial",
+  "parameters": {
+    "innerRadius": 10, "outerRadius": 12, "length": 6, "radialLayers": 2,
+    "fineSegments": 72, "ratios": [2, 2], "fineEnd": "end",
+    "axis": [1, 2, 3], "origin": [0, 0, 0]
+  }
+}

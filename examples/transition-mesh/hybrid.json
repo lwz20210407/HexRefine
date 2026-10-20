@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "mode": "hybrid",
+  "parameters": {
+    "length": 14, "depth": 2, "fineSegments": 14, "coarseSegments": 6,
+    "blocks": ["pair2", "single3", "pair2", "single3"]
+  },
+  "extrusion": {"height": 2, "layers": 2}
+}

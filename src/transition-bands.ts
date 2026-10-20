@@ -15,7 +15,7 @@ export interface TransitionBandSchedule {
 }
 export interface TransitionBandPlan {
   counts:number[]; ratios:(2|3)[]; requiredMultiple:number;
-  stageDepths:number[]; boundaries:number[]; geometryChecked:false;
+  stageDepths:number[]; boundaries:number[]; geometryChecked:false; stageCount:number;
 }
 export class TransitionBandCountError extends RangeError {
   constructor(readonly requiredMultiple:number,readonly nearbyCounts:number[]) {
@@ -67,7 +67,7 @@ export function planTransitionBand(spec:TransitionBandSchedule):TransitionBandPl
     if(!(end>boundaries[i]!))throw new RangeError("stage width is not numerically resolvable");
     boundaries.push(end);widths[i]=end-boundaries[i]!;
   }
-  return {counts,ratios:[...spec.ratios],requiredMultiple:required,stageDepths:widths,boundaries,geometryChecked:false};
+  return {counts,ratios:[...spec.ratios],requiredMultiple:required,stageDepths:widths,boundaries,geometryChecked:false,stageCount:spec.ratios.length};
 }
 
 interface Patch {nodes:Point[];elements:number[][];period:number}
@@ -77,7 +77,7 @@ function orient(points:readonly Point[]):number {
     -(p[1]!-origin[1]!)*(points[(i+1)%points.length]![0]!-origin[0]!),0);
 }
 let pairedPatch:Patch|undefined;
-function patchFor(ratio:2|3):Patch {
+export function patchFor(ratio:2|3):Patch {
   if(ratio===3){const r=refineQ1To4Q1([[0,0,0],[1,0,0],[1,1,0],[0,1,0]]);return {nodes:r.nodes,elements:r.elements.map(e=>[...e]),period:3};}
   if(pairedPatch)return pairedPatch;
   // Project the existing Owen pattern2 face, pair it with its reflection.
@@ -99,23 +99,38 @@ function patchFor(ratio:2|3):Patch {
   return pairedPatch={nodes,elements,period:4};
 }
 
-interface BandTopology {mesh:Mesh;stageIds:number[];nodeSets:Record<string,number[]>}
+export interface BandTopology {mesh:Mesh;stageIds:number[];nodeSets:Record<string,number[]>}
+export interface TransitionBandMesh extends BandTopology {
+  plan:{stageCount:number};
+  quality:{area:number;minimumGaussDeterminant:number;warnings:readonly string[]};
+  coreElementIds?:readonly number[];
+}
+interface BandBlock {ratio:2|3;start:number;stride:number}
 function assemble(plan:TransitionBandPlan,closed:boolean,map:(u:number,d:number)=>Point):BandTopology {
-  const nodes:Point[]=[],elements:number[][]=[],stageIds:number[]=[],ids=new Map<string,number>();
-  const levels=plan.boundaries.map(()=>new Set<number>()),start=new Set<number>(),end=new Set<number>();
   const n=plan.counts[0]!;
-  for(const [stage,ratio] of plan.ratios.entries()){
-    const patch=patchFor(ratio),count=plan.counts[stage]!,stride=n/count;
-    for(let block=0;block<count/patch.period;block++){
+  const rows=plan.ratios.map((ratio,stage)=>{
+    const count=plan.counts[stage]!,period=ratio===2?4:3,stride=n/count;
+    return Array.from({length:count/period},(_,block)=>({ratio,start:block*period*stride,stride}));
+  });
+  return assembleRows(plan.counts,plan.boundaries,rows,closed,map);
+}
+function assembleRows(counts:readonly number[],boundaries:readonly number[],rows:readonly BandBlock[][],
+    closed:boolean,map:(u:number,d:number)=>Point):BandTopology {
+  const nodes:Point[]=[],elements:number[][]=[],stageIds:number[]=[],ids=new Map<string,number>();
+  const levels=boundaries.map(()=>new Set<number>()),start=new Set<number>(),end=new Set<number>();
+  const n=counts[0]!;
+  for(const [stage,blocks] of rows.entries()){
+    for(const block of blocks){
+      const patch=patchFor(block.ratio);
       const local=patch.nodes.map(p=>{
         const offset=Math.round(p[0]!*patch.period);
         if(Math.abs(offset-p[0]!*patch.period)>1e-10)throw new Error("template does not align to the integer interface grid");
-        const angular=(block*patch.period+offset)*stride,v=p[1]!;
+        const angular=block.start+offset*block.stride,v=p[1]!;
         const level=v===0?stage:v===1?stage+1:-1;
         const key=`${level<0?"m"+stage:"b"+level}:${closed?angular%n:angular}`;
         let id=ids.get(key);
         if(id===undefined){
-          const point=map((closed&&angular===n?0:angular)/n,plan.boundaries[stage]!+v*plan.stageDepths[stage]!);
+          const point=map((closed&&angular===n?0:angular)/n,boundaries[stage]!+v*(boundaries[stage+1]!-boundaries[stage]!));
           if(point.length!==3||point.some(x=>!Number.isFinite(x)))throw new Error("nonfinite band geometry");
           nodes.push(point);id=nodes.length;ids.set(key,id);
         }
@@ -133,10 +148,10 @@ function assemble(plan:TransitionBandPlan,closed:boolean,map:(u:number,d:number)
   }
   const nodeSets:Record<string,number[]>={fine:[...levels[0]!],coarse:[...levels[levels.length-1]!],start:[...start],end:[...end]};
   levels.forEach((nodes,i)=>{nodeSets[`interface_${i}`]=[...nodes];});
-  for(const [i,level] of levels.entries())if(level.size!==plan.counts[i]!+(closed?0:1))throw new Error("interface count mismatch");
+  for(const [i,level] of levels.entries())if(level.size!==counts[i]!+(closed?0:1))throw new Error("interface count mismatch");
   return {mesh:{kind:"Q1",nodes,elements},stageIds,nodeSets};
 }
-function auditBand(result:BandTopology,expectedArea:number) {
+export function auditBand(result:BandTopology,expectedArea:number) {
   positive(expectedArea,"discrete boundary area");
   const sets=["fine","coarse","start","end"].map(name=>new Set(result.nodeSets[name]!));
   const quality=auditPlanarQuadMesh(result.mesh,expectedArea,ns=>sets.some(s=>ns.every(n=>s.has(n))));
@@ -160,6 +175,53 @@ export function generatePlanarTransitionBand(spec:PlanarTransitionBandSpec) {
     return [origin[0]+x*Math.cos(angle)-y*Math.sin(angle),origin[1]+x*Math.sin(angle)+y*Math.cos(angle),0];
   });
   return {...result,plan:{...plan,mode:"planar" as const},quality:auditBand(result,spec.length*spec.depth)};
+}
+
+export interface HybridTransitionBandSpec {
+  fineSegments:number; coarseSegments:number; length:number; depth:number;
+  order?:"grouped"|"interleave"; blocks?:readonly ("pair2"|"single3")[];
+  rotationDegrees?:number; origin?:readonly [number,number]; fineSide?:"bottom"|"top";
+}
+/** Solve integer port balance; paired 2:1 blocks each consume 4 fine/2 coarse. */
+export function planHybridTransitionBand(spec:HybridTransitionBandSpec) {
+  const n=spec.fineSegments,m=spec.coarseSegments;
+  if(!Number.isSafeInteger(n)||n<1||n>200000||!Number.isSafeInteger(m)||m<1||m>100000)
+    throw new RangeError("hybrid fine/coarse counts must be positive bounded integers");
+  const singles=n-2*m,pairs=(3*m-n)/2;
+  if(singles<0||pairs<0||!Number.isInteger(pairs))throw new RangeError("hybrid port balance needs 2M <= N <= 3M and an even number of 2:1 columns");
+  const order=spec.order??"grouped";
+  if(!["grouped","interleave"].includes(order))throw new RangeError("invalid hybrid block order");
+  let blocks:("pair2"|"single3")[];
+  if(spec.blocks!==undefined){
+    if(!Array.isArray(spec.blocks)||spec.blocks.some(b=>b!=="pair2"&&b!=="single3")
+        ||spec.blocks.filter(b=>b==="single3").length!==singles||spec.blocks.filter(b=>b==="pair2").length!==pairs)
+      throw new RangeError("explicit hybrid blocks do not match fine/coarse counts");
+    blocks=[...spec.blocks];
+  }else if(order==="grouped")blocks=[...Array(singles).fill("single3"),...Array(pairs).fill("pair2")];
+  else{
+    blocks=[];let used=0;
+    for(let i=0;i<singles+pairs;i++){
+      const target=Math.round((i+1)*pairs/(singles+pairs));
+      if(target>used){blocks.push("pair2");used++;}else blocks.push("single3");
+    }
+  }
+  return {mode:"hybrid" as const,stageCount:1,counts:[n,m],single3Count:singles,pair2Count:pairs,blocks,
+    order:spec.blocks?"explicit":order,geometryChecked:false as const};
+}
+export function generateHybridTransitionBand(spec:HybridTransitionBandSpec) {
+  if(Object.keys(spec).some(k=>!["fineSegments","coarseSegments","length","depth","order","blocks","rotationDegrees","origin","fineSide"].includes(k)))
+    throw new RangeError("unsupported hybrid option");
+  positive(spec.length,"length");positive(spec.depth,"depth");
+  const plan=planHybridTransitionBand(spec),origin=spec.origin??[0,0];checkOrigin(origin);
+  const degrees=spec.rotationDegrees??0;finite(degrees,"rotationDegrees");const angle=(degrees%360)*Math.PI/180;
+  const fineSide=spec.fineSide??"bottom";if(!["bottom","top"].includes(fineSide))throw new RangeError("invalid hybrid fineSide");
+  let start=0;
+  const blocks=plan.blocks.map(kind=>{const ratio=kind==="pair2"?2:3;const block={ratio:ratio as 2|3,start,stride:1};start+=ratio===2?4:3;return block;});
+  const result=assembleRows(plan.counts,[0,spec.depth],[blocks],false,(u,d)=>{
+    const x=u*spec.length,y=fineSide==="bottom"?d:spec.depth-d;
+    return [origin[0]+x*Math.cos(angle)-y*Math.sin(angle),origin[1]+x*Math.sin(angle)+y*Math.cos(angle),0];
+  });
+  return {...result,plan,quality:auditBand(result,spec.length*spec.depth)};
 }
 export interface AnnularTransitionBandSpec extends Omit<TransitionBandSchedule,"depth"> {
   innerRadius:number;outerRadius:number;fineSide?:"inner"|"outer";
@@ -189,13 +251,17 @@ export function generateAnnularTransitionBand(spec:AnnularTransitionBandSpec) {
 }
 
 /** Straight +Z extrusion of a validated band, not a general curved sweep. */
-export function extrudeTransitionBand(band:ReturnType<typeof generatePlanarTransitionBand>|ReturnType<typeof generateAnnularTransitionBand>,height:number,layers:number) {
+export function extrudeTransitionBand<T extends TransitionBandMesh>(band:T,height:number,layers:number) {
   positive(height,"height");
   if(!Number.isSafeInteger(layers)||layers<1||layers*band.mesh.elements.length>1000000
       ||(layers+1)*band.mesh.nodes.length>2000000)throw new RangeError("invalid/excessive extrusion layers");
   // Re-audit caller-supplied data: a serialized result can have been modified.
   if(band.mesh.kind!=="Q1"||band.mesh.nodes.some(p=>p.length!==3||p[2]!==0))throw new Error("extrusion requires an XY planar Q1 band");
-  if(band.stageIds.length!==band.mesh.elements.length||band.stageIds.some(i=>!Number.isSafeInteger(i)||i<1||i>band.plan.ratios.length))
+  const core=new Set(band.coreElementIds??[]);
+  if(!Number.isSafeInteger(band.plan.stageCount)||band.plan.stageCount<1||band.plan.stageCount>8
+      ||core.size!==(band.coreElementIds?.length??0)||[...core].some(i=>!Number.isSafeInteger(i)||i<1||i>band.mesh.elements.length))
+    throw new Error("invalid transition core/stage metadata");
+  if(band.stageIds.length!==band.mesh.elements.length||band.stageIds.some((stage,i)=>!Number.isSafeInteger(stage)||stage<0||stage>band.plan.stageCount||(stage===0)!==core.has(i+1)))
     throw new Error("invalid transition stage lineage");
   for(const ids of Object.values(band.nodeSets))if(ids.some(i=>!Number.isSafeInteger(i)||i<1||i>band.mesh.nodes.length))throw new Error("invalid band node set");
   const baseQuality=auditBand(band,band.quality.area),n=band.mesh.nodes.length;

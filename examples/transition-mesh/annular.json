@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "mode": "annular",
+  "parameters": {"innerRadius": 10, "outerRadius": 18, "fineSegments": 64, "ratios": [2, 2], "fineSide": "inner"}
+}

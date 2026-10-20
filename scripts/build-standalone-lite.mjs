@@ -39,6 +39,8 @@ function buildStandaloneHtml(html, importMap) {
   const importBlock = `import {
         generateGui61,
         generateGui61Repair,
+        generateTransitionMeshRequest,
+        mountTransitionMeshWorkbench,
         mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
@@ -74,6 +76,10 @@ function buildStandaloneHtml(html, importMap) {
         updateStats();
         const totalStart = performance.now();
         try {
+          if (request.kind === "transition-mesh-generate") {
+            const result = generateTransitionMeshRequest(request.request);
+            return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};
+          }
           if (request.kind === "gui61-repair") {
             const result = generateGui61Repair(request.request);
             return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};

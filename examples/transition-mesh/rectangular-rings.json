@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "mode": "rectangular-rings",
+  "parameters": {"innerSize": [12, 8], "fineSegments": [12, 8], "stages": 2, "ratio": 2, "includeCore": true},
+  "extrusion": {"height": 2, "layers": 2}
+}

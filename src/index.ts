@@ -94,3 +94,9 @@ export {repairGui61Interfaces, repairGui61FiveHexInterfaces, type Gui61Interface
 export {generateGui61Repair, type Gui61RepairRequest} from "./gui61-repair.js";
 export {planTransitionBand,generatePlanarTransitionBand,generateAnnularTransitionBand,extrudeTransitionBand,TransitionBandCountError,
   type TransitionBandSchedule,type TransitionBandPlan,type PlanarTransitionBandSpec,type AnnularTransitionBandSpec} from "./transition-bands.js";
+export {planHybridTransitionBand,generateHybridTransitionBand,type HybridTransitionBandSpec} from "./transition-bands.js";
+export {planRectangularTransitionRings,generateRectangularTransitionRings,type RectangularTransitionRingsSpec} from "./transition-rect-rings.js";
+export {generateAxialTransitionTube,type AxialTransitionTubeSpec} from "./transition-axial-tube.js";
+export {generateTransitionMeshRequest,defaultTransitionMeshRequest,normalizeTransitionMeshRequest,suggestTransitionMeshCounts,transitionMeshModes,
+  type TransitionMeshRequest,type TransitionMeshMode} from "./transition-mesh-request.js";
+export {mountTransitionMeshWorkbench} from "./transition-mesh-workbench.js";

@@ -737,6 +737,7 @@
           </div>
         </div>
         <section id="gui61-controls"></section>
+        <section id="transition-band-controls"></section>
         <section>
           <h2>Grid</h2>
           <div class="controls">
@@ -1232,6 +1233,8 @@
       import {
         generateGui61,
         generateGui61Repair,
+        generateTransitionMeshRequest,
+        mountTransitionMeshWorkbench,
         mountGui61Workbench,
         activeBuildCellIdByElementId,
         activeBuildElementIdByCellId,
@@ -8557,6 +8560,18 @@
         show: installGui61Result,
         view: mode => {gui61ViewMode = mode;requestDraw();},
         convert: () => {gui61Preview = null;gui61ViewMode = "solid";setBusy(false);updateReport();draw();}
+      });
+      mountTransitionMeshWorkbench(document.querySelector("#transition-band-controls"), {
+        isBusy: () => busy,
+        invalidate: () => gui61Controller.invalidate(),
+        accept: (result,label) => gui61Controller.accept(result,label),
+        run: async request => {
+          try {
+            await runWithBusyPause("正在生成过渡网格…");
+            const response = await runRefinementWorker({kind:"transition-mesh-generate",request});
+            return response.result;
+          } finally {setBusy(false);}
+        }
       });
       syncKindControls();
       syncExportKindOptions();

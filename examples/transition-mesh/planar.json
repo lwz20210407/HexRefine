@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "mode": "planar",
+  "parameters": {"length": 24, "depth": 6, "fineSegments": 24, "ratios": [2, 3], "rotationDegrees": 30},
+  "extrusion": {"height": 2, "layers": 2}
+}

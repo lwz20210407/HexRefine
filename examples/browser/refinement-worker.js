@@ -1,6 +1,7 @@
 import {
   generateGui61,
   generateGui61Repair,
+  generateTransitionMeshRequest,
   activeBuildCellIdByElementId,
   buildActiveMeshWithMap,
   buildRefinementSessionExport,
@@ -15,6 +16,12 @@ import {
 self.addEventListener("message", (event) => {
   const request = event.data;
   try {
+    if (request.kind === "transition-mesh-generate") {
+      const start = performance.now();
+      const result = generateTransitionMeshRequest(request.request);
+      self.postMessage({ok:true,kind:request.kind,result,elapsedMs:performance.now()-start});
+      return;
+    }
     if (request.kind === "gui61-repair") {
       const start = performance.now();
       const result = generateGui61Repair(request.request);

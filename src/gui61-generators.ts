@@ -12,6 +12,7 @@ import {minElementEdgeLength} from "./mesh.js";
 import type {Mesh} from "./types.js";
 import type {LsdynaMixedMesh} from "./lsdyna-mixed.js";
 import type {Gui61RepairRequest} from "./gui61-repair.js";
+import type {TransitionMeshRequest} from "./transition-mesh-request.js";
 
 export const gui61Kinds=[
   ["rectangular-solid","矩形靶板"],["circular-solid","圆形靶板"],["cylindrical-solid","圆柱壳体"],
@@ -97,7 +98,7 @@ export function gui61Fields(request:Gui61Request):Gui61Field[]{
   return fields;
 }
 export interface Gui61Generated {
-  request:Gui61Request|Gui61RepairRequest;mesh:Mesh;model?:LsdynaMixedMesh;plan:unknown;quality:unknown;
+  request:Gui61Request|Gui61RepairRequest|TransitionMeshRequest;mesh:Mesh;model?:LsdynaMixedMesh;plan:unknown;quality:unknown;
   files:Record<string,string>;summary:{nodes:number;solids:number;beams:number;quads:number;warnings:string[]};
 }
 export function generateGui61(request:Gui61Request):Gui61Generated {

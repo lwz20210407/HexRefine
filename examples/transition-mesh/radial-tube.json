@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "mode": "annular",
+  "parameters": {"innerRadius": 10, "outerRadius": 12, "fineSegments": 256, "ratios": [2, 2]},
+  "extrusion": {"height": 4, "layers": 4}
+}
