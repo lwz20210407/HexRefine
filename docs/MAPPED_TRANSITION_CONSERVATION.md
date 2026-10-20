@@ -128,6 +128,15 @@ Evidence: `F:/PythonWoking/temp/20261021-hexrefine-tc4-warped-transition/`.
 LS-PrePost views. The direct case is replayed through `scripts/refine-ogrid.mjs`.
 These are mesh-only NODE+SOLID outputs, not migrated solver analyses.
 
+A fresh read-only PyDYNA import also checked the current actual
+`Cylindrical_Compression_noFrac_TrueSmoothVelocity.k` in the user's original
+LS-DYNA batch directory, not just the cached JSON. Its specimen PID1 has the
+same4860 H8 and5809 nodes: exact connectivity match and coordinate difference
+about6.2e-33. The original deck SHA-256 is
+`496990d021e08ccec5e4d8c7d86473f19336ee0e9c2ee3e99dea1bea917ea999`;
+the original file was not changed. Details are retained in
+`original-source-verification.json` beside the evidence.
+
 After the tensor-interface guard, **both** complete cases were replayed through
 the formal CLI. Their K hashes and all lineage arrays match the independently
 audited outputs exactly; redundant replay meshes were removed with aliases
