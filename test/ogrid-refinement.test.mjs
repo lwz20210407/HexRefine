@@ -111,3 +111,18 @@ test('parent selection coverage is not an original physical-domain certificate',
 test('exact transition count refuses a core-only budget before assembly',()=>{
   assert.throws(()=>refineExtrudedOgrid(cylinder(2,8),{axis:2,bands:[{min:3,max:5,level:1}],completion:'none',maxOutputElements:100}),/before assembly/);
 });
+
+test('complete31-Hex direct shells bridge a full level2 band without whole-parent promotions',()=>{
+  const source=cylinder(2,8),result=refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:2}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0});
+  verifyFullFinestCore(result);
+  assert.deepEqual(result.report.promotedSourceLayerIndices,[]);
+  assert.deepEqual(result.report.requestedLayerTargets,result.report.effectiveLayerTargets);
+  assert.equal(result.report.macroFinalization.childrenPerShellParent,31);
+  assert.equal(result.report.macroFinalization.wholeParentPromotions,0);
+  assert.equal(result.report.macroFinalization.trials.length,7);
+  assert.ok(result.report.quality.minimumCornerSJ>.15);
+  assert.deepEqual(result.mesh.nodes.slice(0,source.nodes.length),source.nodes);
+  const counts=new Map();result.completedParentIds.forEach(p=>counts.set(p,(counts.get(p)??0)+1));
+  assert.deepEqual([...new Set(counts.values())].sort((a,b)=>a-b),[1,31,64]);
+  assert.throws(()=>refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:1}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro'}),/contiguous level2/);
+});

@@ -28,6 +28,8 @@ export {
 export interface TwoToOneReplacement extends ReplaceElement {
   role: "selected" | "face-transition" | "edge-transition" | "corner-transition";
   templateCode: number;
+  /** Trusted reference coordinates for conservative mapped-face integration. */
+  referenceNodes?: readonly ReferencePoint3[];
 }
 
 export type DirectTwoToOneStrategy = "local-sweep" | "seven-hex";
@@ -221,7 +223,8 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
         candidate.name
       ),
       role: "face-transition",
-      templateCode: 7
+      templateCode: 7,
+      referenceNodes: candidate.template.nodes
     });
   });
   return {

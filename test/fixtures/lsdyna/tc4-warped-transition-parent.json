@@ -1,0 +1,49 @@
+{
+  "provenance": "Single original TC4 compression parent from the rejected full central60 level2 support plan; no material/solver cards.",
+  "sourceMeshSha256": "fed7e13f8b4d3535637281c431be95107102a2884acb3249ef6cba65555734bb",
+  "sourceParentId": 4423,
+  "template": "two_way7_b_r2",
+  "vertices": [
+    [
+      -0.0458069,
+      0.24823,
+      -0.3
+    ],
+    [
+      -0.0488892,
+      0.2717896,
+      -0.3
+    ],
+    [
+      -0.0245361,
+      0.274353,
+      -0.3
+    ],
+    [
+      -0.0229492,
+      0.2499084,
+      -0.3
+    ],
+    [
+      -0.0458069,
+      0.24823,
+      -0.325
+    ],
+    [
+      -0.0488892,
+      0.271759,
+      -0.325
+    ],
+    [
+      -0.0245361,
+      0.274353,
+      -0.325
+    ],
+    [
+      -0.0229492,
+      0.2499084,
+      -0.325
+    ]
+  ],
+  "originalRelativeVolumeError": 0.00002295815106045703
+}
