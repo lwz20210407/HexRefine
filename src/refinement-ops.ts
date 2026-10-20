@@ -69,14 +69,7 @@ export function refineByElementIdsWithReport(mesh: Mesh, selectedElementIds: rea
       ...options,
       mergeTolerance
     });
-    return applyClassifiedRefinementPlan(mesh,plan.replacements,selected.length,options,plan.twoToOne);
-  });
-}
-
-/** Apply an explicit native plan through the same final quality/conformance gate. */
-export function applyClassifiedRefinementPlan(mesh:Mesh,replacements:readonly ClassifiedReplacement[],selectedCount:number,options:RefineOptions={},twoToOne?:TwoToOneCapabilityReport<number>):RefinementResult{
-    validateMergeTolerance(options.mergeTolerance);
-    const mergeTolerance=options.mergeTolerance??minElementEdgeLength(mesh)*.0005;
+    const replacements = plan.replacements;
     const output = inferMeshKind(mesh) === "H1"
       ? buildAuditedHexRefinementOutput(
           mesh,
@@ -93,10 +86,11 @@ export function applyClassifiedRefinementPlan(mesh:Mesh,replacements:readonly Cl
       mesh,
       output.mesh,
       replacements,
-      selectedCount,
-      twoToOne,
+      selected.length,
+      plan.twoToOne,
       output.quality
     );
+  });
 }
 
 export function refineByBox(mesh: Mesh, box: BoxRange, options: RefineOptions = {}): Mesh {

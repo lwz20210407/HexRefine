@@ -44,6 +44,22 @@ or budgets, noncircular/tapered completion, inverted redistributed quads, small
 edges, unsupported phase fields, lost coarse far field and failed quality or
 conformance checks are rejected.
 
+`fullSelectedOriginalParentsCovered` certifies the selected imported parent
+identities, **not spatial containment of the original physical band/domain**.
+`selectedLayerIntervals` shows the actual centroid-selected parent intervals;
+unaligned requested band ends are not silently declared exact physical cuts.
+`originalPhysicalRoiCoverageVerified` is false without an independent geometric
+certificate. Circular resampling may leave some original polygon vertices
+outside the new polygon even when its total volume increases. The analytic
+circle, original discrete polygon and completed coarse domain are distinct.
+Target levels are minimum resolution requests: lower-level bands may provide
+finer transition support; only the finest core has exact tensor child counts.
+`promotedSourceLayerIndices` describes target-field promotions, not the entire
+changed support footprint; each stage separately reports changed source layers.
+Exact planned output counts, including all transition children, are checked
+before mesh assembly. These are output-count budgets, not hard peak-memory or
+planner-time limits. There is no public arbitrary-explicit-macro apply gate.
+
 For a quarter cylinder cut on X=0 and Y=0, use `completion: "none"` and
 `symmetryPlanes: [{axis:0,coordinate:0},{axis:1,coordinate:0}]`. These must be
 lateral exterior coordinate planes, not cuts through the specimen interior.
@@ -108,7 +124,9 @@ positive corner/8-Gauss Jacobians and unexpected internal free faces. Native
 LS-PrePost axial/transverse/full-model views are kept beside candidate K files.
 `OGRID_FULL_ROI_REVIEW.html` contains all three audited outputs and9 LSPP views;
 desktop1440x1000/mobile390x844, image/link completeness and the model filter were
-checked. Full suite:881/881 passed. No new GUI integration is implied by the
+checked. Initial full suite:881/881 passed; subsequent interface-hardening
+regressions distinguish parent coverage from physical-domain coverage and
+remove the accidental public arbitrary-plan apply entry. No new GUI integration is implied by the
 standalone runtime rebuild.
 
 ## Harvested Nine-Hex Sample Is Not A Complete Macro

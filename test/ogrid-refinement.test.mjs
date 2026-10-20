@@ -3,6 +3,7 @@ import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {checkNoHangingNodes,meshToLsdynaKeyword,parseMeshText,refineExtrudedOgrid} from '../dist/index.js';
 import {extractExtrudedSection,planSectionParity} from '../dist/ogrid-section.js';
+import * as publicApi from '../dist/index.js';
 
 function cylinder(n=4,layers=12,axis=2,scale=1,shift=0,ny=n) {
   const nodes=[],elements=[],axes=axis===0?[1,2]:axis===1?[2,0]:[0,1];
@@ -93,4 +94,20 @@ test('quarter O-grid symmetry cuts are not part of the curved-boundary phase rin
   assert.equal(result.report.requestedOriginalParentIds.length,4*quads.length);
   assert.equal(result.report.completion,null);
   assert.deepEqual(result.mesh.nodes.slice(0,nodes.length),nodes);
+});
+
+test('parent selection coverage is not an original physical-domain certificate',()=>{
+  const result=refineExtrudedOgrid(cylinder(2,8),{axis:2,bands:[{min:2.75,max:5.25,level:1}],completion:'none'});
+  assert.equal(result.report.fullSelectedOriginalParentsCovered,true);
+  assert.equal(result.report.originalPhysicalRoiCoverageVerified,false);
+  assert.equal('fullOriginalRoiCovered' in result.report,false);
+  assert.deepEqual(result.report.selectedLayerIntervals,[{min:3,max:4,level:1},{min:4,max:5,level:1}]);
+  assert.ok(result.report.stages[0].changedSourceLayerIndices.includes(2));
+  assert.ok(result.report.targetLevelSemantics.includes('minimum'));
+  assert.equal('applyClassifiedRefinementPlan' in publicApi,false);
+  assert.equal('applyClassifiedRefinementPlan' in publicApi.refinementOps,false);
+});
+
+test('exact transition count refuses a core-only budget before assembly',()=>{
+  assert.throws(()=>refineExtrudedOgrid(cylinder(2,8),{axis:2,bands:[{min:3,max:5,level:1}],completion:'none',maxOutputElements:100}),/before assembly/);
 });
