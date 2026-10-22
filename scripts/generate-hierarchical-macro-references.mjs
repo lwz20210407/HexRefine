@@ -50,8 +50,25 @@ async function main(){
   for(let k=0;k<=8;k++)for(const p of points)nodes.push([...p,k]);
   for(let k=0;k<8;k++)for(const q of quads)elements.push([...q.map(n=>1+n+k*points.length),...q.map(n=>1+n+(k+1)*points.length)]);
   const ogrid={kind:'H1',nodes,elements},star=extract(ogrid,refineExtrudedOgrid(ogrid,options),[25,29,36],'complete93-trivalent-star');assert.equal(star.hexes.length,93);
+  // A complete five-valent fan WITH a surrounding support ring. The isolated
+  // five-quad fan remains an explicit unsupported boundary contract.
+  const fanNodes=[],fanElements=[],n=5;
+  const fanPoint=(i)=>[Math.cos(i*2*Math.PI/n),Math.sin(i*2*Math.PI/n)];
+  for(let s=0;s<n;s++){
+    const t=(s+.5)*2*Math.PI/n,p=[[0,0],fanPoint(s),[1.5*Math.cos(t),1.5*Math.sin(t)],fanPoint((s+1)%n)],start=fanNodes.length;
+    const id=(i,j,k)=>start+1+9*k+3*j+i;
+    for(let k=0;k<=8;k++)for(let j=0;j<=2;j++)for(let i=0;i<=2;i++){
+      const u=i/2,v=j/2,w=[(1-u)*(1-v),u*(1-v),u*v,(1-u)*v];fanNodes.push([0,1].map(a=>p.reduce((sum,q,c)=>sum+q[a]*w[c],0)).concat(k));
+    }
+    for(let k=0;k<8;k++)for(let j=0;j<2;j++)for(let i=0;i<2;i++)fanElements.push([id(i,j,k),id(i+1,j,k),id(i+1,j+1,k),id(i,j+1,k),id(i,j,k+1),id(i+1,j,k+1),id(i+1,j+1,k+1),id(i,j+1,k+1)]);
+  }
+  const {mergeCoincidentNodes}=await import('../dist/index.js');
+  const fan=mergeCoincidentNodes({kind:'H1',nodes:fanNodes,elements:fanElements},1e-10);
+  const fanParents=fan.elements.flatMap((e,i)=>e.some(n=>Math.hypot(fan.nodes[n-1][0],fan.nodes[n-1][1])<1e-12)&&Math.min(...e.map(n=>fan.nodes[n-1][2]))===2?[i+1]:[]);
+  assert.equal(fanParents.length,5);
+  const five=extract(fan,refineExtrudedOgrid(fan,options),fanParents,'complete155-pentavalent-star');assert.equal(five.hexes.length,155);
   const out=path.resolve(destination);await fs.mkdir(path.dirname(out),{recursive:true});await fs.mkdir(out);
-  for(const model of [one,star])await fs.writeFile(path.join(out,`${model.label}.json`),JSON.stringify(model,null,2)+'\n',{flag:'wx'});
-  console.log(JSON.stringify([one.certificate,star.certificate]));
+  for(const model of [one,star,five])await fs.writeFile(path.join(out,`${model.label}.json`),JSON.stringify(model,null,2)+'\n',{flag:'wx'});
+  console.log(JSON.stringify([one.certificate,star.certificate,five.certificate]));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

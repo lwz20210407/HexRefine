@@ -49,10 +49,13 @@ refineExtrudedOgrid(mesh, {
 
 ## Direct Complete31-Hex Shells
 
-`balanceMode: "direct-macro"` handles one contiguous full-section level2 band
-without uniformly promoting entire neighboring source-parent layers. The mode
-requires explicit conservative-face geometry and currently refuses other
-target patterns/depths.
+`balanceMode: "direct-macro"` handles full-section constant-level bands without
+uniformly promoting entire neighboring source-parent layers. Initially only
+one contiguous level2 band was supported. The 2026-10-22 extension supports
+separated level1/2/3 bands, with7/31/127-Hex whole-parent shells respectively.
+It requires explicit conservative-face geometry and refuses shared two-sided
+shells and adjacent different positive levels. See OGRID_FULL_ROI.md for the
+spacing contract; the following31-Hex example remains the level2 case.
 
 - Core descendants are frozen uniform8 per level:64 cells/125 quarter-grid
   nodes per original finest parent.
@@ -76,7 +79,7 @@ transition layer; it does not move original parent planes or source nodes.
 The report records the exponent, candidate qualities and the maximum possible
 station shift as a fraction of parent height.
 
-This is a direct **full-band two-level shell** construction. It is not a claim
+This is a direct **full-band hierarchical shell** construction. It is not a claim
 that CinoLib's five direct weak-balance edge/vertex schemes or arbitrary
 nonstructured weak requests have been implemented. Standard strong-support
 completion remains the default. A source field that cannot satisfy the initial
@@ -161,6 +164,12 @@ The checked-in `test/fixtures/lsdyna/hierarchical-macros/` contains:
   has complete area coverage, all8 Gauss Jacobians are positive, and the macro
   boundary has Euler2. This reference's minSJ is about0.105: it is a topology
   example with a quality warning, not an engineering-approved mesh.
+- A complete155-cell/257-node pentavalent-star reference spanning **five whole
+  original parents**, generated from a five-valent fan with a full support
+  ring. Its minSJ is about0.218. Per-parent volumes, all8 Gauss samples and
+  closed manifold boundary are recomputed in the fixed regression, not merely
+  trusted from stored certificate values. This supported stencil does not
+  make the isolated five-quad star's different boundary contract admissible.
 
 These are **two-level** shells, not replacements for the historical
 **single-level** nine-Hex sample. Their boundary contracts differ. The reference
