@@ -124,5 +124,52 @@ test('complete31-Hex direct shells bridge a full level2 band without whole-paren
   assert.deepEqual(result.mesh.nodes.slice(0,source.nodes.length),source.nodes);
   const counts=new Map();result.completedParentIds.forEach(p=>counts.set(p,(counts.get(p)??0)+1));
   assert.deepEqual([...new Set(counts.values())].sort((a,b)=>a-b),[1,31,64]);
-  assert.throws(()=>refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:1}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro'}),/contiguous level2/);
+  assert.throws(()=>refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:1}],completion:'none',balanceMode:'direct-macro'}),/explicit conservative-face-flux/);
+});
+
+test('direct127 shells preserve all three-level core tensor nodes without a uniform halo',()=>{
+  const source=cylinder(2,8),copy=structuredClone(source);
+  const result=refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:3}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0});
+  verifyFullFinestCore(result);assert.deepEqual(source,copy);
+  assert.deepEqual(result.report.promotedSourceLayerIndices,[]);
+  assert.equal(result.report.macroFinalization.childrenPerShellParent,127);
+  assert.deepEqual(result.report.macroFinalization.shellGroups,[{depth:3,parents:8,childrenPerParent:127}]);
+  assert.deepEqual(result.mesh.nodes.slice(0,source.nodes.length),source.nodes);
+  const indices=new Map();result.completedParentIds.forEach((p,i)=>{const cells=indices.get(p)??[];cells.push(i);indices.set(p,cells);});
+  for(const [parent,children] of indices){
+    if(children.length===1){assert.deepEqual(result.mesh.elements[children[0]],source.elements[parent-1]);continue;}
+    if(children.length!==512){assert.equal(children.length,127);continue;}
+    const vertices=source.elements[parent-1].map(n=>source.nodes[n-1]);
+    const nodes=new Set(children.flatMap(i=>result.mesh.elements[i]));assert.equal(nodes.size,729);
+    const signs=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+    const expected=[];for(let i=0;i<=8;i++)for(let j=0;j<=8;j++)for(let k=0;k<=8;k++){
+      const r=[i/4-1,j/4-1,k/4-1],weights=signs.map(c=>c.reduce((s,v,a)=>s*(1+v*r[a])/2,1));
+      expected.push([0,1,2].map(a=>vertices.reduce((s,p,c)=>s+p[a]*weights[c],0)));
+    }
+    for(const n of nodes)assert.ok(expected.some(p=>Math.hypot(...p.map((v,a)=>v-result.mesh.nodes[n-1][a]))<1e-10));
+  }
+});
+
+test('independent level1/2/3 bands retain exact cores and do not bridge the coarse gap',()=>{
+  const source=cylinder(2,18),result=refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:1},{min:7,max:9,level:2},{min:12,max:14,level:3}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0});
+  verifyFullFinestCore(result);
+  assert.deepEqual(result.report.requestedLayerTargets,result.report.effectiveLayerTargets);
+  assert.equal(result.report.macroFinalization.childrenPerShellParent,null);
+  assert.deepEqual(result.report.macroFinalization.shellGroups,[1,2,3].map(depth=>({depth,parents:8,childrenPerParent:2*4**depth-1})));
+  const counts=new Map();result.completedParentIds.forEach(p=>counts.set(p,(counts.get(p)??0)+1));
+  for(let k=0;k<18;k++)for(let c=0;c<4;c++){
+    const level=result.report.requestedLayerTargets[k];
+    const expected=level?8**level:Math.max(result.report.requestedLayerTargets[k-1]??0,result.report.requestedLayerTargets[k+1]??0);
+    assert.equal(counts.get(1+4*k+c),level?expected:expected?2*4**expected-1:1);
+  }
+  assert.equal(result.report.coarseFarFieldParents,24);
+  const reread=parseMeshText(meshToLsdynaKeyword(result.mesh),'separate-bands.k');
+  assert.deepEqual(reread.elements,result.mesh.elements);
+});
+
+test('direct-band incompatibilities are rejected before shell/core promotion',()=>{
+  const source=cylinder(2,12),options={axis:2,completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0};
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:2},{min:6,max:8,level:3}]}),/shared two-sided shell/);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:2},{min:5,max:8,level:3}]}),/different positive target/);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:3}],maxOutputElements:4500}),/before assembly/);
 });

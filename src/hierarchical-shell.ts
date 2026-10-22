@@ -38,7 +38,7 @@ export function assembleReferenceStage(mesh:Mesh,replacements:readonly TwoToOneR
 }
 
 /**
- * A complete31-Hex original-parent macro, not the incomplete9-Hex harvest.
+ * Complete7/31/127-Hex original-parent macros, not the incomplete9-Hex harvest.
  * One common exponent per interface field preserves shared-wall stations.
  */
 export function finalizeDirectShellMacros(
@@ -46,12 +46,16 @@ export function finalizeDirectShellMacros(
   layerByParent:ReadonlyMap<number,number>,targets:readonly number[],tolerance:number,maximumFaceFraction:number
 ){
   const groups=new Map<number,number[]>();parents.forEach((p,i)=>{const g=groups.get(p)??[];g.push(i);groups.set(p,g);});
-  const fixed:TwoToOneReplacement[]=[],shells:Array<{parent:number;children:number[];references:number[][];globalIds:number[];elements:number[][];vertices:readonly (readonly number[])[];axial:number;sign:number;fineHigh:boolean}>=[];
+  const fixed:TwoToOneReplacement[]=[],shells:Array<{parent:number;depth:number;children:number[];references:number[][];globalIds:number[];elements:number[][];vertices:readonly (readonly number[])[];axial:number;sign:number;fineHigh:boolean}>=[];
   const rawChildIndices=new Map<number,number[]>();
   for(let parent=1;parent<=source.elements.length;parent++){
     const children=groups.get(parent)!;if(children.length===1)continue;
-    const layer=layerByParent.get(parent)!,isCore=targets[layer]===2;
-    if(children.length!==(isCore?64:31))throw new RangeError('direct shell does not match the certified64-core/31-shell topology');
+    const layer=layerByParent.get(parent)!,coreDepth=targets[layer]!,isCore=coreDepth>0;
+    const fineHigh=(targets[layer+1]??0)>0,fineLow=(targets[layer-1]??0)>0;
+    const shellDepth=fineHigh?targets[layer+1]!:fineLow?targets[layer-1]!:0;
+    const expected=isCore?8**coreDepth:2*4**shellDepth-1;
+    if(!isCore&&(fineHigh===fineLow||shellDepth<1||shellDepth>3))throw new RangeError('direct macro needs exactly one fine source interface');
+    if(children.length!==expected)throw new RangeError('direct shell does not match its complete tensor-core/hierarchical-shell topology');
     const original=source.elements[parent-1]!,vertices=original.map(n=>source.nodes[n-1]!),globalIds=[...new Set(children.flatMap(i=>[...current.elements[i]!]))];
     const localIds=new Map(globalIds.map((n,i)=>[n,i+1])),elements=children.map(i=>current.elements[i]!.map(n=>localIds.get(n)!));
     const references=globalIds.map(n=>{
@@ -59,14 +63,12 @@ export function finalizeDirectShellMacros(
       return ref;
     });
     rawChildIndices.set(parent,children);
-    if(isCore){fixed.push({elementId:parent,role:'selected',templateCode:64,referenceNodes:references as unknown as ReferencePoint3[],refinement:{kind:'H1',source:'uniform64',nodes:globalIds.map(n=>current.nodes[n-1]!),elements}});continue;}
+    if(isCore){fixed.push({elementId:parent,role:'selected',templateCode:expected,referenceNodes:references as unknown as ReferencePoint3[],refinement:{kind:'H1',source:`uniform${expected}`,nodes:globalIds.map(n=>current.nodes[n-1]!),elements}});continue;}
     const low=Math.min(...vertices.map(p=>p[axis]!)),high=Math.max(...vertices.map(p=>p[axis]!));
     const axial=[0,1,2].find(a=>[1,-1].some(sign=>CORNERS.every((c,i)=>Math.abs(vertices[i]![axis]!-(c[a]===sign?high:low))<tolerance*10)));
     if(axial===undefined)throw new RangeError('direct shell macro has no certified source axial frame');
     const sign=CORNERS[vertices.findIndex(p=>p[axis]===high)]![axial]!;
-    const fineHigh=targets[layer+1]===2,fineLow=targets[layer-1]===2;
-    if(fineHigh===fineLow)throw new RangeError('direct macro needs exactly one fine source interface');
-    shells.push({parent,children,references,globalIds,elements,vertices,axial,sign,fineHigh});
+    shells.push({parent,depth:shellDepth,children,references,globalIds,elements,vertices,axial,sign,fineHigh});
   }
   let best:{replacements:TwoToOneReplacement[];minimumSJ:number;exponent:number;faceReport:ReturnType<typeof conserveTransitionFaceFlux>["report"]}|undefined;
   const trials:Array<{exponent:number;minimumCornerSJ:number|null;error?:string}>=[];
@@ -78,7 +80,8 @@ export function finalizeDirectShellMacros(
         const mapped=shell.fineHigh?1-(1-w)**exponent:w**exponent;r[shell.axial]=(2*mapped-1)*shell.sign;return r as unknown as ReferencePoint3;
       });
       const nodes=refs.map(ref=>{const weights=shape(ref);return [0,1,2].map(a=>shell.vertices.reduce((s,p,i)=>s+p[a]!*weights[i]!,0));});
-      replacements.push({elementId:shell.parent,role:'face-transition',templateCode:31,referenceNodes:refs,refinement:{kind:'H1',source:'hierarchical31',nodes,elements:shell.elements}});
+      const count=2*4**shell.depth-1;
+      replacements.push({elementId:shell.parent,role:'face-transition',templateCode:count,referenceNodes:refs,refinement:{kind:'H1',source:`hierarchical${count}`,nodes,elements:shell.elements}});
     }
     replacements.sort((a,b)=>a.elementId-b.elementId);
     try{
@@ -96,8 +99,11 @@ export function finalizeDirectShellMacros(
   for(let parent=1;parent<=source.elements.length;parent++)if(!replaced.has(parent))indices.push(groups.get(parent)![0]!);
   for(const r of best.replacements)indices.push(...rawChildIndices.get(r.elementId)!);
   if(indices.length!==final.mesh.elements.length)throw new Error('direct macro lineage permutation failed');
-  return {mesh:final.mesh,rawChildIndices:indices,report:{mode:'direct-hierarchical-shell' as const,shellParents:shells.length,childrenPerShellParent:31,selectedExponent:best.exponent,trials,
+  const shellDepths=[...new Set(shells.map(s=>s.depth))].sort((a,b)=>a-b);
+  return {mesh:final.mesh,rawChildIndices:indices,report:{mode:'direct-hierarchical-shell' as const,shellParents:shells.length,
+    childrenPerShellParent:shellDepths.length===1?2*4**shellDepths[0]!-1:null,
+    shellGroups:shellDepths.map(depth=>({depth,parents:shells.filter(s=>s.depth===depth).length,childrenPerParent:2*4**depth-1})),selectedExponent:best.exponent,trials,
     axialStationWarp:{exponent:best.exponent,maximumPossibleFractionOfParentHeight:maximumAxialShiftFraction,originalParentPlanesFixed:true,uniformCoreGridFixed:true},
     sourceParentQuality:final.quality,geometry:best.faceReport,wholeParentPromotions:0,
-    limitation:'Full-section contiguous level2 bands only; not arbitrary CinoLib weak-balance edge/vertex schemes.'}};
+    limitation:'Separated full-section constant-level1/2/3 bands only; no shared two-sided shell, no arbitrary CinoLib weak-balance edge/vertex schemes.'}};
 }

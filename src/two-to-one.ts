@@ -112,10 +112,23 @@ export function buildDirectTwoToOneHexPlanFromNormalizedSelection(
   selected: NormalizedTwoToOneSelection,
   phaseOptions:TwoToOnePhaseOptions={}
 ): DirectTwoToOnePlan {
+  return buildPlan(mesh,selected,phaseOptions,true);
+}
+
+/** Internal full-section path: do not reinterpret disconnected axial bands as a local box. */
+export function buildFullSectionTwoToOneHexPlan(
+  mesh:Mesh, selectedElementIds:readonly number[], phaseOptions:TwoToOnePhaseOptions={}
+):DirectTwoToOnePlan {
+  return buildPlan(mesh,normalizeTwoToOneSelection(mesh,selectedElementIds),phaseOptions,false);
+}
+
+function buildPlan(
+  mesh:Mesh,selected:NormalizedTwoToOneSelection,phaseOptions:TwoToOnePhaseOptions,allowLocalSweep:boolean
+):DirectTwoToOnePlan {
   if(Object.keys(phaseOptions).some(k=>k!=="exemptPlanes")||(phaseOptions.exemptPlanes!==undefined&&(!Array.isArray(phaseOptions.exemptPlanes)||phaseOptions.exemptPlanes.some(p=>!p||Object.keys(p).some(k=>!["axis","coordinate"].includes(k))||![0,1,2].includes(p.axis)||!Number.isFinite(p.coordinate)))))throw new RangeError("invalid phase-exemption planes");
   const incidence = buildFaceIncidence(mesh);
-  const localReplacements =
-    tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(mesh, selected);
+  const localReplacements = allowLocalSweep
+    ? tryBuildLocalTwoToOneHexReplacementsFromNormalizedSelection(mesh, selected) : undefined;
   if (localReplacements) {
     return {
       replacements: localReplacements,

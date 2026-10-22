@@ -1,6 +1,6 @@
 import type {Mesh,RefinementRole} from "./types.js";
 import {buildAuditedHexRefinementOutput} from "./refinement-errors.js";
-import {buildDirectTwoToOneHexPlan} from "./two-to-one.js";
+import {buildFullSectionTwoToOneHexPlan} from "./two-to-one.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {hexElementSignedVolume,minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {minElementEdgeLength} from "./mesh.js";
@@ -47,8 +47,14 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
   const targets=[...requested],depth=Math.max(...targets);
   const direct=options.balanceMode==="direct-macro";
   if(direct){
-    const selectedLayers=requested.flatMap((v,i)=>v?[i]:[]);
-    if(depth!==2||requested.some(v=>v!==0&&v!==2)||selectedLayers.at(-1)!-selectedLayers[0]!+1!==selectedLayers.length||options.transitionGeometry!=="conservative-face-flux")throw new RangeError('direct macro requires one full-section contiguous level2 band and explicit conservative-face-flux geometry');
+    if(options.transitionGeometry!=="conservative-face-flux")throw new RangeError('direct macro requires explicit conservative-face-flux geometry');
+    // Independent bands own disjoint one-parent shells. A shared shell or an
+    // abrupt nonzero-to-nonzero level change needs a different macro vocabulary.
+    for(let i=0;i<requested.length;i++){
+      const level=requested[i]!;
+      if(level&&i&&requested[i-1]&&requested[i-1]!==level)throw new RangeError('direct macro cannot join adjacent bands with different positive target levels');
+      if(!level&&i&&i+1<requested.length&&requested[i-1]&&requested[i+1])throw new RangeError('direct macro bands need at least two zero-target layers between them; a shared two-sided shell is unsupported');
+    }
   }else for(let level=depth;level>1;level--)for(let i=0;i<targets.length;i++)if(targets[i]!>=level)for(const neighbor of [i-1,i+1])if(neighbor>=0&&neighbor<targets.length)targets[neighbor]=Math.max(targets[neighbor]!,level-1);
   const promoted=targets.flatMap((level,i)=>level>requested[i]!?[i]:[]);
   if(promoted.length>layerLimit)throw new RangeError('weak-band completion exceeds maxPromotedSourceLayers');
@@ -71,7 +77,7 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
     const selected=parentIds.flatMap((id,i)=>targets[layerByParent.get(id)!]!>=level&&uniform[i]&&levels[i]===level-1?[i+1]:[]);
     if(selected.length!==baseCount*8**(level-1))throw new Error('full requested ROI lost uniform descendants before the next level');
     if(current.elements.length+selected.length*7>outputLimit)throw new RangeError('requested full core exceeds maxOutputElements');
-    const plan=buildDirectTwoToOneHexPlan(current,selected,{...(options.symmetryPlanes?{exemptPlanes:options.symmetryPlanes}:{})});
+    const plan=buildFullSectionTwoToOneHexPlan(current,selected,{...(options.symmetryPlanes?{exemptPlanes:options.symmetryPlanes}:{})});
     const expectedCount=current.elements.length+plan.replacements.reduce((s,r)=>s+r.refinement.elements.length-1,0);
     if(expectedCount>outputLimit)throw new RangeError('transition field exceeds maxOutputElements before assembly');
     const geometry=options.transitionGeometry==="conservative-face-flux"?conserveTransitionFaceFlux(current,plan,options.maximumFaceDisplacementFraction):null;
@@ -122,7 +128,7 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
       coarseFarFieldParents:new Set(preserved).size,parity:{oddOpenChords:parity.oddOpenChords,cutEdges:parity.cutEdges.length,searchCandidates:parity.searchCandidates},
       completion:completed?.report??null,stages,quality:{minimumCornerSJ:minSJ,originalVolume,completedVolume,finalVolume,refinementRelativeVolumeError:refinementError,
         completionRelativeVolumeChange:(completedVolume-originalVolume)/originalVolume},
-      balancePolicy:direct?"direct complete31-Hex original-parent shells for a contiguous full-section level2 request; no whole-parent promotion; not arbitrary CinoLib WB schemes":"weak requested axial levels are conservatively completed to separated strong-balance support; not arbitrary CinoLib WB schemes",
+      balancePolicy:direct?"direct whole-parent hierarchical shells for separated full-section level1/2/3 bands; no whole-parent promotion; not arbitrary CinoLib WB schemes":"weak requested axial levels are conservatively completed to separated strong-balance support; not arbitrary CinoLib WB schemes",
       qualityWarnings:minSJ<.15?["Minimum corner SJ is below0.15; topology/volume pass is NOT engineering acceptance."]:[],
-      warning:(completed?"Circular completion changes coarse section topology/coordinates and discrete polygonal volume. Analytic circle and axial planes are retained. ":"Source vertices are retained. ")+(direct?"Direct31 macros reparameterize NEW axial stations within each original shell parent; original planes and uniform core grid stay fixed. ":"")+(options.transitionGeometry==="conservative-face-flux"?"New transition-face interior nodes use bounded conservative flux mapping, not exact original bilinear surfaces. The normal correction budget is separate from axial station reparameterization. ":"")+"Symmetry phase exemptions do not exempt interface-conformance checks. Mesh-only output; solver state is not migrated."}};
+      warning:(completed?"Circular completion changes coarse section topology/coordinates and discrete polygonal volume. Analytic circle and axial planes are retained. ":"Source vertices are retained. ")+(direct?"Direct hierarchical macros reparameterize NEW axial stations within each original shell parent; original planes and uniform core grid stay fixed. ":"")+(options.transitionGeometry==="conservative-face-flux"?"New transition-face interior nodes use bounded conservative flux mapping, not exact original bilinear surfaces. The normal correction budget is separate from axial station reparameterization. ":"")+"Symmetry phase exemptions do not exempt interface-conformance checks. Mesh-only output; solver state is not migrated."}};
 }

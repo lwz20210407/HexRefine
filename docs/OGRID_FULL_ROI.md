@@ -121,6 +121,30 @@ Default trilinear mapping still rejects the old request; explicit conservative
 face geometry passes without a widened gate. The new full-band direct31 mode
 does not imply arbitrary weak-balance/corner coverage.
 
+### Separated Direct Bands (2026-10-22)
+
+The opt-in direct mode now accepts separated full-section bands of constant
+level1,2 or3. Each original shell parent contains respectively7,31 or127 H8;
+each core parent has exactly8,64 or512 tensor descendants. No whole-parent
+uniform halo is promoted. At least two zero-target source layers must separate
+bands: their one-parent shells can meet at a coarse face, but cannot occupy
+the same original parent. Three zero layers leave a full unchanged coarse
+layer between the shells. Adjacent different positive levels and a shared
+two-sided shell are explicitly rejected, not silently completed.
+
+Full-section planning bypasses the local-box sweep route, including when the
+selected set has several disconnected axial intervals. Exact seven-Hex wall
+partitions and closed exterior phases remain enforced. The single-level,
+single-band path has not been replaced with an unrelated template family.
+
+`macroFinalization.shellGroups` lists depth, number of shell parents and actual
+children per parent. `childrenPerShellParent` stays31 for the old level2 case;
+it is null for mixed-depth shells, rather than reporting a fictitious common
+count. The common axial station exponent still applies to the entire field.
+The conservative geometry policy must remain explicit. No new GUI controls,
+multi-direction CinoLib schemes or unbounded arbitrary-valence contract is
+implied by this extension.
+
 Fixed tests include exact core counts, unchanged far field/input, axis
 permutations, K roundtrip, explicit odd-sheet consent/budgets, full-band
 weak-to-strong completion and the quarter-section symmetry-phase regression.
