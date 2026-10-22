@@ -1,0 +1,91 @@
+{
+  "sourceCommit": "151dc5c46309affedadb9b45619cc137fb7326ed",
+  "independentImplementation": "Python hextransition2to1 joint primal clipped dual; coordinate fingerprint rounded12 decimal places only for comparison, not assembly.",
+  "pairs": [
+    {
+      "tiles": [
+        {
+          "scheme": "Edge_WB",
+          "frame": 0
+        },
+        {
+          "scheme": "Flat",
+          "frame": 8
+        }
+      ],
+      "hexes": 39,
+      "nodes": 88,
+      "minimumCornerSJ": 0.242621346443025,
+      "bridges": 8,
+      "canonicalMeshSha256": "805dd490aadac73f6d495d10837b66b8cae8ff4914adc4112acbf6526170c613"
+    },
+    {
+      "tiles": [
+        {
+          "scheme": "Vert_center_WB_1",
+          "frame": 0
+        },
+        {
+          "scheme": "Vert_side",
+          "frame": 24
+        }
+      ],
+      "hexes": 47,
+      "nodes": 101,
+      "minimumCornerSJ": 0.18334006820275217,
+      "bridges": 11,
+      "canonicalMeshSha256": "ed534659dc734c197609fb1ca048ed28d1b4a017c25a469b310124de779da93d"
+    },
+    {
+      "tiles": [
+        {
+          "scheme": "Vert_center_WB_2",
+          "frame": 0
+        },
+        {
+          "scheme": "Vert_side",
+          "frame": 24
+        }
+      ],
+      "hexes": 51,
+      "nodes": 109,
+      "minimumCornerSJ": 0.19660481566359228,
+      "bridges": 11,
+      "canonicalMeshSha256": "c314575a4e5e09df2e61107d9c9136b6844f5845e2c004f901e346c1f09ed233"
+    },
+    {
+      "tiles": [
+        {
+          "scheme": "Vert_center_WB_3",
+          "frame": 0
+        },
+        {
+          "scheme": "Vert_side",
+          "frame": 24
+        }
+      ],
+      "hexes": 55,
+      "nodes": 117,
+      "minimumCornerSJ": 0.2090143146263182,
+      "bridges": 11,
+      "canonicalMeshSha256": "22529a69e98e88ef0062e997d4b8163f69885a9a3ff69eac43103f77ec06d87e"
+    },
+    {
+      "tiles": [
+        {
+          "scheme": "Vert_side_WB",
+          "frame": 0
+        },
+        {
+          "scheme": "Convex_2",
+          "frame": 1
+        }
+      ],
+      "hexes": 35,
+      "nodes": 81,
+      "minimumCornerSJ": 0.20589018915280288,
+      "bridges": 8,
+      "canonicalMeshSha256": "66562ccbdc6ca8d25f1272059df1601b626dae132725f599696c63c566a1b6e4"
+    }
+  ]
+}
