@@ -58,6 +58,20 @@ test('weak full-band level-2 request gets bounded explicit support, never partia
   assert.throws(()=>refineExtrudedOgrid(source,{axis:2,bands:[{min:5,max:7,level:2}],completion:'none',maxOutputElements:200}),/maxOutputElements/);
 });
 
+test('opt-in parent-interior relaxation preserves exact core and far-field lineage',()=>{
+  const source=cylinder(2,14),options={axis:2,bands:[{min:6,max:8,level:2}],completion:'none',transitionGeometry:'conservative-face-flux',strongSupportLayers:2};
+  const before=refineExtrudedOgrid(source,options),after=refineExtrudedOgrid(source,{...options,transitionInteriorRelaxation:'guarded-laplacian'});
+  verifyFullFinestCore(after);assert.deepEqual(after.mesh.elements,before.mesh.elements);
+  for(const key of ['completedParentIds','uniformCells','levels','roles'])assert.deepEqual(after[key],before[key]);
+  assert.deepEqual(after.mesh.nodes.slice(0,source.nodes.length),source.nodes);
+  after.uniformCells.forEach((uniform,i)=>{if(uniform)for(const n of after.mesh.elements[i])assert.deepEqual(after.mesh.nodes[n-1],before.mesh.nodes[n-1]);});
+  const r=after.report.transitionInteriorRelaxation;assert.equal(r.connectivityUnchanged,true);assert.equal(r.engineeringAcceptanceVerified,false);
+  assert.ok(r.after.maximumNormalSizeRatio<=r.before.maximumNormalSizeRatio);
+  assert.ok(r.after.maximumNonOrthogonalityDegrees<=r.before.maximumNonOrthogonalityDegrees);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,transitionInteriorRelaxation:'unsafe'}),/transitionInteriorRelaxation/);
+  assert.deepEqual(refineExtrudedOgrid(source,{...options,transitionInteriorRelaxation:'none'}).mesh,before.mesh);
+});
+
 test('odd section requires explicit bounded completion and redistributes rather than exporting a sliver',()=>{
   const source=cylinder(3,12,2,1,0,4),section=extractExtrudedSection(source,2),plan=planSectionParity(section.quads);
   assert.ok(plan.oddOpenChords>0);assert.ok(plan.cutEdges.length>0);

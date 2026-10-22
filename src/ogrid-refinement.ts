@@ -5,6 +5,7 @@ import {checkNoHangingNodes} from "./conformance.js";
 import {hexElementSignedVolume,minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {minElementEdgeLength} from "./mesh.js";
 import {auditHexFaceGrading} from "./hex-face-grading.js";
+import {relaxTransitionInteriors} from "./transition-interior-relaxation.js";
 import {extractExtrudedSection,planSectionParity} from "./ogrid-section.js";
 import {completeCircularSection} from "./ogrid-completion.js";
 import {conserveTransitionFaceFlux,type ConservativeFaceMappingReport} from "./transition-face-flux.js";
@@ -26,6 +27,7 @@ export interface OgridRefinementOptions {
   strongSupportLayers?:number;
   /** Optional strict face-local centroid-standoff ratio, not the nominal refinement ratio. */
   maximumAdjacentNormalSizeRatio?:number;
+  transitionInteriorRelaxation?:"none"|"guarded-laplacian";
 }
 const volume=(mesh:Mesh)=>mesh.elements.reduce((sum,e)=>sum+hexElementSignedVolume(e.map(n=>mesh.nodes[n-1]!)),0);
 const EDGES=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]] as const;
@@ -44,7 +46,8 @@ function sizeDistribution(mesh:Mesh,uniform:readonly boolean[],finestCore:(i:num
 
 /** Full section and full requested bands, including bounded balance completion of weak requests. */
 export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
-  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode","strongSupportLayers","maximumAdjacentNormalSizeRatio"].includes(k)))throw new RangeError('unknown O-grid option');
+  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode","strongSupportLayers","maximumAdjacentNormalSizeRatio","transitionInteriorRelaxation"].includes(k)))throw new RangeError('unknown O-grid option');
+  if(options.transitionInteriorRelaxation!==undefined&&!["none","guarded-laplacian"].includes(options.transitionInteriorRelaxation))throw new RangeError('invalid transitionInteriorRelaxation');
   if(options.maximumAdjacentNormalSizeRatio!==undefined&&(!Number.isFinite(options.maximumAdjacentNormalSizeRatio)||options.maximumAdjacentNormalSizeRatio<1))throw new RangeError('maximumAdjacentNormalSizeRatio must be finite and at least1');
   if(options.balanceMode!==undefined&&!["strong-support","direct-macro"].includes(options.balanceMode))throw new RangeError('invalid O-grid balance mode');
   if(options.transitionGeometry!==undefined&&!["trilinear","conservative-face-flux"].includes(options.transitionGeometry))throw new RangeError('invalid transition geometry policy');
@@ -132,6 +135,8 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
     if(counts.get(parent)!==8**depth)throw new Error('finest O-grid core does not have the exact tensor child count');
   }
   if(parentIds.some((p,i)=>targets[layerByParent.get(p)!]===depth&&(!uniform[i]||levels[i]!==depth)))throw new Error('a transition leaked into the requested finest core');
+  const relaxed=options.transitionInteriorRelaxation==="guarded-laplacian"?relaxTransitionInteriors(coarse,current,parentIds,uniform):null;
+  if(relaxed)current=relaxed.mesh;
   if(!checkNoHangingNodes(current,mergeTolerance*10).ok)throw new Error('final O-grid is not conforming');
   const originalVolume=volume(mesh),completedVolume=volume(coarse),finalVolume=volume(current),refinementError=Math.abs(finalVolume-completedVolume)/Math.abs(completedVolume);
   if(!(refinementError<1e-8))throw new Error('O-grid refinement failed completed-parent volume conservation');
@@ -153,6 +158,7 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
       targetLevelSemantics:"minimum requested level; lower-level bands may provide finer transition support; only the finest core is exact tensor refinement",
       coreChildrenPerFinestParent:8**depth,
       transitionGeometry:options.transitionGeometry??"trilinear",
+      transitionInteriorRelaxation:relaxed?.report??null,
       balanceMode:options.balanceMode??"strong-support",macroFinalization:macroReport,
       sharedShellSourceParentIds:prepared?.splitParents??[],
       strongSupportLayers:direct?null:strongSupportLayers,
