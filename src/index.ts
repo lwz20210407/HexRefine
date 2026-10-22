@@ -22,6 +22,7 @@ export {
 } from "./two-to-one-planner.js";
 export * from "./conformance.js";
 export * from "./hex-quality.js";
+export {auditHexFaceGrading,type HexFaceGradingOptions,type HexFaceGradingReport,type HexFaceGradingWitness} from "./hex-face-grading.js";
 export * from "./grid.js";
 export { planRectangularGrading, type RectangularGradingSpec, type RectangularGradingPlan } from "./graded-rectangle-plan.js";
 export { generateRectangularGradedMesh, type GradedRectangleResult } from "./graded-rectangle.js";

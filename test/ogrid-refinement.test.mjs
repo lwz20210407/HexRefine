@@ -248,9 +248,18 @@ test('explicit strong support width separates the two2:1 stages without changing
   assert.equal(result.report.quality.engineeringAcceptanceVerified,false);
   assert.ok(result.report.quality.sizeDistribution.transitionElements>0);
   assert.ok(result.report.quality.sizeDistribution.transitionToFinestCoreEdgeRatio>0);
+  const local=result.report.quality.adjacencyGrading;
+  assert.equal(local.selection,'incident-to-reviewed-elements');assert.ok(local.reviewedFacePairs>0);
+  assert.equal(local.undefinedMetricPairs,0);assert.equal(local.centroidsOnSameSidePairs,0);
+  assert.ok(local.maximumNormalSizeRatio>1);assert.equal(local.requestedLimitVerified,null);
   const counts=new Map();result.completedParentIds.forEach(p=>counts.set(p,(counts.get(p)??0)+1));
   for(const layer of [4,9])for(let c=0;c<4;c++)assert.equal(counts.get(1+4*layer+c),8);
   assert.throws(()=>refineExtrudedOgrid(source,{...options,maxPromotedSourceLayers:3}),/maxPromotedSourceLayers/);
   for(const n of [0,1.5,9])assert.throws(()=>refineExtrudedOgrid(source,{...options,strongSupportLayers:n}),/strongSupportLayers/);
   assert.throws(()=>refineExtrudedOgrid(source,{...options,balanceMode:'direct-macro'}),/not valid for direct-macro/);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,maximumAdjacentNormalSizeRatio:1}),/adjacent normal-size limit was not verified/);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,maximumAdjacentNormalSizeRatio:.5}),/must be finite and at least1/);
+  const guarded=refineExtrudedOgrid(source,{...options,maximumAdjacentNormalSizeRatio:local.maximumNormalSizeRatio+1});
+  assert.equal(guarded.report.quality.adjacencyGrading.requestedLimitVerified,true);
+  assert.deepEqual(guarded.mesh,result.mesh);
 });

@@ -4,6 +4,7 @@ import {buildFullSectionTwoToOneHexPlan} from "./two-to-one.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {hexElementSignedVolume,minimumHexCornerScaledJacobian} from "./hex-quality.js";
 import {minElementEdgeLength} from "./mesh.js";
+import {auditHexFaceGrading} from "./hex-face-grading.js";
 import {extractExtrudedSection,planSectionParity} from "./ogrid-section.js";
 import {completeCircularSection} from "./ogrid-completion.js";
 import {conserveTransitionFaceFlux,type ConservativeFaceMappingReport} from "./transition-face-flux.js";
@@ -23,6 +24,8 @@ export interface OgridRefinementOptions {
   balanceMode?:"strong-support"|"direct-macro";
   /** Original-parent support layers per intermediate level; strong-support mode only. */
   strongSupportLayers?:number;
+  /** Optional strict face-local centroid-standoff ratio, not the nominal refinement ratio. */
+  maximumAdjacentNormalSizeRatio?:number;
 }
 const volume=(mesh:Mesh)=>mesh.elements.reduce((sum,e)=>sum+hexElementSignedVolume(e.map(n=>mesh.nodes[n-1]!)),0);
 const EDGES=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]] as const;
@@ -41,7 +44,8 @@ function sizeDistribution(mesh:Mesh,uniform:readonly boolean[],finestCore:(i:num
 
 /** Full section and full requested bands, including bounded balance completion of weak requests. */
 export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
-  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode","strongSupportLayers"].includes(k)))throw new RangeError('unknown O-grid option');
+  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode","strongSupportLayers","maximumAdjacentNormalSizeRatio"].includes(k)))throw new RangeError('unknown O-grid option');
+  if(options.maximumAdjacentNormalSizeRatio!==undefined&&(!Number.isFinite(options.maximumAdjacentNormalSizeRatio)||options.maximumAdjacentNormalSizeRatio<1))throw new RangeError('maximumAdjacentNormalSizeRatio must be finite and at least1');
   if(options.balanceMode!==undefined&&!["strong-support","direct-macro"].includes(options.balanceMode))throw new RangeError('invalid O-grid balance mode');
   if(options.transitionGeometry!==undefined&&!["trilinear","conservative-face-flux"].includes(options.transitionGeometry))throw new RangeError('invalid transition geometry policy');
   if(options.maximumFaceDisplacementFraction!==undefined&&(options.transitionGeometry!=="conservative-face-flux"||!Number.isFinite(options.maximumFaceDisplacementFraction)||options.maximumFaceDisplacementFraction<=0||options.maximumFaceDisplacementFraction>.05))throw new RangeError('invalid conservative face displacement budget');
@@ -135,6 +139,9 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
   const preserved=parentIds.filter((_,i)=>levels[i]===0);
   if(!preserved.length)throw new Error('no coarse far field remains');
   const sizes=sizeDistribution(current,uniform,i=>targets[layerByParent.get(parentIds[i]!)!]===depth&&levels[i]===depth);
+  const adjacencyGrading=auditHexFaceGrading(current,{reviewElementIds:uniform.flatMap((value,i)=>value?[]:[i+1]),
+    ...(options.maximumAdjacentNormalSizeRatio===undefined?{}:{maximumNormalSizeRatio:options.maximumAdjacentNormalSizeRatio})});
+  if(options.maximumAdjacentNormalSizeRatio!==undefined&&!adjacencyGrading.requestedLimitVerified)throw new RangeError('requested adjacent normal-size limit was not verified: '+JSON.stringify({limit:options.maximumAdjacentNormalSizeRatio,maximum:adjacencyGrading.maximumNormalSizeRatio,undefinedPairs:adjacencyGrading.undefinedMetricPairs,sameSidePairs:adjacencyGrading.centroidsOnSameSidePairs,aboveLimitPairs:adjacencyGrading.aboveRequestedLimitPairs,worstPair:adjacencyGrading.worstNormalSizePairs[0]?.elementIds??null}));
   const warnings:string[]=[];
   if(minSJ<.15)warnings.push("Minimum corner SJ is below0.15; topology/volume pass is NOT engineering acceptance.");
   if(sizes.transitionToFinestCoreEdgeRatio<1-1e-8)warnings.push("Some transition edges are shorter than the finest-core minimum edge; compact topology can worsen size grading and explicit time steps. Review the transition shape, not just conformance/volume.");
@@ -150,7 +157,7 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
       sharedShellSourceParentIds:prepared?.splitParents??[],
       strongSupportLayers:direct?null:strongSupportLayers,
       coarseFarFieldParents:new Set(preserved).size,parity:{oddOpenChords:parity.oddOpenChords,cutEdges:parity.cutEdges.length,searchCandidates:parity.searchCandidates},
-      completion:completed?.report??null,stages,quality:{minimumCornerSJ:minSJ,originalVolume,completedVolume,finalVolume,refinementRelativeVolumeError:refinementError,sizeDistribution:sizes,engineeringAcceptanceVerified:false,
+      completion:completed?.report??null,stages,quality:{minimumCornerSJ:minSJ,originalVolume,completedVolume,finalVolume,refinementRelativeVolumeError:refinementError,sizeDistribution:sizes,adjacencyGrading,engineeringAcceptanceVerified:false,
         completionRelativeVolumeChange:(completedVolume-originalVolume)/originalVolume},
       balancePolicy:direct?"direct whole-parent hierarchical shells for separated full-section level1/2/3 bands; no whole-parent promotion; not arbitrary CinoLib WB schemes":"weak requested axial levels are conservatively completed to separated strong-balance support; not arbitrary CinoLib WB schemes",
       qualityWarnings:warnings,
