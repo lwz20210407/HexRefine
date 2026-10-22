@@ -126,11 +126,12 @@ does not imply arbitrary weak-balance/corner coverage.
 The opt-in direct mode now accepts separated full-section bands of constant
 level1,2 or3. Each original shell parent contains respectively7,31 or127 H8;
 each core parent has exactly8,64 or512 tensor descendants. No whole-parent
-uniform halo is promoted. At least two zero-target source layers must separate
-bands: their one-parent shells can meet at a coarse face, but cannot occupy
-the same original parent. Three zero layers leave a full unchanged coarse
-layer between the shells. Adjacent different positive levels and a shared
-two-sided shell are explicitly rejected, not silently completed.
+uniform halo is promoted. Disjoint one-parent shells need at least two
+zero-target source layers; three zero layers leave a whole unchanged coarse
+layer between shells. A subsequent research extension permits one zero-target
+layer to host two virtual half-shells reassembled as whole original parents.
+That is not general edge/vertex coverage: its TC4 minSJ0.135 example is not the
+recommended delivery. Adjacent different positive levels remain rejected.
 
 Full-section planning bypasses the local-box sweep route, including when the
 selected set has several disconnected axial intervals. Exact seven-Hex wall
@@ -144,6 +145,12 @@ count. The common axial station exponent still applies to the entire field.
 The conservative geometry policy must remain explicit. No new GUI controls,
 multi-direction CinoLib schemes or unbounded arbitrary-valence contract is
 implied by this extension.
+
+For the user's subsequent TC4 shape review, compare stepwise support instead
+of compressing two transitions into one parent. `strongSupportLayers:2` retains
+an intermediate-size plateau. Actual H8 face comparison and size statistics
+are documented in [TC4_TRANSITION_SHAPE_REVIEW.md](TC4_TRANSITION_SHAPE_REVIEW.md).
+This does not automatically engineering-qualify every input with this setting.
 
 Fixed tests include exact core counts, unchanged far field/input, axis
 permutations, K roundtrip, explicit odd-sheet consent/budgets, full-band
