@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
-import {checkNoHangingNodes,meshToLsdynaKeyword,parseMeshText,refineExtrudedOgrid} from '../dist/index.js';
+import {checkNoHangingNodes,H1_FACES,hexElementSignedVolume,meshToLsdynaKeyword,parseMeshText,refineExtrudedOgrid} from '../dist/index.js';
 import {extractExtrudedSection,planSectionParity} from '../dist/ogrid-section.js';
 import * as publicApi from '../dist/index.js';
 
@@ -169,7 +169,88 @@ test('independent level1/2/3 bands retain exact cores and do not bridge the coar
 
 test('direct-band incompatibilities are rejected before shell/core promotion',()=>{
   const source=cylinder(2,12),options={axis:2,completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0};
-  assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:2},{min:6,max:8,level:3}]}),/shared two-sided shell/);
   assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:2},{min:5,max:8,level:3}]}),/different positive target/);
   assert.throws(()=>refineExtrudedOgrid(source,{...options,bands:[{min:3,max:5,level:3}],maxOutputElements:4500}),/before assembly/);
+});
+
+test('shared original parents host two conforming half-shells without promoting either core',()=>{
+  for(const [lowDepth,highDepth] of [[1,1],[1,2],[2,2],[3,1],[2,3],[3,3]]){
+    const source=cylinder(2,8),copy=structuredClone(source),options={axis:2,bands:[{min:2,max:3,level:lowDepth},{min:4,max:5,level:highDepth}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0};
+    const result=refineExtrudedOgrid(source,options);verifyFullFinestCore(result);
+    assert.deepEqual(source,copy);assert.deepEqual(result.mesh.nodes.slice(0,source.nodes.length),source.nodes);
+    assert.deepEqual(result.report.requestedLayerTargets,result.report.effectiveLayerTargets);
+    assert.deepEqual(result.report.promotedSourceLayerIndices,[]);
+    assert.deepEqual(result.report.sharedShellSourceParentIds,[13,14,15,16]);
+    const split=.5+result.report.macroFinalization.selectedInterfaceBias*Math.sign(lowDepth-highDepth);
+    assert.deepEqual(result.report.macroFinalization.twoSidedShellGroups,[{lowDepth,highDepth,parents:4,childrenPerParent:2*4**lowDepth+2*4**highDepth-2,coarseInterfaceFractionOfParentHeight:split}]);
+    assert.equal(result.report.macroFinalization.twoSidedShellParents,4);
+    assert.equal(result.report.macroFinalization.axialStationWarp.originalParentPlanesFixed,true);
+    const groups=new Map();result.completedParentIds.forEach((p,i)=>{const cells=groups.get(p)??[];cells.push(i);groups.set(p,cells);});
+    for(let layer=0;layer<8;layer++)for(let c=0;c<4;c++){
+      const parent=1+4*layer+c,cells=groups.get(parent);
+      const expected=layer===2?8**lowDepth:layer===4?8**highDepth:layer===3?2*4**lowDepth+2*4**highDepth-2:layer===1?2*4**lowDepth-1:layer===5?2*4**highDepth-1:1;
+      assert.equal(cells.length,expected);
+      if(layer===2||layer===4){
+        const depth=layer===2?lowDepth:highDepth;assert.ok(cells.every(i=>result.uniformCells[i]&&result.levels[i]===depth));
+        const vertices=source.elements[parent-1].map(n=>source.nodes[n-1]),points=[...new Set(cells.flatMap(i=>result.mesh.elements[i]))].map(n=>result.mesh.nodes[n-1]);
+        const key=p=>p.map(v=>v.toFixed(10)).join(':'),expected=new Set(),signs=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+        for(let i=0;i<=2**depth;i++)for(let j=0;j<=2**depth;j++)for(let k=0;k<=2**depth;k++){
+          const r=[i,j,k].map(v=>2*v/2**depth-1),weights=signs.map(c=>c.reduce((s,v,a)=>s*(1+v*r[a])/2,1));expected.add(key([0,1,2].map(a=>vertices.reduce((s,p,c)=>s+p[a]*weights[c],0))));
+        }
+        assert.equal(points.length,(2**depth+1)**3);assert.deepEqual(new Set(points.map(key)),expected);
+      }
+      if(layer===3){
+        // The new coarse interface remains one Q1 quad on original parent edges.
+        const vertices=source.elements[parent-1].map(n=>source.nodes[n-1]);
+        const points=[...new Set(cells.flatMap(i=>result.mesh.elements[i]))].map(n=>result.mesh.nodes[n-1]);
+        for(let i=0;i<4;i++){const midpoint=vertices[i].map((v,a)=>(1-split)*v+split*vertices[i+4][a]);assert.ok(points.some(p=>Math.hypot(...p.map((v,a)=>v-midpoint[a]))<1e-11));}
+        assert.equal(points.filter(p=>Math.abs(p[2]-(3+split))<1e-11).length,4);
+        const midfaces=cells.flatMap(i=>H1_FACES.map(f=>f.map(n=>result.mesh.elements[i][n-1]))).filter(f=>f.every(n=>Math.abs(result.mesh.nodes[n-1][2]-(3+split))<1e-11));
+        assert.equal(midfaces.length,2);assert.deepEqual([...midfaces[0]].sort((a,b)=>a-b),[...midfaces[1]].sort((a,b)=>a-b));
+      }
+      if(expected===1)assert.deepEqual(result.mesh.elements[cells[0]],source.elements[parent-1]);
+    }
+    const reread=parseMeshText(meshToLsdynaKeyword(result.mesh),'two-sided.k');assert.deepEqual(reread.elements,result.mesh.elements);
+    assert.equal(result.report.macroFinalization.trials.find(t=>t.exponent===result.report.macroFinalization.selectedExponent&&t.interfaceBias===result.report.macroFinalization.selectedInterfaceBias).positiveGaussSamples,true);
+  }
+});
+
+test('shared-shell virtual preparation refuses a too-small budget before assembly',()=>{
+  const source=cylinder(2,8),copy=structuredClone(source);
+  assert.throws(()=>refineExtrudedOgrid(source,{axis:2,bands:[{min:2,max:3,level:2},{min:4,max:5,level:2}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxOutputElements:32}),/shared-shell preparation.*before assembly/);
+  assert.deepEqual(source,copy);
+});
+
+test('mapped shared shells preserve per-parent volume through physical axes and reversed local axial frames',()=>{
+  for(const axis of [0,1,2])for(const reflected of [false,true]){
+    const source=cylinder(2,8,axis),cross=axis===0?[1,2]:axis===1?[2,0]:[0,1];
+    source.nodes=source.nodes.map(p=>{const q=[...p],x=p[cross[0]],y=p[cross[1]],z=p[axis]/8;
+      q[cross[0]]+=.001*(x+1)*(y+1)*z;q[cross[1]]+=.001*x*y*z*z;
+      if(reflected)q[cross[0]]*=-1;return q;});
+    if(reflected)source.elements=source.elements.map(e=>[0,3,2,1,4,7,6,5].map(i=>e[i]));
+    source.elements=source.elements.map(e=>(reflected?[4,5,1,0,7,6,2,3]:[0,4,5,1,3,7,6,2]).map(i=>e[i]));
+    const copy=structuredClone(source),result=refineExtrudedOgrid(source,{axis,bands:[{min:2,max:3,level:1},{min:4,max:5,level:2}],completion:'none',transitionGeometry:'conservative-face-flux',balanceMode:'direct-macro',maxPromotedSourceLayers:0});
+    assert.deepEqual(source,copy);assert.deepEqual(result.mesh.nodes.slice(0,source.nodes.length),source.nodes);
+    assert.equal(result.report.macroFinalization.twoSidedShellParents,4);
+    assert.ok(checkNoHangingNodes(result.mesh,1e-8).ok);
+    const volumes=source.elements.map(()=>0);result.completedParentIds.forEach((p,i)=>volumes[p-1]+=hexElementSignedVolume(result.mesh.elements[i].map(n=>result.mesh.nodes[n-1])));
+    volumes.forEach((volume,i)=>assert.ok(Math.abs(volume-hexElementSignedVolume(source.elements[i].map(n=>source.nodes[n-1])))/volume<1e-8));
+    assert.equal(result.report.macroFinalization.trials.find(t=>t.exponent===result.report.macroFinalization.selectedExponent&&t.interfaceBias===result.report.macroFinalization.selectedInterfaceBias).positiveGaussSamples,true);
+  }
+});
+
+test('explicit strong support width separates the two2:1 stages without changing the requested core',()=>{
+  const source=cylinder(2,14),copy=structuredClone(source),options={axis:2,bands:[{min:6,max:8,level:2}],completion:'none',transitionGeometry:'conservative-face-flux',strongSupportLayers:2};
+  const result=refineExtrudedOgrid(source,options);verifyFullFinestCore(result);
+  assert.deepEqual(source,copy);assert.equal(result.mesh.elements.length,912);
+  assert.deepEqual(result.report.promotedSourceLayerIndices,[4,5,8,9]);
+  assert.equal(result.report.strongSupportLayers,2);assert.equal(result.report.coarseFarFieldParents,24);
+  assert.equal(result.report.quality.engineeringAcceptanceVerified,false);
+  assert.ok(result.report.quality.sizeDistribution.transitionElements>0);
+  assert.ok(result.report.quality.sizeDistribution.transitionToFinestCoreEdgeRatio>0);
+  const counts=new Map();result.completedParentIds.forEach(p=>counts.set(p,(counts.get(p)??0)+1));
+  for(const layer of [4,9])for(let c=0;c<4;c++)assert.equal(counts.get(1+4*layer+c),8);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,maxPromotedSourceLayers:3}),/maxPromotedSourceLayers/);
+  for(const n of [0,1.5,9])assert.throws(()=>refineExtrudedOgrid(source,{...options,strongSupportLayers:n}),/strongSupportLayers/);
+  assert.throws(()=>refineExtrudedOgrid(source,{...options,balanceMode:'direct-macro'}),/not valid for direct-macro/);
 });

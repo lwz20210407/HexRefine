@@ -7,7 +7,7 @@ import {minElementEdgeLength} from "./mesh.js";
 import {extractExtrudedSection,planSectionParity} from "./ogrid-section.js";
 import {completeCircularSection} from "./ogrid-completion.js";
 import {conserveTransitionFaceFlux,type ConservativeFaceMappingReport} from "./transition-face-flux.js";
-import {assembleReferenceStage,finalizeDirectShellMacros,type ReferenceSupport} from "./hierarchical-shell.js";
+import {assembleReferenceStage,finalizeDirectShellMacros,prepareSharedAxialShells,type ReferenceSupport} from "./hierarchical-shell.js";
 
 export interface OgridBand {min:number;max:number;level:1|2|3;}
 export interface OgridRefinementOptions {
@@ -21,12 +21,27 @@ export interface OgridRefinementOptions {
   transitionGeometry?:"trilinear"|"conservative-face-flux";
   maximumFaceDisplacementFraction?:number;
   balanceMode?:"strong-support"|"direct-macro";
+  /** Original-parent support layers per intermediate level; strong-support mode only. */
+  strongSupportLayers?:number;
 }
 const volume=(mesh:Mesh)=>mesh.elements.reduce((sum,e)=>sum+hexElementSignedVolume(e.map(n=>mesh.nodes[n-1]!)),0);
+const EDGES=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]] as const;
+function sizeDistribution(mesh:Mesh,uniform:readonly boolean[],finestCore:(i:number)=>boolean){
+  let coreMinimumEdge=Infinity,transitionMinimumEdge=Infinity,maximumTransitionEdgeAspect=0,transitionElements=0;
+  mesh.elements.forEach((e,i)=>{
+    if(uniform[i]&&!finestCore(i))return;
+    let low=Infinity,high=0;
+    for(const [a,b] of EDGES){const p=mesh.nodes[e[a]!-1]!,q=mesh.nodes[e[b]!-1]!,length=Math.hypot(p[0]!-q[0]!,p[1]!-q[1]!,p[2]!-q[2]!);low=Math.min(low,length);high=Math.max(high,length);}
+    if(uniform[i])coreMinimumEdge=Math.min(coreMinimumEdge,low);
+    else{transitionElements++;transitionMinimumEdge=Math.min(transitionMinimumEdge,low);maximumTransitionEdgeAspect=Math.max(maximumTransitionEdgeAspect,high/low);}
+  });
+  return {finestCoreMinimumEdge:coreMinimumEdge,transitionMinimumEdge,transitionToFinestCoreEdgeRatio:transitionMinimumEdge/coreMinimumEdge,
+    maximumTransitionEdgeAspect,transitionElements,scope:'Part-wide edge statistics, not an adjacent-cell grading or engineering acceptance certificate.'};
+}
 
 /** Full section and full requested bands, including bounded balance completion of weak requests. */
 export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
-  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode"].includes(k)))throw new RangeError('unknown O-grid option');
+  if(Object.keys(options).some(k=>!["axis","bands","completion","maxAddedSectionColumns","maxPromotedSourceLayers","maxOutputElements","minimumEdgeFraction","symmetryPlanes","transitionGeometry","maximumFaceDisplacementFraction","balanceMode","strongSupportLayers"].includes(k)))throw new RangeError('unknown O-grid option');
   if(options.balanceMode!==undefined&&!["strong-support","direct-macro"].includes(options.balanceMode))throw new RangeError('invalid O-grid balance mode');
   if(options.transitionGeometry!==undefined&&!["trilinear","conservative-face-flux"].includes(options.transitionGeometry))throw new RangeError('invalid transition geometry policy');
   if(options.maximumFaceDisplacementFraction!==undefined&&(options.transitionGeometry!=="conservative-face-flux"||!Number.isFinite(options.maximumFaceDisplacementFraction)||options.maximumFaceDisplacementFraction<=0||options.maximumFaceDisplacementFraction>.05))throw new RangeError('invalid conservative face displacement budget');
@@ -46,16 +61,18 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
   if(!requested.some(v=>v>0))throw new RangeError('requested bands select no source layer');
   const targets=[...requested],depth=Math.max(...targets);
   const direct=options.balanceMode==="direct-macro";
+  const strongSupportLayers=options.strongSupportLayers??1;
+  if(!Number.isSafeInteger(strongSupportLayers)||strongSupportLayers<1||strongSupportLayers>8)throw new RangeError('strongSupportLayers must be an integer from1 to8');
+  if(direct&&options.strongSupportLayers!==undefined)throw new RangeError('strongSupportLayers is not valid for direct-macro mode');
   if(direct){
     if(options.transitionGeometry!=="conservative-face-flux")throw new RangeError('direct macro requires explicit conservative-face-flux geometry');
-    // Independent bands own disjoint one-parent shells. A shared shell or an
-    // abrupt nonzero-to-nonzero level change needs a different macro vocabulary.
+    // A zero-target parent between two bands can host two virtual half-shells;
+    // an abrupt nonzero-to-nonzero change still needs a different vocabulary.
     for(let i=0;i<requested.length;i++){
       const level=requested[i]!;
       if(level&&i&&requested[i-1]&&requested[i-1]!==level)throw new RangeError('direct macro cannot join adjacent bands with different positive target levels');
-      if(!level&&i&&i+1<requested.length&&requested[i-1]&&requested[i+1])throw new RangeError('direct macro bands need at least two zero-target layers between them; a shared two-sided shell is unsupported');
     }
-  }else for(let level=depth;level>1;level--)for(let i=0;i<targets.length;i++)if(targets[i]!>=level)for(const neighbor of [i-1,i+1])if(neighbor>=0&&neighbor<targets.length)targets[neighbor]=Math.max(targets[neighbor]!,level-1);
+  }else for(let level=depth;level>1;level--)for(let i=0;i<targets.length;i++)if(targets[i]!>=level)for(let distance=1;distance<=strongSupportLayers;distance++)for(const neighbor of [i-distance,i+distance])if(neighbor>=0&&neighbor<targets.length)targets[neighbor]=Math.max(targets[neighbor]!,level-1);
   const promoted=targets.flatMap((level,i)=>level>requested[i]!?[i]:[]);
   if(promoted.length>layerLimit)throw new RangeError('weak-band completion exceeds maxPromotedSourceLayers');
   if(!targets.some(v=>v===0))throw new RangeError('completion would consume the entire coarse far field');
@@ -68,10 +85,11 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
   const completeParity=planSectionParity(topology.quads);if(completeParity.oddOpenChords)throw new Error('section parity completion failed its own witness check');
   const layerByParent=new Map<number,number>();topology.parentIds.forEach(row=>row.forEach((id,i)=>layerByParent.set(id,i)));
   const sourceProvenance=completed?.sourceParents??mesh.elements.map((_,i)=>[i+1]);
-  let current=coarse,parentIds=coarse.elements.map((_,i)=>i+1),levels=coarse.elements.map(()=>0),uniform=coarse.elements.map(()=>true),roles:RefinementRole[]=coarse.elements.map(()=>"unchanged");
-  let supports:ReferenceSupport[]|undefined=direct?coarse.nodes.map((_,i)=>new Map([[i+1,1]])):undefined;
-  const stages:Array<{level:number;selectedParents:number;outputElements:number;changedSourceLayerIndices:number[];geometry:ConservativeFaceMappingReport|null;quality:unknown}>=[];
   const mergeTolerance=minElementEdgeLength(coarse)*1e-8;
+  const prepared=direct?prepareSharedAxialShells(coarse,options.axis,layerByParent,targets,mergeTolerance,outputLimit):null;
+  let current=prepared?.mesh??coarse,parentIds=prepared?.parentIds??coarse.elements.map((_,i)=>i+1),levels=current.elements.map(()=>0),uniform=current.elements.map(()=>true),roles:RefinementRole[]=current.elements.map(()=>"unchanged");
+  let supports:ReferenceSupport[]|undefined=prepared?.supports;
+  const stages:Array<{level:number;selectedParents:number;outputElements:number;changedSourceLayerIndices:number[];geometry:ConservativeFaceMappingReport|null;quality:unknown}>=[];
   for(let level=1;level<=depth;level++){
     const baseCount=coarse.elements.reduce((s,_,i)=>s+(targets[layerByParent.get(i+1)!]!>=level?1:0),0);
     const selected=parentIds.flatMap((id,i)=>targets[layerByParent.get(id)!]!>=level&&uniform[i]&&levels[i]===level-1?[i+1]:[]);
@@ -116,6 +134,10 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
   let minSJ=Infinity;for(const e of current.elements)minSJ=Math.min(minSJ,minimumHexCornerScaledJacobian(e.map(n=>current.nodes[n-1]!)));
   const preserved=parentIds.filter((_,i)=>levels[i]===0);
   if(!preserved.length)throw new Error('no coarse far field remains');
+  const sizes=sizeDistribution(current,uniform,i=>targets[layerByParent.get(parentIds[i]!)!]===depth&&levels[i]===depth);
+  const warnings:string[]=[];
+  if(minSJ<.15)warnings.push("Minimum corner SJ is below0.15; topology/volume pass is NOT engineering acceptance.");
+  if(sizes.transitionToFinestCoreEdgeRatio<1-1e-8)warnings.push("Some transition edges are shorter than the finest-core minimum edge; compact topology can worsen size grading and explicit time steps. Review the transition shape, not just conformance/volume.");
   return {mesh:current,completedMesh:coarse,completedParentIds:parentIds,levels,uniformCells:uniform,roles,sourceParentProvenance:sourceProvenance,
     report:{implementation:"native-typescript",originalElements:mesh.elements.length,completedElements:coarse.elements.length,outputElements:current.elements.length,
       requestedBands:options.bands,requestedLayerTargets:requested,effectiveLayerTargets:targets,promotedSourceLayerIndices:promoted,
@@ -125,10 +147,12 @@ export function refineExtrudedOgrid(mesh:Mesh,options:OgridRefinementOptions){
       coreChildrenPerFinestParent:8**depth,
       transitionGeometry:options.transitionGeometry??"trilinear",
       balanceMode:options.balanceMode??"strong-support",macroFinalization:macroReport,
+      sharedShellSourceParentIds:prepared?.splitParents??[],
+      strongSupportLayers:direct?null:strongSupportLayers,
       coarseFarFieldParents:new Set(preserved).size,parity:{oddOpenChords:parity.oddOpenChords,cutEdges:parity.cutEdges.length,searchCandidates:parity.searchCandidates},
-      completion:completed?.report??null,stages,quality:{minimumCornerSJ:minSJ,originalVolume,completedVolume,finalVolume,refinementRelativeVolumeError:refinementError,
+      completion:completed?.report??null,stages,quality:{minimumCornerSJ:minSJ,originalVolume,completedVolume,finalVolume,refinementRelativeVolumeError:refinementError,sizeDistribution:sizes,engineeringAcceptanceVerified:false,
         completionRelativeVolumeChange:(completedVolume-originalVolume)/originalVolume},
       balancePolicy:direct?"direct whole-parent hierarchical shells for separated full-section level1/2/3 bands; no whole-parent promotion; not arbitrary CinoLib WB schemes":"weak requested axial levels are conservatively completed to separated strong-balance support; not arbitrary CinoLib WB schemes",
-      qualityWarnings:minSJ<.15?["Minimum corner SJ is below0.15; topology/volume pass is NOT engineering acceptance."]:[],
+      qualityWarnings:warnings,
       warning:(completed?"Circular completion changes coarse section topology/coordinates and discrete polygonal volume. Analytic circle and axial planes are retained. ":"Source vertices are retained. ")+(direct?"Direct hierarchical macros reparameterize NEW axial stations within each original shell parent; original planes and uniform core grid stay fixed. ":"")+(options.transitionGeometry==="conservative-face-flux"?"New transition-face interior nodes use bounded conservative flux mapping, not exact original bilinear surfaces. The normal correction budget is separate from axial station reparameterization. ":"")+"Symmetry phase exemptions do not exempt interface-conformance checks. Mesh-only output; solver state is not migrated."}};
 }

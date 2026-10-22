@@ -56,7 +56,9 @@ test('five-valent corner with its complete support ring has a conforming full-se
   const source=mergeCoincidentNodes({kind:'H1',nodes,elements},1e-10),result=refineExtrudedOgrid(source,{axis:2,bands:[{min:3,max:5,level:2}],completion:'none',balanceMode:'direct-macro',transitionGeometry:'conservative-face-flux',maxPromotedSourceLayers:0});
   assert.equal(result.mesh.elements.length,3880);
   assert.equal(result.report.macroFinalization.shellParents,40);
-  assert.equal(result.report.qualityWarnings.length,0);
+  assert.equal(result.report.quality.engineeringAcceptanceVerified,false);
+  assert.equal(result.report.qualityWarnings.some(w=>w.includes('shorter than the finest-core')),result.report.quality.sizeDistribution.transitionToFinestCoreEdgeRatio<1-1e-8);
+  assert.equal(result.report.qualityWarnings.some(w=>w.includes('corner SJ is below')),false);
   assert.ok(result.report.quality.minimumCornerSJ>.2);
   assert.ok(checkNoHangingNodes(result.mesh,1e-8).ok);
   assert.deepEqual(result.report.promotedSourceLayerIndices,[]);
