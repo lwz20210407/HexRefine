@@ -1,5 +1,34 @@
 # TransitionMesh 源码盘点与吸收记录
 
+## 2026-10-23 上游复查：公开范围已缩减
+
+实时GitHub API核实，当前main为`1ead656eb7715ca83916a9af33420ab6daa094c0`，
+最新公开提交时间UTC2026-10-20 16:35:44，即北京时间10月21日00:35:44。
+这不是确认作者私人工作区的最新进展。
+
+当前[版本说明](https://github.com/IY724/TransitionMesh/blob/1ead656eb7715ca83916a9af33420ab6daa094c0/README.zh-CN.md)
+明确只公开经典PLANAR，多模式完整版正在更新、暂不公开。当前树只有4个Python模块，
+不是下面2026-10-20研究快照中的13个。圆环、四侧、圆柱、规则/计数/事务等9个独立模块
+已不在当前公开树中；README仍保留完整功能介绍，不能据此当作当前源码可用范围。
+
+公开Release现为`v0.1-planar`，附件`TransitionMesh-ClassicPlanar-V0.1.zip`仅18034字节。
+本轮只读源码，没有下载/反编译安装包，也未覆盖旧13模块证据或现有独立实现。
+旧基线与当前main的compare API返回“No common ancestor”，因此改为逐文件内容和AST定义
+比较，不把当前版本当作可以直接快进拉取的普通升级。
+
+保留的平面内核无新增顶层函数，移除了`build_transition_patch`、混排等10个原函数；
+当前调度器也不再含先前的`_audit_execution`和`_PreMeshRollback`定义。
+这不是发现了可直接解决通用旧Hex棱角/弱平衡的新公开内核。
+源纯计数函数8例实测仍把24.9截成24、True层数当1；原生严格输入校验应保留。
+本轮没有重跑Abaqus CAE，不把这些纯Python探针称为新版CAE验收。
+
+有用但未完成的吸收仍包括：已有几何/网格的边界匹配、局部补偿与原子失败保护、
+更广的角棱和工程规模验证。私有完整版未取得，不声称已审阅或移植。
+详细树、提交、Release、Git blob校验、逐文件diff和纯函数结果保存在：
+`F:/PythonWoking/temp/20261023-hexrefine-wb-install/transitionmesh-*.json`。
+
+以下原盘点及已验证能力针对保留的旧固定版本，不因当前公开范围变化而删除。
+
 日期：2026-10-20。研究对象：[IY724/TransitionMesh](https://github.com/IY724/TransitionMesh)，
 固定版本 `cba8cb962e6fedf95be80164e641943f0aa99455`。
 本项目基线：HexRefine `6aae2c5`。用户明确本工作用于非商业研究和学习。
