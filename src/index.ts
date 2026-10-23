@@ -24,6 +24,7 @@ export * from "./conformance.js";
 export * from "./hex-quality.js";
 export {auditHexFaceGrading,type HexFaceGradingOptions,type HexFaceGradingReport,type HexFaceGradingWitness} from "./hex-face-grading.js";
 export * from "./grid.js";
+export {generateSolidSphereGradedMesh,type SolidSphereGradingSpec} from "./solid-sphere.js";
 export { planRectangularGrading, type RectangularGradingSpec, type RectangularGradingPlan } from "./graded-rectangle-plan.js";
 export { generateRectangularGradedMesh, type GradedRectangleResult } from "./graded-rectangle.js";
 export { generateCircularGradedMesh, type CircularGradingSpec } from "./graded-circle.js";

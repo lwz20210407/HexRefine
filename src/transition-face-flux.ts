@@ -111,6 +111,29 @@ export interface ConservativeFaceMappingReport {
 export function conserveTransitionFaceFlux(mesh:Mesh,plan:{strategy:string;replacements:readonly TwoToOneReplacement[]},maximumFraction=1e-3){
   if(!Number.isFinite(maximumFraction)||maximumFraction<=0||maximumFraction>.05)throw new RangeError('invalid conservative face displacement budget');
   if(!['seven-hex','hierarchical-shell'].includes(plan.strategy))throw new RangeError('conservative face mapping is restricted to certified seven-Hex/hierarchical fields');
+  return conserveCertifiedFaceFlux(mesh,plan.replacements,maximumFraction);
+}
+
+/** Internal adapter for the generated sphere's certified Cartesian local-sweep references. */
+export function conserveGeneratedCapFaceFlux(mesh:Mesh,replacements:readonly TwoToOneReplacement[],maximumFraction:number){
+  if(!Number.isFinite(maximumFraction)||maximumFraction<=0||maximumFraction>.01)throw new RangeError('invalid generated-cap displacement budget');
+  const seen=new Set<number>();
+  for(const r of replacements){
+    if(seen.has(r.elementId)||!mesh.elements[r.elementId-1]||!r.referenceNodes||r.referenceNodes.length!==r.refinement.nodes.length||!([4,7,8].includes(r.refinement.elements.length))||(r.role==='selected'&&r.refinement.elements.length!==8))throw new RangeError('invalid generated-cap reference family');
+    seen.add(r.elementId);
+    const vertices=mesh.elements[r.elementId-1]!.map(id=>mesh.nodes[id-1]!);
+    const length=Math.min(...H1_FACES.flatMap(f=>f.map((id,i)=>Math.hypot(...subtract(vertices[id-1]!,vertices[f[(i+1)%4]!-1]!)))));
+    r.referenceNodes.forEach((p,i)=>{
+      if(p.length!==3||p.some(v=>!Number.isFinite(v)||v< -1||v>1))throw new RangeError('generated-cap reference outside cube');
+      const expected=mix(vertices,CORNERS.map(c=>c.reduce((w,s,a)=>w*(1+s*p[a]!)/2,1)));
+      if(Math.hypot(...subtract(expected,r.refinement.nodes[i]!))>length*1e-10)throw new RangeError('generated-cap points do not match the source Q1 map');
+    });
+  }
+  return conserveCertifiedFaceFlux(mesh,replacements,maximumFraction);
+}
+
+function conserveCertifiedFaceFlux(mesh:Mesh,input:readonly TwoToOneReplacement[],maximumFraction:number){
+  const plan={replacements:input};
   const patches=collectPatches(mesh,plan.replacements);
   const replacements=plan.replacements.map(r=>r.role==='selected'?r:{...r,refinement:{...r.refinement,nodes:r.refinement.nodes.map(p=>[...p])}});
   const report:ConservativeFaceMappingReport={policy:"conservative-face-flux",inspectedFaces:patches.size,correctedFaces:0,

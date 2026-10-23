@@ -90,6 +90,11 @@ customize for research, engineering experiments, and selected project work:
   expansion and unchanged declared far field. An [ID-preserving K CLI](docs/OGRID_MACRO_FIELD_CLI.md)
   and [complete real-ROI verification](docs/OGRID_MACRO_FIELD_VALIDATION.md) are included.
   This is a bounded axial face-field path, not arbitrary3D CinoLib WB installation.
+- A bounded [solid-sphere surface-cap generator](docs/SOLID_SPHERE.md) builds a
+  filled seven-block H8 ball, one exact reference 1-to-8 cap core and local 3D 2:1
+  transition cells, preserving coarse far-field connectivity. Includes a
+  mesh-only K CLI and per-parent pre-projection flux conservation; not arbitrary
+  circular caps, concentric spherical-shell transitions or a new GUI mode.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.
