@@ -64,6 +64,11 @@ customize for research, engineering experiments, and selected project work:
   volume error for the planned patch. Browser reports and offline job manifests
   retain the same shared-kernel summary.
 - Mesh-only LS-DYNA keyword export containing `*NODE` and `*ELEMENT_SOLID`.
+- Bounded native [structured circular-core mapping](docs/MAPPED_CIRCULAR_CORE.md):
+  explicit radius/arc seeds, conforming quarter/half/full sections, uniform H8
+  extrusion, geometric sets, angle/edge quality and a versioned JSON Node CLI.
+  This is a filled-core primitive, not the complete concentric-ring generator
+  or a new GUI menu. Mapped edge sizes are reported, not forced to be equal.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.

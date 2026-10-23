@@ -1,5 +1,16 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Latest additive checkpoint: 2026-10-23. The native structured circular-core
+module now exposes quarter/half/full mapped sections, independent compatible
+boundary counts, bounded uniform H8 extrusion and a versioned JSON CLI with
+K/INP readback. Four independent PyDYNA case checks and actual LS-PrePost views
+are complete; the final integrated suite passes **986/986**, without skips.
+The legacy circular Q1 generator retains its three fraction geometry hashes.
+See [MAPPED_CIRCULAR_CORE.md](MAPPED_CIRCULAR_CORE.md). This addition does not
+complete the parameterized concentric-ring generator, its GUI, generic
+weak-balance installation or industrial-scale streaming. The older checkpoint
+and its historical test counts below are retained for traceability.
+
 Checkpoint: 2026-10-18. This reports actual native implementations and measured
 oracle coverage, not a claim of complete GUI_tg 6.1 equivalence. Native runtime
 is TypeScript/Node. Python can call the versioned CLI; a pure-Python kernel has

@@ -5,6 +5,7 @@ import {mergeCoincidentNodes} from "./mesh.js";
 import {refineQ1To4Q1} from "./templates.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {auditPlanarQuadMesh} from "./graded-quad.js";
+import {circularPolarPoint as polar,circularCorePoint} from "./circular-core-map-internal.js";
 
 export interface CircularQuadSpec {
   radius:number;
@@ -32,15 +33,8 @@ export function generateCircularGradedQuadMesh(spec:CircularQuadSpec) {
   const base:Mesh={kind:"Q1",nodes:[],elements:[]},fine:Mesh={kind:"Q1",nodes:[],elements:[]};
   const parents:number[]=[],coreParentIds:number[]=[];
   const transition=refineQ1To4Q1([[1,0],[0,0],[0,1],[1,1]]);
-  const polar=(radius:number,t:number):Point=>t===0?[radius,0,0]:t===1?[0,radius,0]
-    :t===.5?[radius*Math.SQRT1_2,radius*Math.SQRT1_2,0]:[radius*Math.cos(Math.PI/2*t),radius*Math.sin(Math.PI/2*t),0];
   const coreMap=(region:string,u:number,v:number):Point=>{
-    const b=.5*r,a=.42*r;
-    if(region==="D")return [b*u+(a-b)*u*v,b*v+(a-b)*u*v,0];
-    const t=region==="B"?u:v,s=region==="B"?v:u;
-    const inner=region==="B"?[a*t,b+(a-b)*t]:[b+(a-b)*t,a*t];
-    const outer=polar(r,region==="B"?1-t/2:t/2);
-    return [inner[0]!*(1-s)+outer[0]!*s,inner[1]!*(1-s)+outer[1]!*s,0];
+    return circularCorePoint(r,.5*r,.42*r,region==="D"?"center":region==="B"?"y-wing":"x-wing",u,v);
   };
   const add=(mesh:Mesh,vertices:readonly Point[],sx:number,sy:number)=>{
     const offset=mesh.nodes.length;
