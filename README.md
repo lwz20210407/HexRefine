@@ -69,6 +69,11 @@ customize for research, engineering experiments, and selected project work:
   extrusion, geometric sets, angle/edge quality and a versioned JSON Node CLI.
   This is a filled-core primitive, not the complete concentric-ring generator
   or a new GUI menu. Mapped edge sizes are reported, not forced to be equal.
+- Native [coupled concentric circular bands](docs/CONCENTRIC_CIRCULAR_GENERATOR.md):
+  explicit multiple circular 2:1 bands coarsen angular and axial counts together,
+  preserve the mapped core, and support quarter/half/full periodic streaming K
+  export. Includes quality gates and a 3.31-million-H8 real-case validation;
+  does not imply GUI, mixed-ratio rings or arbitrary imported-mesh installation.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.

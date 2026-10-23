@@ -1,5 +1,17 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Newest checkpoint: 2026-10-23, coupled concentric generator. Native parameterized
+2:1 bands now coarsen angular and axial counts together around a fixed circular
+core, with periodic streaming mesh-only K export. One through four rings and
+quarter/half/full cases are covered; the complete R200/H600 case has 3,310,500
+H8s, 2,688,000 preserved fine-core cells and independently recomputed minimum
+SJ 0.317993. Final regression: **1025/1025**, no skips. Five real K audits,
+ten actual LS-PrePost views and desktop/mobile HTML accompany this checkpoint.
+See [CONCENTRIC_CIRCULAR_GENERATOR.md](CONCENTRIC_CIRCULAR_GENERATOR.md).
+GUI, automatic band-width/seed optimization, nonperiodic ends and 3:1/mixed
+ring ratios remain separate. This does not complete arbitrary imported O-grid
+or weak-balance installation, solver-state migration or all GUI61 options.
+
 Latest additive checkpoint: 2026-10-23. The native structured circular-core
 module now exposes quarter/half/full mapped sections, independent compatible
 boundary counts, bounded uniform H8 extrusion and a versioned JSON CLI with

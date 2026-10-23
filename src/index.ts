@@ -32,6 +32,10 @@ export { generateCircularGradedQuadMesh, type CircularQuadSpec } from "./graded-
 export {planMappedCircularCore,generateMappedCircularCore,generateMappedCircularPrism,
   type MappedCircularCoreSpec,type MappedCircularCorePlan,type MappedCircularCoreResult,type MappedCircularCoreQuality,
   type MappedCircularPrismSpec} from "./mapped-circular-core.js";
+export {planConcentricCircularMesh,prepareConcentricCircularMesh,generateConcentricCircularMesh,
+  iterateConcentricCircularNodes,iterateConcentricCircularElements,
+  type ConcentricCircularSpec,type ConcentricTransitionRing,type ConcentricCircularPlan,
+  type ConcentricCircularBand,type PreparedConcentricCircularMesh,type ConcentricRegionQuality} from "./concentric-circular.js";
 export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./graded-cylinder.js";
 export * from "./lsdyna-mixed.js";
 export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformReinforcementSpec } from "./reinforced-uniform.js";
