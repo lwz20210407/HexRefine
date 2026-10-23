@@ -39,13 +39,15 @@ export {planConcentricCircularMesh,prepareConcentricCircularMesh,generateConcent
 export {planConcentricRingWidths,ConcentricWidthPlanningError,type ConcentricWidthPlanningRequest,
   type ConcentricWidthCriteria,type ConcentricWidthPlanningResult,type ConcentricWidthCandidate,
   type ConcentricWidthDiagnostics,type ConcentricWidthFailureCode} from "./concentric-width-planner.js";
+export {planConcentricSeeds,type ConcentricSeedPlanningRequest,type ConcentricSeedPlanningResult} from "./concentric-seed-planner.js";
 export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./graded-cylinder.js";
 export * from "./lsdyna-mixed.js";
 export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformReinforcementSpec } from "./reinforced-uniform.js";
 export { planGradedReinforcement, generateGradedReinforcedMesh, type GradedReinforcementSpec } from "./reinforced-graded.js";
 export * from "./gui61-generators.js";
 export * from "./gui61-archive.js";
-export {GUI_CONCENTRIC_ELEMENT_LIMIT,planGui61Concentric,gui61ConcentricStreamRequest,resizeGui61ConcentricRings} from "./gui61-concentric.js";
+export {GUI_CONCENTRIC_ELEMENT_LIMIT,planGui61Concentric,gui61ConcentricStreamRequest,resizeGui61ConcentricRings,
+  planGui61ConcentricWidths,applyGui61ConcentricWidthPlan} from "./gui61-concentric.js";
 export {refineHexWithTransitionClosure,classifyHexTransitionBoundary,HexTransitionClosureError,type HexTransitionClosureOptions,type HexBoundaryState} from "./hex-transition-closure.js";
 export {HexTransitionConformanceError} from "./refinement-errors.js";
 export {refineHexMultilevel,type HexTargetLevel,type HexMultilevelOptions} from "./hex-multilevel-closure.js";

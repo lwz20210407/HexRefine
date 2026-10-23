@@ -9,6 +9,7 @@
     "./two-to-one-capability.contract.ts",
     "./mapped-circular-core.contract.ts",
     "./gui61-concentric.contract.ts",
-    "./concentric-width.contract.ts"
+    "./concentric-width.contract.ts",
+    "./concentric-seeds.contract.ts"
   ]
 }

@@ -1,5 +1,6 @@
 import {planConcentricCircularMesh,generateConcentricCircularMesh,type ConcentricCircularSpec,type ConcentricTransitionRing} from "./concentric-circular.js";
 import type {Gui61Request} from "./gui61-generators.js";
+import {planConcentricRingWidths,type ConcentricWidthCriteria,type ConcentricWidthPlanningResult} from "./concentric-width-planner.js";
 
 export const GUI_CONCENTRIC_ELEMENT_LIMIT=200000;
 function parameters(request:Gui61Request):ConcentricCircularSpec {
@@ -12,6 +13,20 @@ export function planGui61Concentric(request:Gui61Request){return planConcentricC
 export function gui61ConcentricStreamRequest(request:Gui61Request){
   const spec=parameters(request);planConcentricCircularMesh(spec);
   return {schemaVersion:1 as const,parameters:structuredClone(spec)};
+}
+export function planGui61ConcentricWidths(request:Gui61Request,criteria:ConcentricWidthCriteria){
+  return planConcentricRingWidths({schemaVersion:1,parameters:parameters(request),criteria});
+}
+/** Proposals are tied to the unmodified source draft, never applied after an unrelated edit. */
+export function applyGui61ConcentricWidthPlan(request:Gui61Request,proposal:ConcentricWidthPlanningResult):Gui61Request {
+  const original=parameters(request);
+  if(JSON.stringify(original)!==JSON.stringify(proposal.report.originalParameters))throw new RangeError("环宽建议已过期，请重新规划");
+  const next=proposal.resolvedRequest.parameters;
+  const frozen=(p:ConcentricCircularSpec)=>({...p,minimumCornerScaledJacobian:undefined,rings:p.rings.map(r=>({...r,outerRadius:undefined}))});
+  if(JSON.stringify(frozen(original))!==JSON.stringify(frozen(next))
+    ||(next.minimumCornerScaledJacobian??0)<(original.minimumCornerScaledJacobian??0))throw new RangeError("环宽建议改变了冻结参数或降低了质量条件");
+  planConcentricCircularMesh(next);
+  return {schemaVersion:1,kind:"concentric-circular-solid",parameters:structuredClone(next) as unknown as Record<string,unknown>};
 }
 export function generateGui61Concentric(spec:ConcentricCircularSpec){
   const plan=planConcentricCircularMesh(spec);
