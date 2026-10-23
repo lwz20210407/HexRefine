@@ -10,6 +10,7 @@
     "./mapped-circular-core.contract.ts",
     "./gui61-concentric.contract.ts",
     "./concentric-width.contract.ts",
-    "./concentric-seeds.contract.ts"
+    "./concentric-seeds.contract.ts",
+    "./ogrid-macro-field.contract.ts"
   ]
 }

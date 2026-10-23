@@ -52,6 +52,7 @@ export {refineHexWithTransitionClosure,classifyHexTransitionBoundary,HexTransiti
 export {HexTransitionConformanceError} from "./refinement-errors.js";
 export {refineHexMultilevel,type HexTargetLevel,type HexMultilevelOptions} from "./hex-multilevel-closure.js";
 export {refineExtrudedOgrid,type OgridBand,type OgridRefinementOptions} from "./ogrid-refinement.js";
+export {refineOgridMacroField,OgridMacroFieldError,type OgridMacroFieldOptions} from "./ogrid-macro-field.js";
 export {mountGui61Workbench} from "./gui61-workbench.js";
 export * from "./mesh.js";
 export * from "./mesh-io.js";
