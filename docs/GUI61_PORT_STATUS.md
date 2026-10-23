@@ -1,5 +1,12 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Latest workflow checkpoint:2026-10-23. Three bounded additions provide upward-only
+nominal-size seed proposals, an explicit GUI width-proposal/apply workflow, and a
+standard-library Python job adapter to the built Node concentric kernel with real
+progress/cancellation. These are not a pure-Python mesher, universal imported-mesh
+installation or complete GUI61 job coverage. Full-scope limitations remain below.
+See [the three-module validation](THREE_NATIVE_MODULES_VALIDATION.md).
+
 Latest planning checkpoint:2026-10-23. Opt-in bounded concentric ring-width
 planning now freezes the core, inner interfaces, geometry, seeds and count
 budgets while selecting outer ring radii against explicit SJ/edge constraints.

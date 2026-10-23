@@ -122,8 +122,11 @@ acceptance and requires re-planning or an equivalent complete edge audit.
 
 Resolved requests can already be imported into the existing native concentric
 GUI. This was tested with a complete56,640-cell preview and actual K download.
-There is no one-click auto-planning button or new asynchronous GUI job controller
-in this module. GUI-selected K is checked separately for round-trip accuracy.
+The subsequent [GUI width workflow](GUI61_WIDTH_PLANNING.md) now calculates and
+displays a proposal before explicit apply/discard. Its HTTP path uses a worker;
+browser cancellation remains open. GUI-selected K is checked separately for
+round-trip accuracy. [Seed proposals](CONCENTRIC_SEED_PLANNER.md) can separately
+resolve count constraints, but do not optimize inner radii or preserve old mesh nodes.
 
 ## Measured Evidence (2026-10-23)
 
@@ -160,7 +163,7 @@ Seven actual LSPP views and existing-GUI import/preview/export evidence accompan
 the desktop/mobile review HTML. The selected GUI K separately passes PyDYNA,
 all-corner/eight-Gauss and native-connectivity/precision comparison.
 
-Remaining: GUI auto-planning controls, joint inner-radius/seed/count optimization,
+Remaining: joint inner-radius/seed/count optimization,
 nonperiodic end handling, mixed/3:1 bands, broader search families, arbitrary old
 O-grid/weak-balance installation and solver-state migration. This native
 extension is not a claim of full GUI_tg source-equivalence.

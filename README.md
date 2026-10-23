@@ -80,6 +80,11 @@ customize for research, engineering experiments, and selected project work:
   freezes the core, seeds and inner interfaces, screens finite widths against
   explicit SJ/edge limits, and fully audits accepted native plans. Reports all
   changes and search limits; not a global optimum or automatic seed optimizer.
+- [Concentric seed proposals](docs/CONCENTRIC_SEED_PLANNER.md) resolve nominal-size
+  targets into explicit compatible counts without hidden coarsening or budget changes.
+  The [GUI width workflow](docs/GUI61_WIDTH_PLANNING.md) shows proposals before apply;
+  [Python native jobs](docs/PYTHON_NATIVE_JOBS.md) provide real-process progress,
+  cancellation and completed-output publication using the same Node kernel.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.

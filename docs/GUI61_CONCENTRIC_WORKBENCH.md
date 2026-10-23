@@ -55,6 +55,11 @@ is refused for browser materialization. No440-MiB duplicate K was generated
 to validate this handoff. Large streaming downloads inside the browser and
 production job progress/cancellation are NOT implemented here.
 
+Subsequent additions: [explicit GUI width proposals](GUI61_WIDTH_PLANNING.md)
+and a separate [Python-to-Node task adapter](PYTHON_NATIVE_JOBS.md). The latter
+has actual progress/cancellation but is not yet a browser cancel button or a
+universal GUI61 task service.
+
 ## Failure Safety And Interfaces
 
 Public helpers: `planGui61Concentric`, `resizeGui61ConcentricRings`,
