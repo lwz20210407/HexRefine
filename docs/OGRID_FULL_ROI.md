@@ -1,5 +1,11 @@
 # Full-Section O-grid Refinement
 
+Alternative original-parent entry: [native macro fields](OGRID_NATIVE_MACRO_FIELD.md)
+compile and install whole-parent candidates directly, including explicitly budgeted
+32+7 layered shells. [Full real-ROI evidence](OGRID_MACRO_FIELD_VALIDATION.md) and an
+external-ID-preserving CLI are available. This does not change this API's defaults,
+or imply arbitrary3D weak-balance, multi-front or solver-state support.
+
 ## Scope
 
 `refineExtrudedOgrid(mesh, options)` is a native TypeScript path for complete

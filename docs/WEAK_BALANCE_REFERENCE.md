@@ -5,6 +5,12 @@ It is deliberately not exported through `src/index.ts`, registered in the
 production planner, or exposed as a GUI option. No real specimen has been
 converted using this new module. Complete TC4 verification remains separate.
 
+Subsequent bounded [native axial macro fields](OGRID_NATIVE_MACRO_FIELD.md) now
+install complete parent/corner fields into real existing K meshes. That path uses
+trusted native hierarchical H8 macros, not these primal tables. The CinoLib
+Edge_WB/Vert_WB installation gaps below therefore remain open; similar cell counts
+do not establish equivalent outer contracts or completed integration.
+
 ## Data And Native Implementation
 
 `src/experimental/cinolib-primal-data.ts` contains thirteen mechanically

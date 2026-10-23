@@ -85,6 +85,11 @@ customize for research, engineering experiments, and selected project work:
   The [GUI width workflow](docs/GUI61_WIDTH_PLANNING.md) shows proposals before apply;
   [Python native jobs](docs/PYTHON_NATIVE_JOBS.md) provide real-process progress,
   cancellation and completed-output publication using the same Node kernel.
+- [Existing-mesh O-grid macro fields](docs/OGRID_NATIVE_MACRO_FIELD.md) install
+  complete hierarchical parent macros with exact tensor cores, bounded axial shell
+  expansion and unchanged declared far field. An [ID-preserving K CLI](docs/OGRID_MACRO_FIELD_CLI.md)
+  and [complete real-ROI verification](docs/OGRID_MACRO_FIELD_VALIDATION.md) are included.
+  This is a bounded axial face-field path, not arbitrary3D CinoLib WB installation.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.

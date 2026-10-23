@@ -1,5 +1,12 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Latest existing-mesh checkpoint:2026-10-24. A public compiled macro-field API/CLI
+now installs complete axial face-transition/corner fields into original H8 meshes,
+including bounded32+7 layered fields without uniform parent promotion. Full TC4
+and round-bar ROIs, external K identity preservation and exact core/far-field checks
+are verified. This is not a new GUI61 menu or general3D CinoLib WB completion.
+See [the exact scope and evidence](OGRID_MACRO_FIELD_VALIDATION.md).
+
 Latest workflow checkpoint:2026-10-23. Three bounded additions provide upward-only
 nominal-size seed proposals, an explicit GUI width-proposal/apply workflow, and a
 standard-library Python job adapter to the built Node concentric kernel with real
