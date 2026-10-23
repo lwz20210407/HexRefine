@@ -26,7 +26,7 @@ async function main(){
     ||Object.keys(request).some(k=>!['schemaVersion','parameters'].includes(k)))throw new Error('Unsupported concentric request schema');
   progress('prepare');
   const p=prepareConcentricCircularMesh(request.parameters);
-  progress('audit-complete',p.counts.elements,p.counts.elements);
+  progress('audit-complete',p.motif.elements.length,p.motif.elements.length);
   const minimumEdge=Math.min(...Object.values(p.quality.regions).map(r=>r.minimumEdge));
   const estimatedBytes=p.counts.nodes*57+p.counts.elements*81+512;
   const disk=await fsp.statfs(parent);

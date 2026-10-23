@@ -42,6 +42,9 @@ class Jobs(unittest.TestCase):
         events = [json.loads(s) for s in (j.directory / "events.jsonl").read_text().splitlines()]
         stages = {e.get("stage") for e in events}
         self.assertTrue({"prepare", "audit-complete", "nodes", "elements", "readback", "complete"} <= stages)
+        audited = next(e for e in events if e.get("stage") == "audit-complete")
+        self.assertEqual(audited["completed"], report["motif"]["elements"])
+        self.assertEqual(audited["total"], report["motif"]["elements"])
         for stage in ["nodes", "elements", "readback"]:
             rows = [e for e in events if e.get("stage") == stage]
             self.assertEqual(rows[0]["completed"], 0)

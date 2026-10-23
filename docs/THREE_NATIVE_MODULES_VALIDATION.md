@@ -72,7 +72,10 @@ staging destination as execution history.
 
 First full regression:1089/1089,0 skipped, including16 added top-level tests and6
 real Python subprocess cases nested in the bridge test. The final repeat is recorded
-in `full-tests-final.log`; the Python final path assertion was also rerun independently.
+in `full-tests-final.log` and also passes1089/1089. Final progress metadata uses the
+audited motif count (not repeated full-cell count) and refuses symlink publication
+targets;9 targeted native CLI/job tests pass after that correction. The6 Python
+cases are also rerun independently in `python-final-tests.log`.
 No quality threshold was relaxed. README/TODO updates distinguish completed bounded
 features from mixed ratios, nonperiodic ends, general O-grid/weak-balance installation,
 full solver-deck migration and broader GUI61 parameter combinations still open.
@@ -80,3 +83,6 @@ full solver-deck migration and broader GUI61 parameter combinations still open.
 `REVIEW.html` links the actual K files, parameters, audits, progress/failure logs and
 desktop/mobile screenshots. The browser test HTTP helper is stopped after verification;
 the committed standalone HTML remains usable directly from the filesystem.
+Three byte-identical GUI download copies from this task were removed after hashing;
+`duplicate-downloads.json` retains their sizes/hashes and the retained `gui-http.k`.
+This saves24021060 bytes without deleting a distinct native model or earlier task data.

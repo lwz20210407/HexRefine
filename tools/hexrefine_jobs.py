@@ -132,7 +132,7 @@ class NativeMeshJob:
                             or (self._work / "mesh.k").stat().st_size != report["readback"]["bytes"]):
                         raise RuntimeError("Incomplete native output certificate")
                     destination = self.directory / "result"
-                    if destination.exists():
+                    if destination.exists() or destination.is_symlink():
                         raise RuntimeError("Refusing to overwrite job result")
                     self._work.rename(destination)
                     self._state.update(status="succeeded", stage="complete", output=str(destination), result={**terminal, "output": str(destination)})

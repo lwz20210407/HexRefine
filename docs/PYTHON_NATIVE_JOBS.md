@@ -33,6 +33,8 @@ creation. Native validation handles the geometry and count/quality contracts.
 States are `running`, `succeeded`, `failed`, `cancelled`; output is null unless success.
 Stages are prepare, audit-complete, node writing, element writing, readback and complete.
 Counts refer to actual records in each stage, not estimated overall percentages.
+The audit-complete count is the audited periodic motif, not a claim that every
+repeated full-model cell was expanded and independently audited at that stage.
 Synchronous topology preparation has a stage marker but no invented internal percent.
 The Node CLI emits these NDJSON events to stderr only when
 `HEXREFINE_PROGRESS_JSONL=1`; its normal single-result CLI contract stays intact.
