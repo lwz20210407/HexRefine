@@ -1,5 +1,16 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Latest planning checkpoint:2026-10-23. Opt-in bounded concentric ring-width
+planning now freezes the core, inner interfaces, geometry, seeds and count
+budgets while selecting outer ring radii against explicit SJ/edge constraints.
+Ordinary annuli receive an edge floor too, preventing thin leftover strips.
+Final1073/1073 regression and four independently audited selected full K cases
+pass. The accepted R48 four-ring reference improves0.293169→0.304802 minimum
+SJ with49152 unchanged core cells. This is an API/CLI module; its resolved
+requests import into the existing GUI, but a GUI auto-planning button, seed
+optimization and global optimality are NOT implemented. See
+[CONCENTRIC_WIDTH_PLANNER.md](CONCENTRIC_WIDTH_PLANNER.md).
+
 Latest GUI checkpoint:2026-10-23. The explicitly labelled native concentric2:1
 mode now joins the original seven parameter menus: structured ring editing,
 cheap full-model planning, bounded complete preview/K export, archive replay,

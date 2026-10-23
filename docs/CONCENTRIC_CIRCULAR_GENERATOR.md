@@ -190,7 +190,12 @@ contract and synchronized standalone runtime. Five real cases have independent
 all-cell corner/Gauss audits; ten actual LS-PrePost views are linked from the
 desktop/mobile review HTML.
 
-Still separate: browser-scale streaming, automatic band-width/seed optimization,
+Bounded width-only API/CLI recommendations are now available through
+[CONCENTRIC_WIDTH_PLANNER.md](CONCENTRIC_WIDTH_PLANNER.md), without changing this
+generator's explicit parameter contract. Resolved requests can use its existing
+CLI and GUI import route; recommendations are never silently applied.
+
+Still separate: browser-scale streaming, GUI auto-planning and joint inner-radius/seed optimization,
 additional ring counts and extreme shapes, 3:1/mixed-ratio ring templates,
 nonperiodic end-height handling, tilt/offset, material/solver semantics and
 arbitrary imported O-grid/weak-balance template installation.

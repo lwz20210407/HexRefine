@@ -36,6 +36,9 @@ export {planConcentricCircularMesh,prepareConcentricCircularMesh,generateConcent
   iterateConcentricCircularNodes,iterateConcentricCircularElements,
   type ConcentricCircularSpec,type ConcentricTransitionRing,type ConcentricCircularPlan,
   type ConcentricCircularBand,type PreparedConcentricCircularMesh,type ConcentricRegionQuality} from "./concentric-circular.js";
+export {planConcentricRingWidths,ConcentricWidthPlanningError,type ConcentricWidthPlanningRequest,
+  type ConcentricWidthCriteria,type ConcentricWidthPlanningResult,type ConcentricWidthCandidate,
+  type ConcentricWidthDiagnostics,type ConcentricWidthFailureCode} from "./concentric-width-planner.js";
 export { generateCylindricalGradedMesh, type CylindricalGradingSpec } from "./graded-cylinder.js";
 export * from "./lsdyna-mixed.js";
 export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformReinforcementSpec } from "./reinforced-uniform.js";

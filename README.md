@@ -76,6 +76,10 @@ customize for research, engineering experiments, and selected project work:
   has a [bounded browser parameter panel](docs/GUI61_CONCENTRIC_WORKBENCH.md)
   and exact streaming-request export;
   does not imply mixed-ratio rings or arbitrary imported-mesh installation.
+- Opt-in [bounded concentric ring-width planning](docs/CONCENTRIC_WIDTH_PLANNER.md):
+  freezes the core, seeds and inner interfaces, screens finite widths against
+  explicit SJ/edge limits, and fully audits accepted native plans. Reports all
+  changes and search limits; not a global optimum or automatic seed optimizer.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.
