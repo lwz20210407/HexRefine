@@ -38,6 +38,7 @@ function buildStandaloneHtml(html, importMap) {
   const importMapScript = `<script type="importmap">${JSON.stringify({ imports: importMap }, null, 2)}</script>`;
   const importBlock = `import {
         generateGui61,
+        planGui61ConcentricWidths,
         generateGui61Repair,
         generateTransitionMeshRequest,
         mountTransitionMeshWorkbench,
@@ -76,6 +77,10 @@ function buildStandaloneHtml(html, importMap) {
         updateStats();
         const totalStart = performance.now();
         try {
+          if (request.kind === "gui61-plan-widths") {
+            const result=planGui61ConcentricWidths(request.request,request.criteria);
+            return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};
+          }
           if (request.kind === "transition-mesh-generate") {
             const result = generateTransitionMeshRequest(request.request);
             return {ok:true,kind:request.kind,result,elapsedMs:performance.now()-totalStart};

@@ -1,10 +1,13 @@
 import {defaultGui61Request,gui61Kinds,gui61Fields,gui61Value,updateGui61Value,type Gui61Generated,type Gui61Kind,type Gui61Request} from "./gui61-generators.js";
 import {parseGui61ParameterFile,createGui61ParameterArchive,verifyGui61ParameterReplay,type Gui61ParameterImport} from "./gui61-archive.js";
-import {planGui61Concentric,resizeGui61ConcentricRings,gui61ConcentricStreamRequest,GUI_CONCENTRIC_ELEMENT_LIMIT} from "./gui61-concentric.js";
+import {planGui61Concentric,resizeGui61ConcentricRings,gui61ConcentricStreamRequest,GUI_CONCENTRIC_ELEMENT_LIMIT,
+  planGui61ConcentricWidths,applyGui61ConcentricWidthPlan} from "./gui61-concentric.js";
+import type {ConcentricWidthCriteria,ConcentricWidthPlanningResult} from "./concentric-width-planner.js";
 
 export function mountGui61Workbench(root:HTMLElement,options:{
   run:(request:Gui61Request)=>Promise<Gui61Generated>;
   runRepair?:(request:unknown)=>Promise<Gui61Generated>;
+  runWidths?:(request:Gui61Request,criteria:ConcentricWidthCriteria)=>Promise<ConcentricWidthPlanningResult>;
   show:(result:Gui61Generated)=>void;
   view:(mode:string)=>void;
   convert:()=>void;
@@ -13,7 +16,7 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   const style=document.createElement("style");
   style.textContent=`.gui61-panel{padding:10px 0;border-top:1px solid var(--line)}.gui61-panel button,.gui61-panel select{width:100%;margin:4px 0}.gui61-summary{font-size:12px;line-height:1.5;overflow-wrap:anywhere}.gui61-dialog{color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;width:min(800px,calc(100vw - 24px));max-height:86vh;padding:0}.gui61-dialog::backdrop{background:rgba(0,0,0,.35)}.gui61-header,.gui61-footer{padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel)}.gui61-header{position:sticky;top:0;z-index:2;border-bottom:1px solid var(--line)}.gui61-header h2{font-size:17px;margin:0;flex:1}.gui61-dialog button{width:auto}.gui61-kind{min-width:190px;flex:1}.gui61-fields{padding:0 16px}.gui61-fields fieldset{border:0;border-bottom:1px solid var(--line);margin:0;padding:14px 0}.gui61-fields legend{font-size:13px;color:var(--muted);padding-top:12px}.gui61-fields .fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.gui61-fields label{display:flex;flex-direction:column;gap:5px;font-size:13px;min-width:0}.gui61-fields input,.gui61-fields select{box-sizing:border-box;width:100%;min-width:0;background:var(--input-bg);color:var(--text);border:1px solid var(--line);border-radius:3px;padding:7px;font-size:14px}.gui61-fields .toggle{flex-direction:row;align-items:center;min-height:34px;flex-wrap:wrap}.gui61-fields .toggle input{width:17px;height:17px}.gui61-dialog :disabled{opacity:.5}.gui61-footer{position:sticky;bottom:0;z-index:2;border-top:1px solid var(--line)}.gui61-footer label{display:flex;gap:7px;align-items:center;font-size:13px}.gui61-error{padding:0 16px;color:var(--bad);white-space:pre-wrap;font-size:13px}.gui61-resolved{margin:8px 16px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:12px;line-height:1.6}.gui61-dialog [hidden]{display:none!important}@media(max-width:650px){.gui61-fields .fields{grid-template-columns:repeat(2,minmax(0,1fr))}.gui61-header{position:static}}@media(max-width:380px){.gui61-fields .fields{grid-template-columns:1fr}}`;
   style.textContent+=`.gui61-fields input,.gui61-fields select{height:34px;min-height:34px;line-height:18px}.gui61-fields .toggle input{height:17px;min-height:17px;flex:0 0 17px;padding:0}.gui61-footer label{white-space:nowrap;min-width:100px}.gui61-footer label input{width:17px;height:17px;flex:0 0 17px;margin:0}.gui61-panel button:disabled{opacity:.5}`;
-  style.textContent+=`.gui61-rings{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}.gui61-rings span{flex:1;font-size:13px}.gui61-rings button{width:32px;height:32px;padding:0;font-size:20px}.gui61-resolved[data-invalid="true"]{color:var(--bad)}`;
+  style.textContent+=`.gui61-rings{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}.gui61-rings span{flex:1;font-size:13px}.gui61-rings button{width:32px;height:32px;padding:0;font-size:20px}.gui61-resolved[data-invalid="true"]{color:var(--bad)}.gui61-widths .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.gui61-widths label{display:flex;flex-direction:column;gap:5px;font-size:13px;min-width:0}.gui61-widths input{width:100%;min-width:0;box-sizing:border-box;background:var(--input-bg);color:var(--text);border:1px solid var(--line)}.gui61-widths p{display:flex;flex-wrap:wrap;gap:6px}.gui61-widths button{min-height:32px}`;
   document.head.append(style);
   root.classList.add("gui61-panel");
   root.innerHTML=`<h2>参数建模</h2><button type="button" data-action="open">GUI_tg 6.1 参数</button><div class="gui61-summary" role="status"></div><select data-action="view" aria-label="生成模型显示"><option value="solid">实体 / 面网格</option><option value="both">钢筋叠加</option><option value="bars">仅钢筋</option></select><button data-action="download" type="button">导出生成 K</button><button data-action="report" type="button">导出参数与报告</button><button data-action="convert" type="button">转入局部细化</button>`;
@@ -25,6 +28,15 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   dialog.querySelector("form")!.insertBefore(ringTools,dialog.querySelector(".gui61-fields"));
   const streamButton=document.createElement("button");streamButton.type="button";streamButton.dataset.action="stream-request";streamButton.textContent="导出流式参数";streamButton.hidden=true;
   dialog.querySelector(".gui61-footer")!.append(streamButton);
+  const widthTools=document.createElement("fieldset");widthTools.className="gui61-widths";widthTools.hidden=true;
+  widthTools.style.cssText="margin:12px 16px;padding:12px;border:1px solid var(--line);min-width:0";
+  widthTools.innerHTML=`<legend>环宽规划</legend><div class="fields"></div><p><button type="button" data-action="plan-widths">计算环宽建议</button> <button type="button" data-action="apply-widths" disabled>应用建议</button> <button type="button" data-action="discard-widths" disabled>放弃建议</button> <button type="button" data-action="width-report" disabled>导出规划报告</button></p><output style="display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px" aria-live="polite"></output>`;
+  for(const [key,title,value] of [["minimumCornerScaledJacobian","最低角点 SJ",.2],["maximumTransitionEdgeAspectRatio","最大过渡棱长比",6],
+    ["minimumTransitionEdgeToCoreRatio","最短过渡边 / 核心边",1],["minimumRegularEdgeToCoreRatio","最短普通边 / 核心边",1]] as const){
+    const label=document.createElement("label"),input=document.createElement("input");label.textContent=title;input.type="number";input.step="any";input.value=String(value);
+    input.dataset.widthCriterion=key;input.setAttribute("aria-label",title);label.append(input);widthTools.querySelector(".fields")!.append(label);
+  }
+  dialog.querySelector("form")!.insertBefore(widthTools,dialog.querySelector(".gui61-error"));
   const inpButton=document.createElement("button");inpButton.type="button";inpButton.dataset.action="download-inp";inpButton.textContent="导出生成 INP";
   root.insertBefore(inpButton,root.querySelector('[data-action="report"]'));
   const repairButton=document.createElement("button"),repairInput=document.createElement("input");
@@ -37,6 +49,9 @@ export function mountGui61Workbench(root:HTMLElement,options:{
   const drafts=new Map<Gui61Kind,Gui61Request>();
   let current=defaultGui61Request("rectangular-solid"),snapshot:Gui61Generated|null=null,pending=false;
   let replay:Gui61ParameterImport|undefined;
+  let widthProposal:ConcentricWidthPlanningResult|undefined;
+  const widthOutput=widthTools.querySelector("output")!;
+  function discardWidthProposal(){widthProposal=undefined;widthOutput.textContent="";}
   const output=root.querySelector<HTMLElement>(".gui61-summary")!,error=dialog.querySelector<HTMLElement>(".gui61-error")!,resolved=dialog.querySelector<HTMLElement>(".gui61-resolved")!;
   const exportEnabled=dialog.querySelector<HTMLInputElement>('[data-action="enable-k"]')!,view=root.querySelector<HTMLSelectElement>('[data-action="view"]')!;
   const canExportK=()=>snapshot?.request.kind==="transition-mesh"||exportEnabled.checked;
@@ -49,11 +64,13 @@ export function mountGui61Workbench(root:HTMLElement,options:{
     view.disabled=!snapshot||snapshot.summary.beams===0;
     streamButton.hidden=current.kind!=="concentric-circular-solid";streamButton.disabled=pending;
     ringTools.hidden=current.kind!=="concentric-circular-solid";
+    widthTools.hidden=current.kind!=="concentric-circular-solid";
+    widthTools.querySelectorAll<HTMLButtonElement>("button").forEach(b=>b.disabled=pending||(b.dataset.action!=="plan-widths"&&!widthProposal));
     const n=Array.isArray(current.parameters.rings)?current.parameters.rings.length:0;
     (ringTools.querySelector('[data-action="add-ring"]') as HTMLButtonElement).disabled=pending||n>=8;
     (ringTools.querySelector('[data-action="remove-ring"]') as HTMLButtonElement).disabled=pending||n<=1;
   }
-  function invalidate(){snapshot=null;replay=undefined;output.textContent="参数已修改，待生成";resolved.textContent="";resolved.dataset.invalid="false";sync();}
+  function invalidate(){snapshot=null;replay=undefined;discardWidthProposal();output.textContent="参数已修改，待生成";resolved.textContent="";resolved.dataset.invalid="false";sync();}
   function showConcentricPlan(){
     if(current.kind!=="concentric-circular-solid")return;
     try{
@@ -89,6 +106,33 @@ export function mountGui61Workbench(root:HTMLElement,options:{
     sync();showConcentricPlan();
   }
   function save(name:string,text:string){const url=URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  widthTools.querySelectorAll("input").forEach(input=>input.addEventListener("input",()=>{discardWidthProposal();sync();}));
+  widthTools.querySelector('[data-action="discard-widths"]')!.addEventListener("click",()=>{discardWidthProposal();sync();});
+  widthTools.querySelector('[data-action="width-report"]')!.addEventListener("click",()=>{
+    if(widthProposal)save("concentric-width-proposal.json",JSON.stringify(widthProposal,null,2));
+  });
+  widthTools.querySelector('[data-action="apply-widths"]')!.addEventListener("click",()=>{
+    if(!widthProposal||pending)return;
+    try{current=applyGui61ConcentricWidthPlan(current,widthProposal);drafts.set(current.kind,current);invalidate();error.textContent="";renderFields();}
+    catch(e){discardWidthProposal();error.textContent=e instanceof Error?e.message:String(e);sync();}
+  });
+  widthTools.querySelector('[data-action="plan-widths"]')!.addEventListener("click",async()=>{
+    if(pending||options.isBusy())return;
+    pending=true;discardWidthProposal();sync();error.textContent="";widthOutput.textContent="规划与完整周期审计中…";
+    dialog.querySelectorAll<HTMLInputElement|HTMLButtonElement|HTMLSelectElement>("input,button,select").forEach(e=>e.disabled=true);
+    try{
+      const criteria=Object.fromEntries([...widthTools.querySelectorAll<HTMLInputElement>("[data-width-criterion]")].map(i=>[i.dataset.widthCriterion!,i.valueAsNumber])) as unknown as ConcentricWidthCriteria;
+      const source=structuredClone(current);
+      const result=options.runWidths?await options.runWidths(source,criteria):await new Promise<ConcentricWidthPlanningResult>((resolve,reject)=>setTimeout(()=>{
+        try{resolve(planGui61ConcentricWidths(source,criteria));}catch(e){reject(e);}
+      },0));
+      applyGui61ConcentricWidthPlan(current,result);widthProposal=result;
+      widthOutput.textContent=`待应用 · 单元 ${result.report.originalElements} → ${result.report.resolvedElements}\n`+
+        result.report.changes.map(c=>`环 ${c.ring}: 外半径 ${c.oldOuterRadius} → ${c.newOuterRadius}；宽度 ${c.oldWidth} → ${c.newWidth}`).join("\n")+
+        `\n最低 SJ ${result.quality.minimumCornerScaledJacobian.toFixed(6)} · 最大过渡棱比 ${result.report.actualTransitionEdgeAspectRatio.toFixed(4)}\n最短过渡/核心边 ${result.report.actualTransitionEdgeToCoreRatio.toFixed(4)}`;
+    }catch(e){error.textContent=e instanceof Error?e.message:String(e);widthOutput.textContent="未应用任何参数";}
+    finally{pending=false;dialog.querySelectorAll<HTMLInputElement|HTMLButtonElement|HTMLSelectElement>("input,button,select").forEach(e=>e.disabled=false);sync();}
+  });
   streamButton.addEventListener("click",()=>{
     try{save("concentric-stream-request.json",JSON.stringify(gui61ConcentricStreamRequest(current),null,2));error.textContent="";}
     catch(e){error.textContent=e instanceof Error?e.message:String(e);}

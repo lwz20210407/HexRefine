@@ -8543,6 +8543,12 @@
 
       gui61Controller = mountGui61Workbench(document.querySelector("#gui61-controls"), {
         isBusy: () => busy,
+        runWidths: async (request,criteria) => {
+          try {
+            await runWithBusyPause("正在规划环宽…");
+            return (await runRefinementWorker({kind:"gui61-plan-widths",request,criteria})).result;
+          } finally {setBusy(false);}
+        },
         runRepair: async request => {
           try {
             await runWithBusyPause("正在修复网格接口…");

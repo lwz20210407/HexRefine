@@ -1,5 +1,6 @@
 import {
   generateGui61,
+  planGui61ConcentricWidths,
   generateGui61Repair,
   generateTransitionMeshRequest,
   activeBuildCellIdByElementId,
@@ -16,6 +17,10 @@ import {
 self.addEventListener("message", (event) => {
   const request = event.data;
   try {
+    if (request.kind === "gui61-plan-widths") {
+      const result=planGui61ConcentricWidths(request.request,request.criteria);
+      self.postMessage({ok:true,kind:request.kind,result});return;
+    }
     if (request.kind === "transition-mesh-generate") {
       const start = performance.now();
       const result = generateTransitionMeshRequest(request.request);
