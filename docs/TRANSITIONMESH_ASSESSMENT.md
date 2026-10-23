@@ -1,5 +1,15 @@
 # TransitionMesh 源码盘点与吸收记录
 
+## 2026-10-24 公开分支与Release复查
+
+本机GitHub REST实时读取main提交、递归树、全部公开分支及Release。
+main仍为`1ead656eb7715ca83916a9af33420ab6daa094c0`，最新提交北京时间
+2026-10-21 00:35:44，与10月23日固定快照一致；仅一个公开main分支。
+最新公开Release仍为[v0.1-planar](https://github.com/IY724/TransitionMesh/releases/tag/v0.1-planar)，
+当前树仍只有下面列明的4个Python模块。未发现可直接补齐球体、通用3D棱角/WB或
+多前沿的新增公开实现。此结论不推断作者私人代码的进度，也不把README展示图当源码。
+本轮API证据保存在`F:/PythonWoking/temp/20261024-solid-sphere-native/transitionmesh-*.json`。
+
 ## 2026-10-23 上游复查：公开范围已缩减
 
 实时GitHub API核实，当前main为`1ead656eb7715ca83916a9af33420ab6daa094c0`，
