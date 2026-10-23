@@ -7,6 +7,7 @@
     "./active-mesh-build.contract.ts",
     "./planning-api-surface.contract.ts",
     "./two-to-one-capability.contract.ts",
-    "./mapped-circular-core.contract.ts"
+    "./mapped-circular-core.contract.ts",
+    "./gui61-concentric.contract.ts"
   ]
 }

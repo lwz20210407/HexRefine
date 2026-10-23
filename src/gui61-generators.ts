@@ -5,6 +5,7 @@ import {generateUniformReinforcedMesh} from "./reinforced-uniform.js";
 import {generateGradedReinforcedMesh} from "./reinforced-graded.js";
 import {generateRectangularGradedQuadMesh} from "./graded-quad.js";
 import {generateCircularGradedQuadMesh} from "./graded-circle-quad.js";
+import {generateGui61Concentric,gui61ConcentricStreamRequest} from "./gui61-concentric.js";
 import {meshToLsdynaKeyword,meshToLsdynaShellKeyword} from "./export.js";
 import {meshToLsdynaMixedKeyword,parseNativeLsdynaMixedKeyword,validateLsdynaMixedSets} from "./lsdyna-mixed.js";
 import {parseMeshText} from "./mesh-io.js";
@@ -17,7 +18,8 @@ import type {TransitionMeshRequest} from "./transition-mesh-request.js";
 export const gui61Kinds=[
   ["rectangular-solid","矩形靶板"],["circular-solid","圆形靶板"],["cylindrical-solid","圆柱壳体"],
   ["reinforced-uniform","钢筋混凝土算法1"],["reinforced-graded","钢筋混凝土算法2"],
-  ["circular-quad","2D圆面"],["rectangular-quad","2D矩形"]
+  ["circular-quad","2D圆面"],["rectangular-quad","2D矩形"],
+  ["concentric-circular-solid","同心圆环实体 · 原生2:1"]
 ] as const;
 export type Gui61Kind=typeof gui61Kinds[number][0];
 export interface Gui61Request {schemaVersion:1;kind:Gui61Kind;parameters:Record<string,unknown>;}
@@ -32,7 +34,9 @@ const optionalFields:Partial<Record<Gui61Kind,Record<string,number|boolean|undef
   "rectangular-solid":{angleDegrees:0,angleCorrection:false},
   "circular-solid":{angleDegrees:0,angleCorrection:false,elementLimit:undefined,approachElementLimit:false},
   "reinforced-uniform":{maximumRelativeDimensionChange:0,elementLimit:undefined,optimizeMeshSize:false},
-  "reinforced-graded":{"concrete.angleDegrees":0,"concrete.angleCorrection":false}
+  "reinforced-graded":{"concrete.angleDegrees":0,"concrete.angleCorrection":false},
+  "concentric-circular-solid":{innerCornerFraction:undefined,radialSize:undefined,elementLimit:undefined,
+    motifElementLimit:undefined,minimumCornerScaledJacobian:undefined}
 };
 const rectangle={fullSize:[80,80,16],refinedSize:[32,32],fineSize:1,coarseSize:2,reductions:{x:3,y:3,z:3},
   thicknessTransition:true,transitionStages:1,modelFraction:"half",angleDegrees:0,angleCorrection:false};
@@ -43,7 +47,10 @@ const defaults:Record<Gui61Kind,Record<string,unknown>>={
   "reinforced-uniform":{size:[20,12,8],meshSize:1,barCounts:[4,3,3],cover:[1,1,1],includeZBars:true,connectivity:"separate",dimensionPolicy:"source-aligned",maximumRelativeDimensionChange:.2,elementLimit:100000,optimizeMeshSize:false},
   "reinforced-graded":{concrete:{...rectangle,fullSize:[40,32,12],refinedSize:[16,12]},rebarMeshSize:2,barCounts:[4,5,3],cover:[2,2,0,0,2,2],includeZBars:true,connectivity:"separate"},
   "circular-quad":{radius:20,refinedRadius:10,fineSize:1,coarseSize:2,modelFraction:"quarter"},
-  "rectangular-quad":{positiveSize:[20,15],fineRegionSize:[8,6],coarseCounts:[10,10],reductions:{x:3,y:3},modelFraction:"quarter"}
+  "rectangular-quad":{positiveSize:[20,15],fineRegionSize:[8,6],coarseCounts:[10,10],reductions:{x:3,y:3},modelFraction:"quarter"},
+  "concentric-circular-solid":{radius:16,height:8,coreRadius:4,radiusSegments:20,arcSegments:32,axialSegments:16,
+    modelFraction:"quarter",innerCornerFraction:.625,radialSize:.5,elementLimit:100000,motifElementLimit:200000,
+    minimumCornerScaledJacobian:.2,rings:[{innerRadius:4.5,outerRadius:5.5,radialSize:1},{innerRadius:8.5,outerRadius:10.5,radialSize:2}]}
 };
 export function defaultGui61Request(kind:Gui61Kind):Gui61Request {
   if(!Object.hasOwn(defaults,kind))throw new RangeError("unknown GUI61 generator");
@@ -59,7 +66,7 @@ export function updateGui61Value(request:Gui61Request,path:string,value:unknown)
   const next=structuredClone(request),keys=path.split(".");
   let target=next.parameters;
   for(const key of keys.slice(0,-1))target=target[key] as Record<string,unknown>;
-  if(value===undefined&&Object.hasOwn(optionalFields[request.kind]??{},path))delete target[keys.at(-1)!];
+  if(value===undefined&&gui61Fields(request).find(f=>f.path===path)?.optional)delete target[keys.at(-1)!];
   else target[keys.at(-1)!]=value;
   return next;
 }
@@ -92,6 +99,19 @@ export function gui61Fields(request:Gui61Request):Gui61Field[]{
     for(const [p,l] of [["radius","外半径"],["thickness","厚度"],["coreHalfSize","中心方块半边长"],["fineSize","细网格目标尺寸"],["coarseSize","粗网格尺寸"]])n(p!,l!);
     ratio("reductions.x","B / X向倍率");ratio("reductions.y","C / Y向倍率");fraction();n("angleDegrees","倾角（度）","过渡与份额");toggle("angleCorrection","自动修正倾角");
     n("elementLimit","单元数量上限","数量控制");toggle("approachElementLimit","逼近数量上限",true,false,"数量控制");
+  }else if(request.kind==="concentric-circular-solid"){
+    for(const [p,l] of [["radius","外半径"],["height","完整厚度"],["coreRadius","圆形核心半径"],
+      ["radiusSegments","单条半径分段数"],["arcSegments","每90°圆弧分段数"],["axialSegments","核心全厚度层数"],
+      ["innerCornerFraction","核心映射接点比例"],["radialSize","首环前径向最大间距"]])n(p!,l!);
+    fraction();n("elementLimit","完整模型数量上限","数量与质量");n("motifElementLimit","周期段数量上限","数量与质量");
+    n("minimumCornerScaledJacobian","最低角点SJ","数量与质量");
+    const rings=request.parameters.rings;
+    if(!Array.isArray(rings)||rings.length<1||rings.length>8)throw new RangeError("过渡环数量应为 1–8");
+    for(let i=0;i<rings.length;i++){
+      const group=`过渡环 ${i+1} · 环向/厚度同步2:1`;
+      n(`rings.${i}.innerRadius`,"内半径",group);n(`rings.${i}.outerRadius`,"外半径",group);
+      n(`rings.${i}.radialSize`,"环后径向最大间距",group);fields.at(-1)!.optional=true;
+    }
   }else if(request.kind==="cylindrical-solid"){
     for(const [p,l] of [["outerRadius","外半径"],["thickness","单层壁厚"],["length","轴向全长"],["coreArcLength","加密区周向弧长"],["coreLength","加密区轴向全长"],["fineSize","细网格目标尺寸"],["radialSize","厚度目标尺寸"],["coarseSize","粗网格目标尺寸"],["layers","物理层数"]])n(p!,l!);
     fraction();toggle("thicknessTransition","厚度过渡");
@@ -116,7 +136,8 @@ export function generateGui61(request:Gui61Request):Gui61Generated {
   if(!request||request.schemaVersion!==1||!request.parameters||typeof request.parameters!=="object"||Array.isArray(request.parameters))throw new RangeError("invalid GUI61 request");
   if(Object.keys(request).some(k=>!["schemaVersion","kind","parameters"].includes(k)))throw new RangeError("unknown GUI61 request field");
   const generators={"rectangular-solid":generateRectangularGradedMesh,"circular-solid":generateCircularGradedMesh,"cylindrical-solid":generateCylindricalGradedMesh,
-    "reinforced-uniform":generateUniformReinforcedMesh,"reinforced-graded":generateGradedReinforcedMesh,"circular-quad":generateCircularGradedQuadMesh,"rectangular-quad":generateRectangularGradedQuadMesh};
+    "reinforced-uniform":generateUniformReinforcedMesh,"reinforced-graded":generateGradedReinforcedMesh,"circular-quad":generateCircularGradedQuadMesh,"rectangular-quad":generateRectangularGradedQuadMesh,
+    "concentric-circular-solid":generateGui61Concentric};
   const generator=generators[request.kind];if(!generator)throw new RangeError("unknown GUI61 generator");
   // Native entry points own parameter validation; never drop unknown fields here.
   const r=generator(request.parameters as never);
@@ -132,6 +153,7 @@ export function generateGui61(request:Gui61Request):Gui61Generated {
   const warnings=[...("warnings" in r.plan?r.plan.warnings:[]),...("warnings" in r.quality?r.quality.warnings:[])];
   const summary={nodes:points.length,solids:mesh.kind==="H1"?mesh.elements.length:0,quads:mesh.kind==="Q1"?mesh.elements.length:0,beams:model?.beams.length??0,warnings:[...new Set(warnings)]};
   const files:Record<string,string>={"mesh.k":keyword,"request.json":JSON.stringify(request,null,2),"report.json":JSON.stringify({request,plan:r.plan,quality:r.quality,summary,readbackMaximumCoordinateError:error},null,2)};
+  if(request.kind==="concentric-circular-solid")files["concentric-stream-request.json"]=JSON.stringify(gui61ConcentricStreamRequest(request),null,2);
   if("nodeSets" in r)files["node_sets.json"]=JSON.stringify(r.nodeSets);
   if("cellSets" in r)files["cell_sets.json"]=JSON.stringify(r.cellSets);
   if("parentElementIds" in r)files["lineage.json"]=JSON.stringify({parentElementIds:r.parentElementIds,coreParentIds:r.coreParentIds});

@@ -7,7 +7,8 @@ refinement boundary into a cylinder. Core mapping joins are internal structured
 patch edges; the fine-region outer boundary is circular.
 
 Status: API, bounded materialization, periodic streaming K CLI and measured
-one-through-four-ring cases. Not a new GUI menu, arbitrary imported-Hex
+one-through-four-ring cases. A bounded GUI entry is now available through
+[GUI61_CONCENTRIC_WORKBENCH.md](GUI61_CONCENTRIC_WORKBENCH.md). This is not arbitrary imported-Hex
 refinement, a 3:1 ring family, tilt, or an automatic engineering optimizer.
 Neither MATLAB nor TrueGrid nor Python is needed to generate the mesh.
 
@@ -155,8 +156,9 @@ counts, region quality and full-stream verification. Interrupted/failed output
 must not be mistaken for completed validation. PID is 1; materials, loads,
 contacts, sets and solver boundary conditions are not inferred.
 
-A Python GUI may call this Node CLI; there is no pure-Python production kernel
-and no new GUI control integration in this change.
+A Python GUI may call this Node CLI; there is no pure-Python production kernel.
+The browser workbench separately materializes complete models up to200,000
+H8s, with exact streaming-parameter handoff for larger requests.
 
 ## Evidence And Remaining Work
 
@@ -188,7 +190,7 @@ contract and synchronized standalone runtime. Five real cases have independent
 all-cell corner/Gauss audits; ten actual LS-PrePost views are linked from the
 desktop/mobile review HTML.
 
-Still separate: GUI integration, automatic band-width/seed optimization,
+Still separate: browser-scale streaming, automatic band-width/seed optimization,
 additional ring counts and extreme shapes, 3:1/mixed-ratio ring templates,
 nonperiodic end-height handling, tilt/offset, material/solver semantics and
 arbitrary imported O-grid/weak-balance template installation.

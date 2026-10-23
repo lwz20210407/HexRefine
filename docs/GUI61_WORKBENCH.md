@@ -1,9 +1,14 @@
 # GUI61 Parameter Workbench
 
 The existing HexRefine workbench now has a parameter-generation panel for all
-seven GUI_tg menu families. It calls the native TypeScript kernel, not MATLAB
+seven GUI_tg menu families and an explicitly labelled native concentric2:1
+extension. It calls the native TypeScript kernel, not MATLAB
 or TG. This connects the implemented subsets; it does not turn unsupported
 backend combinations into supported ones.
+
+The native `同心圆环实体 · 原生2:1` menu is documented in
+[GUI61_CONCENTRIC_WORKBENCH.md](GUI61_CONCENTRIC_WORKBENCH.md). It does not
+replace the recovered circular-solid menu or inherit that menu's tilt/ratios.
 
 Entry: `examples/browser/refinement-gui.html`, through a local HTTP server.
 Offline entry: `examples/browser/hexrefine-standalone.html`, rebuilt with

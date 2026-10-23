@@ -42,6 +42,7 @@ export { planUniformReinforcement, generateUniformReinforcedMesh, type UniformRe
 export { planGradedReinforcement, generateGradedReinforcedMesh, type GradedReinforcementSpec } from "./reinforced-graded.js";
 export * from "./gui61-generators.js";
 export * from "./gui61-archive.js";
+export {GUI_CONCENTRIC_ELEMENT_LIMIT,planGui61Concentric,gui61ConcentricStreamRequest,resizeGui61ConcentricRings} from "./gui61-concentric.js";
 export {refineHexWithTransitionClosure,classifyHexTransitionBoundary,HexTransitionClosureError,type HexTransitionClosureOptions,type HexBoundaryState} from "./hex-transition-closure.js";
 export {HexTransitionConformanceError} from "./refinement-errors.js";
 export {refineHexMultilevel,type HexTargetLevel,type HexMultilevelOptions} from "./hex-multilevel-closure.js";

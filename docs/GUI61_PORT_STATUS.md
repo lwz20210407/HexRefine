@@ -1,5 +1,14 @@
 # GUI61 Port: Verified Scope and Remaining Work
 
+Latest GUI checkpoint:2026-10-23. The explicitly labelled native concentric2:1
+mode now joins the original seven parameter menus: structured ring editing,
+cheap full-model planning, bounded complete preview/K export, archive replay,
+offline execution and exact streaming CLI parameter handoff. The browser cap
+is200,000 complete H8s; larger models are refused without rescaling/truncation.
+Final1034/1034 regression, actual HTTP/offline/mobile interactions and four
+independent downloaded-K audits pass; see
+[GUI61_CONCENTRIC_WORKBENCH.md](GUI61_CONCENTRIC_WORKBENCH.md).
+
 Newest checkpoint: 2026-10-23, coupled concentric generator. Native parameterized
 2:1 bands now coarsen angular and axial counts together around a fixed circular
 core, with periodic streaming mesh-only K export. One through four rings and
@@ -8,7 +17,7 @@ H8s, 2,688,000 preserved fine-core cells and independently recomputed minimum
 SJ 0.317993. Final regression: **1025/1025**, no skips. Five real K audits,
 ten actual LS-PrePost views and desktop/mobile HTML accompany this checkpoint.
 See [CONCENTRIC_CIRCULAR_GENERATOR.md](CONCENTRIC_CIRCULAR_GENERATOR.md).
-GUI, automatic band-width/seed optimization, nonperiodic ends and 3:1/mixed
+Automatic band-width/seed optimization, nonperiodic ends and3:1/mixed
 ring ratios remain separate. This does not complete arbitrary imported O-grid
 or weak-balance installation, solver-state migration or all GUI61 options.
 

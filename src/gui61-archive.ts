@@ -11,7 +11,13 @@ export interface Gui61ParameterImport {
 /** Parse only; costly mesh generation remains in the worker, not file import. */
 export function parseGui61ParameterFile(value:unknown):Gui61ParameterImport {
   if(!record(value))throw new RangeError("invalid GUI61 parameter file");
-  const isArchive=!Object.hasOwn(value,"schemaVersion"),candidate=isArchive?value.request:value;
+  const isArchive=!Object.hasOwn(value,"schemaVersion");let candidate=isArchive?value.request:value;
+  // The native streaming CLI has no GUI kind discriminator. Preserve its parameters exactly.
+  if(!isArchive&&record(candidate)&&candidate.schemaVersion===1&&!Object.hasOwn(candidate,"kind")
+    &&Object.keys(candidate).every(k=>["schemaVersion","parameters"].includes(k))
+    &&record(candidate.parameters)&&Array.isArray(candidate.parameters.rings)){
+    candidate={...candidate,kind:"concentric-circular-solid"};
+  }
   if(isArchive){
     if(Object.keys(value).some(k=>!["archiveVersion","request","ui","files"].includes(k)))throw new RangeError("unknown GUI61 archive field");
     if(value.archiveVersion!==undefined&&value.archiveVersion!==1)throw new RangeError("unsupported GUI61 archive version");

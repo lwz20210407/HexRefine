@@ -73,7 +73,9 @@ customize for research, engineering experiments, and selected project work:
   explicit multiple circular 2:1 bands coarsen angular and axial counts together,
   preserve the mapped core, and support quarter/half/full periodic streaming K
   export. Includes quality gates and a 3.31-million-H8 real-case validation;
-  does not imply GUI, mixed-ratio rings or arbitrary imported-mesh installation.
+  has a [bounded browser parameter panel](docs/GUI61_CONCENTRIC_WORKBENCH.md)
+  and exact streaming-request export;
+  does not imply mixed-ratio rings or arbitrary imported-mesh installation.
 - LS-DYNA keyword import accepts comma/space records and standard fixed-field
   `*NODE` records whose blank coordinate fields represent zero. An anonymized
   real-deck O-grid gauge slab is exercised by the 2:1 regression suite.
