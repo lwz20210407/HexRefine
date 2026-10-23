@@ -87,4 +87,4 @@ async function main(){
     farFieldParents:report.farFieldParents,minimumSJ:report.minimumOverallCornerSJ,maximumParentVolumeError:report.maximumOriginalParentRelativeVolumeError}));
 }
 main().catch(e=>{console.error(JSON.stringify({ok:false,error:e.message,code:e.code??null,parentIds:e.parentIds??[],faceNodeIds:e.faceNodeIds??[],
-  sourceExternalParentIds:e.sourceExternalParentIds??[],sourceExternalFaceNodeIds:e.sourceExternalFaceNodeIds??[],conflictingInterfaces:e.conflictingInterfaces??[]}));process.exitCode=1;});
+  sourceExternalParentIds:e.sourceExternalParentIds??[],sourceExternalFaceNodeIds:e.sourceExternalFaceNodeIds??[],conflictingInterfaces:e.conflictingInterfaces??[],diagnostics:e.diagnostics??{}}));process.exitCode=1;});

@@ -103,13 +103,32 @@ ID space and relative source paths for the final CLI.
 
 ## Deliberate Refusal And Remaining Work
 
-`Notched_Cylindrical_Compression_R1_noFrac`, complete1680-parent ROI at level2,
-still has an incompatible finite field. Compact diagnostics locate imported
-parents633/717/997 (external EIDs696/780/1060); layered diagnostics locate
-634/718/998 (external697/781/1061). Three encountered shared-face constraints
-are returned, not a claimed minimal mathematical impossibility proof. Neither
-case exports a misleading partial K. Adding a transition layer moves this conflict
-but does not absorb it. Mirror-boundary closure was checked, not guessed as the cause.
+The initial R1 requests omitted the two original symmetry planes. Their combined
+shared-face/exterior-phase failure was incorrectly summarized as shared-face-only
+incompatibility. Three encountered constraints are not a minimal unsatisfiable core,
+and a failure-only exact shared-face witness now disproves that earlier diagnosis.
+
+The corrected quarter R1 request declares X=0 and Z=0, confirmed by original SPC
+sets9101/9103 (1318/1317 nodes), not guessed from an arbitrary flat exterior.
+With both planes and two source-parent shell layers, the complete1680-parent
+level2 ROI has a compatible strict field. Standard station search gives shell
+SJ0.144137; explicit extended search improves it to0.174875 with p0.85/b0.6.
+No phase constraint is removed from the physical exterior; symmetry exemptions
+never remove shared-face conformity.
+
+An independent full-K inspection candidate has136626 H8:107520 exact tensor-core
+children,18018 transition children over924 original parents, and11088 unchanged
+coarse parents. All original nodes/external far-field connections stay unchanged;
+maximum per-parent readback volume error is5.05e-13, with zero unexpected internal
+free faces and a closed Euler2 boundary. This is an inspection candidate, **not a
+globally SJ>=0.15 accepted output**. The original core already has SJ0.04523785
+(import parent72, external EID135); its exact tensor children retain that minimum.
+The unchanged far field is0.514404. The production CLI still rejects the explicit
+global0.15 request and creates no output. Neither changing the gate nor moving
+protected source/core nodes has been silently substituted for acceptance.
+
+Evidence and private candidate: `F:/PythonWoking/temp/20261024-r1-shared-face`.
+See [R1 correction](R1_SHARED_FACE_CORRECTION.md) for the remaining acceptance decision.
 
 Remaining: genuinely general3D CinoLib edge/vertex WB installation, compatible
 multi-front/colliding shells, broader non-axial/odd-valence boundary contracts,

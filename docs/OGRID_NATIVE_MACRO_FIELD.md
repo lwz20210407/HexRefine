@@ -70,6 +70,16 @@ difference constraints and earliest/latest blends; on tapered/warped cells it is
 only a proposal, not a physical quality proof. A1% stricter proposal may be tried
 first; fallback changes only the proposal, never the requested acceptance floor.
 
+`axialStationSearch:"extended"` explicitly adds25 biased-power profiles to the
+standard finite family. With `t=s^p`, their map is `t+b*t*(1-t)`,
+`p in {0.55,0.65,0.75,0.85,1}`, `b in {-0.6,-0.3,0,0.3,0.6}`.
+Both endpoints are fixed and the derivative is strictly positive inside(0,1).
+The same group-wide profile is used on every shared station, not independent
+per-parent smoothing. Original nodes, tensor cores and coarse faces stay fixed;
+physical Gauss/corner, merged-edge and volume gates still apply. This opt-in search
+costs extra mapping trials and is neither an unbounded optimizer nor a new fill
+topology. Default callers retain the standard family.
+
 Acceptance always checks positive corner/eight-Gauss samples, exact count and
 lineage, interface conformance, core precision and every original-parent volume
 at the unchanged1e-8 bound. `minimumCornerScaledJacobian` optionally gates the whole
@@ -92,10 +102,21 @@ Output includes source-parent lineage, uniform/role flags, exact far-field paren
 indices, expansion IDs, corner groups, trial diagnostics, per-parent errors and
 actual core/transition edge statistics. `quality` is the changed-patch summary;
 `minimumOverallCornerSJ` additionally includes untouched far-field cells.
+Separate `minimumCoreCornerSJ`, `minimumTransitionCornerSJ` and
+`minimumFarFieldCornerSJ` identify which region limits quality. A shell passing
+the requested gate never excuses a failing protected core or unchanged far field.
 All topology indices in this API/report are import-ordinal, not external K IDs.
 
 Finite-vocabulary failure is not a theorem that no hexahedral fill exists. The error
 records encountered shared-face/phase conflicts, explicitly not a minimal core.
+Optional `diagnosticSearchBudget` (default0) performs a **failure-only** second
+search using protected core/far-face domains and shared-face constraints alone.
+Its exact witness is checked but never assembled or accepted as a relaxed result.
+Errors distinguish combined shared-face/exterior-phase refusal from evidence of
+shared-face-only infeasibility. Diagnostic budget exhaustion is not infeasibility.
+Structured `diagnostics` also distinguish transition quality failures from
+pre-existing protected-region quality. The CLI returns them on stderr and publishes
+no output for either failure.
 The general CinoLib edge/vertex schemes, non-axial/multi-front transitions, material
 interfaces, arbitrary valences and solver-state migration remain open. No new GUI
 parameter controls are implied. See [CLI](OGRID_MACRO_FIELD_CLI.md) and

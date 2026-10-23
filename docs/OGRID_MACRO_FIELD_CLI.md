@@ -50,6 +50,13 @@ diagnostics also use imported indices. `lineage.json` maps those indices to sour
 and output external IDs. Error responses additionally provide the original K
 `sourceExternalParentIds` and `sourceExternalFaceNodeIds` when available.
 
+Optional `options.diagnosticSearchBudget` enables a bounded, failure-only
+shared-face witness probe. Errors include structured `diagnostics`; no relaxed
+candidate is published. `options.axialStationSearch:"extended"` explicitly adds25
+monotone geometry profiles, without changing the global quality gate or protected
+source/core/far-field contracts. `protected-region-quality` diagnostics identify
+inherited low-quality source/core cells separately from a passing shell.
+
 ## Preserved Semantics
 
 - Input is a single-PID, eight-distinct-node mesh-only K. KEYWORD/TITLE/NODE/SOLID/END

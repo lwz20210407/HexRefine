@@ -45,6 +45,13 @@ test('macro CLI preserves noncontiguous original node/far-field EIDs and inherit
     r=spawnSync(process.execPath,['--import',pathToFileURL(preload).href,script,input,path.join(root,'low-space')],{cwd:root,encoding:'utf8'});
     assert.notEqual(r.status,0);assert.match(r.stderr,/Insufficient disk/);await assert.rejects(fs.stat(path.join(root,'low-space')),{code:'ENOENT'});
     await assert.rejects(fs.stat(path.join(out,'mesh.k.partial')),{code:'ENOENT'});
+    await fs.writeFile(input,JSON.stringify({...request,options:{...request.options,minimumCornerScaledJacobian:.999}}));
+    r=run(path.join(root,'quality-refusal'));assert.notEqual(r.status,0);
+    const refusal=JSON.parse(r.stderr.trim());assert.equal(refusal.code,'requested-quality');
+    assert.equal(refusal.diagnostics.requiredMinimumCornerSJ,.999);
+    assert.ok(refusal.diagnostics.bestSampledShellSJ<.999);assert.equal(refusal.diagnostics.outputGenerated,false);
+    await assert.rejects(fs.stat(path.join(root,'quality-refusal')),{code:'ENOENT'});
+    await fs.writeFile(input,JSON.stringify(request));
     await fs.writeFile(source,keyword.replace('*END','*MAT_ELASTIC\n1,1,1\n*END'));
     r=run(path.join(root,'refused'));assert.notEqual(r.status,0);assert.match(r.stderr,/Mesh-only/);
     await assert.rejects(fs.stat(path.join(root,'refused')),{code:'ENOENT'});

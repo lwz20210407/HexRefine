@@ -12,6 +12,7 @@ import {checkNoHangingNodes} from "./conformance.js";
 import {hexJacobian} from "./hex-quality-internal.js";
 import {determinant3Scaled,scaledValueSign} from "./hex-numeric-internal.js";
 import {proposeAxialStations} from "./axial-station-planner.js";
+import {createBiasedPowerAxialProfile} from "./axial-profile-internal.js";
 
 export interface OgridMacroFieldOptions {
   axis:0|1|2;
@@ -19,6 +20,10 @@ export interface OgridMacroFieldOptions {
   maxOutputElements?:number;
   maxShellParents?:number;
   maximumSearchDecisions?:number;
+  /** Extra failure-only shared-face diagnostic budget; zero means no second search. */
+  diagnosticSearchBudget?:number;
+  /** Explicit finite geometry search; extended adds 25 monotone biased-power profiles. */
+  axialStationSearch?:"standard"|"extended";
   transitionGeometry?:"trilinear"|"conservative-face-flux";
   maximumFaceDisplacementFraction?:number;
   minimumCornerScaledJacobian?:number;
@@ -76,15 +81,19 @@ function signature(parent:readonly number[],partition:Partition):string {
 }
 export class OgridMacroFieldError extends Error {
   constructor(readonly code:string,message:string,readonly parentIds:readonly number[]=[],readonly faceNodeIds:readonly number[]=[],
-    readonly conflictingInterfaces:readonly {firstParentId:number;secondParentId:number;kind:"shared-face"|"exterior-phase";nodeIds:readonly number[]}[]=[]) {super(message);this.name="OgridMacroFieldError";}
+    readonly conflictingInterfaces:readonly {firstParentId:number;secondParentId:number;kind:"shared-face"|"exterior-phase";nodeIds:readonly number[]}[]=[],
+    readonly diagnostics:Readonly<Record<string,unknown>>={}) {super(message);this.name="OgridMacroFieldError";}
 }
 
 /** Direct whole-original-parent installation. No original node movement or hidden core promotion. */
 export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions){
-  if(!options||Object.keys(options).some(k=>!["axis","targets","maxOutputElements","maxShellParents","maximumSearchDecisions","transitionGeometry","maximumFaceDisplacementFraction","minimumCornerScaledJacobian","exteriorPhasePolicy","symmetryPlanes","shellLayers","maxAdditionalShellParents","minimumTransitionToCoreEdgeRatio"].includes(k))||![0,1,2].includes(options.axis))throw new RangeError("invalid macro-field options");
+  if(!options||Object.keys(options).some(k=>!["axis","targets","maxOutputElements","maxShellParents","maximumSearchDecisions","diagnosticSearchBudget","axialStationSearch","transitionGeometry","maximumFaceDisplacementFraction","minimumCornerScaledJacobian","exteriorPhasePolicy","symmetryPlanes","shellLayers","maxAdditionalShellParents","minimumTransitionToCoreEdgeRatio"].includes(k))||![0,1,2].includes(options.axis))throw new RangeError("invalid macro-field options");
   if(source.kind!=="H1"||!source.elements.length||source.nodes.some(p=>p.length!==3||p.some(v=>!Number.isFinite(v))))throw new RangeError("macro field requires finite 3D H8 input");
   const limit=options.maxOutputElements??2000000,shellLimit=options.maxShellParents??4096,searchLimit=options.maximumSearchDecisions??4096;
   if(![limit,shellLimit,searchLimit].every(n=>Number.isSafeInteger(n)&&n>0)||limit>2000000||shellLimit>8192||searchLimit>100000)throw new RangeError("invalid macro-field budgets");
+  const diagnosticBudget=options.diagnosticSearchBudget??0;
+  if(!Number.isSafeInteger(diagnosticBudget)||diagnosticBudget<0||diagnosticBudget>100000)throw new RangeError("invalid diagnostic search budget");
+  if(options.axialStationSearch!==undefined&&!["standard","extended"].includes(options.axialStationSearch))throw new RangeError("invalid axial station search");
   if(options.transitionGeometry!==undefined&&!["trilinear","conservative-face-flux"].includes(options.transitionGeometry))throw new RangeError("invalid transition geometry");
   if(options.maximumFaceDisplacementFraction!==undefined&&(options.transitionGeometry!=="conservative-face-flux"||!Number.isFinite(options.maximumFaceDisplacementFraction)||options.maximumFaceDisplacementFraction<=0||options.maximumFaceDisplacementFraction>.05))throw new RangeError("invalid conservative face budget");
   if(options.minimumCornerScaledJacobian!==undefined&&(!Number.isFinite(options.minimumCornerScaledJacobian)||options.minimumCornerScaledJacobian<=0||options.minimumCornerScaledJacobian>1))throw new RangeError("invalid minimum corner SJ");
@@ -158,6 +167,7 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
     domains[vi]=domains[vi]!.filter(c=>signatures[vi]![c]![here.face]===fixed);
     if(!domains[vi]!.length)throw new OgridMacroFieldError("fixed-boundary","No compiled macro matches a protected core/far-field face.",[here.parent,other.parent]);
   }
+  const protectedDomains=domains.map(values=>[...values]);
   const freeFaces=parentIds.map(()=>[] as number[]);
   for(const owners of incidence.values())if(owners.length===1){const o=owners[0]!,v=variable.get(o.parent);if(v===undefined)continue;
     const entry=shells.get(o.parent)!;if(o.face===entry.face||o.face===opposite[entry.face])continue;
@@ -183,55 +193,82 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
     for(const group of groups.values())for(const v of group.slice(1))constraints.push({first:group[0]!,second:v,firstFace:0,secondFace:0,nodeIds:[],phase:true});
   }
   const value=(v:number,c:number,face:number,isPhase:boolean|undefined)=>isPhase?phaseSignatures[v]![c]![0]!:signatures[v]![c]![face]!;
+  const solveField=(start:readonly (readonly number[])[],active:typeof constraints,budget:number)=>{
   let decisions=0;
   const encounteredConflicts=new Set<number>();
-  const supports=constraints.map(c=>new Map(domains[c.first]!.map(a=>[a,new Set(domains[c.second]!.filter(b=>value(c.first,a,c.firstFace,c.phase)===value(c.second,b,c.secondFace,c.phase)))])));
+  const supports=active.map(c=>new Map(start[c.first]!.map(a=>[a,new Set(start[c.second]!.filter(b=>value(c.first,a,c.firstFace,c.phase)===value(c.second,b,c.secondFace,c.phase)))])));
   const solve=(values:number[][]):number[]|undefined=>{
     let changed=true;
-    while(changed){changed=false;for(const [i,c] of constraints.entries()){
+    while(changed){changed=false;for(const [i,c] of active.entries()){
       const a=values[c.first]!.filter(a=>values[c.second]!.some(b=>supports[i]!.get(a)?.has(b))),b=values[c.second]!.filter(b=>a.some(a=>supports[i]!.get(a)?.has(b)));
       if(!a.length||!b.length){encounteredConflicts.add(i);return undefined;}
       if(a.length!==values[c.first]!.length||b.length!==values[c.second]!.length){changed=true;values[c.first]=a;values[c.second]=b;}
     }}
-    const affine=solveAffineTemplateDomains(values,constraints,supports);
+    const affine=solveAffineTemplateDomains(values,active,supports);
     if(affine.kind==="satisfiable")return affine.solution;
     if(affine.kind==="unsatisfiable"){affine.constraintIndices.forEach(i=>encounteredConflicts.add(i));return undefined;}
     const unresolved=values.map((v,i)=>({i,n:v.length})).filter(v=>v.n>1).sort((a,b)=>a.n-b.n)[0];
     if(!unresolved)return values.map(v=>v[0]!);
-    for(const candidate of values[unresolved.i]!){if(++decisions>searchLimit)throw new OgridMacroFieldError("search-budget","Macro-field search budget exhausted; no infeasibility claim is made.");
+    for(const candidate of values[unresolved.i]!){if(++decisions>budget)throw new OgridMacroFieldError("search-budget","Macro-field search budget exhausted; no infeasibility claim is made.");
       const next=values.map(v=>[...v]);next[unresolved.i]=[candidate];const result=solve(next);if(result)return result;
     }return undefined;
   };
-  const solution=solve(domains);
+  const solution=solve(start.map(values=>[...values]));
+  if(solution){
+    if(solution.length!==start.length||solution.some((candidate,v)=>!start[v]!.includes(candidate)))throw new Error("macro field witness left protected domains");
+    for(const c of active)if(value(c.first,solution[c.first]!,c.firstFace,c.phase)!==value(c.second,solution[c.second]!,c.secondFace,c.phase))throw new Error("macro field witness failed exact constraint verification");
+  }
+  return {solution,decisions,encounteredConflicts};
+  };
+  const {solution,decisions,encounteredConflicts}=solveField(domains,constraints,searchLimit);
   if(!solution){
+    const phaseRequired=(options.exteriorPhasePolicy??"level-closed")==="level-closed";
+    let sharedFaceOnly:Record<string,unknown>={status:"not-run",budget:diagnosticBudget};
+    if(phaseRequired&&diagnosticBudget>0){
+      try{
+        const probe=solveField(protectedDomains,constraints.filter(c=>!c.phase),diagnosticBudget);
+        sharedFaceOnly={status:probe.solution?"feasible":"infeasible",budget:diagnosticBudget,searchDecisions:probe.decisions,
+          exactWitnessVerified:!!probe.solution,protectedCoreAndFarFacesRetained:true};
+      }catch(error){
+        if(!(error instanceof OgridMacroFieldError)||error.code!=="search-budget")throw error;
+        sharedFaceOnly={status:"budget-exhausted",budget:diagnosticBudget,exactWitnessVerified:false};
+      }
+    }
     const conflicts=[...encounteredConflicts].sort((a,b)=>a-b).map(i=>constraints[i]!).map(c=>({firstParentId:parentIds[c.first]!,secondParentId:parentIds[c.second]!,kind:c.phase?"exterior-phase" as const:"shared-face" as const,nodeIds:c.nodeIds}));
-    throw new OgridMacroFieldError("incompatible-field","No complete shared-face macro field exists in the compiled finite vocabulary. Encountered conflicts are not claimed minimal.",
-      [...new Set(conflicts.flatMap(c=>[c.firstParentId,c.secondParentId]))],conflicts.find(c=>c.nodeIds.length)?.nodeIds??[],conflicts);
+    const message=sharedFaceOnly.status==="feasible"?"A shared-face-only field exists, but the required level-closed exterior contract excludes all fields in this finite vocabulary. No relaxed candidate is accepted.":
+      phaseRequired?"No macro field satisfies the combined shared-face and required exterior-phase constraints in this finite vocabulary. This does not establish shared-face-only infeasibility.":
+      "No complete shared-face macro field exists in the compiled finite vocabulary.";
+    throw new OgridMacroFieldError("incompatible-field",message+" Encountered conflicts are not claimed minimal.",
+      [...new Set(conflicts.flatMap(c=>[c.firstParentId,c.secondParentId]))],conflicts.find(c=>c.nodeIds.length)?.nodeIds??[],conflicts,
+      {stage:"constraint-field",constraintScope:phaseRequired?"shared-faces-and-exterior-phase":"shared-faces",sharedFaceOnly,
+        conflictsAreMinimal:false,outputGenerated:false,acceptancePolicyUnchanged:true});
   }
   for(const c of constraints)if(value(c.first,solution[c.first]!,c.firstFace,c.phase)!==value(c.second,solution[c.second]!,c.secondFace,c.phase))throw new Error("macro field witness failed exact constraint verification");
   const core:TwoToOneReplacement[]=[...targets].sort(([a],[b])=>a-b).map(([id,depth])=>{
     const t=uniform(depth);return {elementId:id,role:"selected",templateCode:8**depth,referenceNodes:t.nodes,refinement:instantiateTwoWay7Template(source.elements[id-1]!.map(n=>source.nodes[n-1]!),t,t.name)};
   });
-  let coreMinimumEdge=Infinity;
-  for(const r of core)for(const e of r.refinement.elements){const points=e.map(n=>r.refinement.nodes[n-1]!);if(!positiveGauss(points))throw new OgridMacroFieldError("core-quality","Exact tensor core has a nonpositive Gauss sample.",[r.elementId]);coreMinimumEdge=Math.min(coreMinimumEdge,edgeSizes(points).minimum);}
+  let coreMinimumEdge=Infinity,coreMinimumSJ=Infinity,coreMinimumParent=0;
+  for(const r of core)for(const e of r.refinement.elements){const points=e.map(n=>r.refinement.nodes[n-1]!);if(!positiveGauss(points))throw new OgridMacroFieldError("core-quality","Exact tensor core has a nonpositive Gauss sample.",[r.elementId]);coreMinimumEdge=Math.min(coreMinimumEdge,edgeSizes(points).minimum);
+    const sj=minimumHexCornerScaledJacobian(points);if(sj<coreMinimumSJ){coreMinimumSJ=sj;coreMinimumParent=r.elementId;}}
   const groupKey=(id:number)=>{const shell=shells.get(id)!;return`${shell.depth}:${shell.coarseDepth}`;};
   const stationPatches=parentIds.map((id,v)=>({group:groupKey(id),template:local[v]![solution[v]!]!.template,
     fineFace:shells.get(id)!.face,vertices:source.elements[id-1]!.map(n=>source.nodes[n-1]!)}));
   const requestedStationEdge=coreMinimumEdge*(options.minimumTransitionToCoreEdgeRatio??1);
   let stationProposals=proposeAxialStations(stationPatches,options.axis,requestedStationEdge*1.01),stationMargin=1.01;
   if([...stationProposals.values()].some(p=>!p.feasible)){stationProposals=proposeAxialStations(stationPatches,options.axis,requestedStationEdge);stationMargin=1;}
-  let best:{replacements:TwoToOneReplacement[];minimumSJ:number;exponent:number|null;stationBlend:number|null;geometry:unknown;edgeRatio:number;edgeAspect:number}|undefined;
-  const trials:Array<{exponent?:number;stationBlend?:number;minimumSJ?:number;edgeRatio?:number;error?:string}>=[];
-  const mappings=[...([.25,.3,.4,.5,.65,.8,1].map(exponent=>({exponent,stationBlend:null as number|null}))),
-    ...([...stationProposals.values()].every(p=>p.feasible)?[.1,.25,.5,.75,.9].map(stationBlend=>({exponent:null,stationBlend})):[])];
+  let best:{replacements:TwoToOneReplacement[];minimumSJ:number;exponent:number|null;stationBlend:number|null;axialBias:number;geometry:unknown;edgeRatio:number;edgeAspect:number}|undefined;
+  const trials:Array<{exponent?:number;stationBlend?:number;axialBias?:number;minimumSJ?:number;edgeRatio?:number;error?:string}>=[];
+  const mappings:Array<{exponent:number|null;stationBlend:number|null;axialBias:number}>=[...([.25,.3,.4,.5,.65,.8,1].map(exponent=>({exponent,stationBlend:null,axialBias:0}))),
+    ...([...stationProposals.values()].every(p=>p.feasible)?[.1,.25,.5,.75,.9].map(stationBlend=>({exponent:null,stationBlend,axialBias:0})):[])];
+  if(options.axialStationSearch==="extended")for(const exponent of [.55,.65,.75,.85,1])for(const axialBias of [-.6,-.3,0,.3,.6])mappings.push({exponent,stationBlend:null,axialBias});
   for(const mapping of mappings){
-    const {exponent,stationBlend}=mapping;
+    const {exponent,stationBlend,axialBias}=mapping,profile=exponent===null?null:createBiasedPowerAxialProfile(exponent,axialBias);
     const replacements=[...core];
     for(const [v,id] of parentIds.entries()){
       const entry=shells.get(id)!,candidate=local[v]![solution[v]!]!,face=H1_FACES[entry.face]!;
       const axial=[0,1,2].find(a=>face.every(n=>C[n-1]![a]===C[face[0]!-1]![a]))!,side=C[face[0]!-1]![axial]!;
       const proposal=stationProposals.get(groupKey(id))!,positions=new Map(proposal.stations.map((s,i)=>[s,proposal.earliest[i]!+(stationBlend??0)*(proposal.latest[i]!-proposal.earliest[i]!)]));
-      const nodes=candidate.template.nodes.map(p=>{const q=[...p],w=(1-side*q[axial]!)/2,mapped=exponent===null?positions.get(w)!:w**exponent;q[axial]=side*(1-2*mapped);return q as unknown as ReferencePoint3;});
+      const nodes=candidate.template.nodes.map(p=>{const q=[...p],w=(1-side*q[axial]!)/2,mapped=profile===null?positions.get(w)!:profile(w);q[axial]=side*(1-2*mapped);return q as unknown as ReferencePoint3;});
       const t={...candidate.template,nodes};replacements.push({elementId:id,role:"face-transition",templateCode:t.elements.length,referenceNodes:nodes,refinement:instantiateTwoWay7Template(source.elements[id-1]!.map(n=>source.nodes[n-1]!),t,t.name)});
     }
     replacements.sort((a,b)=>a.elementId-b.elementId);
@@ -239,21 +276,35 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
       const mapped=options.transitionGeometry==="conservative-face-flux"?conserveTransitionFaceFlux(source,{strategy:"hierarchical-shell",replacements},options.maximumFaceDisplacementFraction):null;
       const used=mapped?.replacements??replacements;
       let sj=Infinity,positive=true,edge=Infinity,aspect=0;for(const r of used)if(r.role!=="selected")for(const e of r.refinement.elements){const points=e.map(n=>r.refinement.nodes[n-1]!);sj=Math.min(sj,minimumHexCornerScaledJacobian(points));if(!positiveGauss(points))positive=false;const sizes=edgeSizes(points);edge=Math.min(edge,sizes.minimum);aspect=Math.max(aspect,sizes.aspect);}
-      const edgeRatio=edge/coreMinimumEdge,edgeOk=edgeRatio>=(options.minimumTransitionToCoreEdgeRatio??0),label=exponent===null?{stationBlend:stationBlend!}:{exponent};
+      const edgeRatio=edge/coreMinimumEdge,edgeOk=edgeRatio>=(options.minimumTransitionToCoreEdgeRatio??0),label=exponent===null?{stationBlend:stationBlend!}:{exponent,axialBias};
       trials.push({...label,minimumSJ:sj,edgeRatio,...(!positive?{error:"nonpositive Gauss sample"}:!edgeOk?{error:"transition/core edge gate failed"}:{})});
-      if(sj>0&&positive&&edgeOk&&(!best||sj>best.minimumSJ))best={replacements:used,minimumSJ:sj,exponent,stationBlend,geometry:mapped?.report??null,edgeRatio,edgeAspect:aspect};
-    }catch(e){trials.push({...exponent===null?{stationBlend:stationBlend!}:{exponent},error:String(e)});}
+      if(sj>0&&positive&&edgeOk&&(!best||sj>best.minimumSJ))best={replacements:used,minimumSJ:sj,exponent,stationBlend,axialBias,geometry:mapped?.report??null,edgeRatio,edgeAspect:aspect};
+    }catch(e){trials.push({...exponent===null?{stationBlend:stationBlend!}:{exponent,axialBias},error:String(e)});}
   }
   if(!best)throw new OgridMacroFieldError("mapped-quality","No mapped candidate meets positive sampled Jacobians and the configured edge floor in this finite station family. "+JSON.stringify(trials.slice(0,2)),parentIds);
-  if(options.minimumCornerScaledJacobian!==undefined&&best.minimumSJ<options.minimumCornerScaledJacobian)throw new OgridMacroFieldError("requested-quality","Best sampled shell SJ is below the requested gate.",parentIds);
+  if(options.minimumCornerScaledJacobian!==undefined&&best.minimumSJ<options.minimumCornerScaledJacobian)throw new OgridMacroFieldError("requested-quality","Best sampled shell SJ is below the requested gate.",parentIds,[],[],
+    {stage:"mapped-quality",requiredMinimumCornerSJ:options.minimumCornerScaledJacobian,bestSampledShellSJ:best.minimumSJ,
+      exactConstraintWitnessVerified:true,exteriorPhasePolicy:options.exteriorPhasePolicy??"level-closed",trials,
+      outputGenerated:false,acceptancePolicyUnchanged:true});
   const result=buildAuditedHexRefinementOutput(source,best.replacements,tolerance,true,2),replaced=new Set(best.replacements.map(r=>r.elementId));
   const outputParents=source.elements.flatMap((_,i)=>replaced.has(i+1)?[]:[i+1]);for(const r of best.replacements)for(const _ of r.refinement.elements)outputParents.push(r.elementId);
   if(result.mesh.elements.length!==count||outputParents.length!==count)throw new Error("direct macro count differs from the complete preflight");
   if(JSON.stringify(result.mesh.nodes.slice(0,source.nodes.length))!==JSON.stringify(source.nodes))throw new Error("installation changed original source nodes");
   const farField=source.elements.flatMap((_,i)=>replaced.has(i+1)?[]:[i+1]);
   farField.forEach((id,i)=>{if(JSON.stringify(result.mesh.elements[i])!==JSON.stringify(source.elements[id-1]))throw new Error("far-field connectivity changed");});
-  let minimumOverallSJ=result.quality.childMinimumOrientedScaledJacobian;for(const id of farField)minimumOverallSJ=Math.min(minimumOverallSJ,sourceMinimumSJ[id-1]!);
-  if(options.minimumCornerScaledJacobian!==undefined&&minimumOverallSJ<options.minimumCornerScaledJacobian)throw new OgridMacroFieldError("requested-quality","Core or far-field SJ is below the requested gate.");
+  let farMinimumSJ=Infinity,farMinimumParent=0;
+  for(const id of farField)if(sourceMinimumSJ[id-1]!<farMinimumSJ){farMinimumSJ=sourceMinimumSJ[id-1]!;farMinimumParent=id;}
+  const minimumOverallSJ=Math.min(result.quality.childMinimumOrientedScaledJacobian,farMinimumSJ);
+  if(options.minimumCornerScaledJacobian!==undefined&&minimumOverallSJ<options.minimumCornerScaledJacobian){
+    const failedCore=coreMinimumSJ<options.minimumCornerScaledJacobian,failedFar=farMinimumSJ<options.minimumCornerScaledJacobian;
+    throw new OgridMacroFieldError("requested-quality","Protected core or unchanged far-field SJ is below the global requested gate; a passing shell does not override that contract.",
+      [...(failedCore?[coreMinimumParent]:[]),...(failedFar?[farMinimumParent]:[])],[],[],
+      {stage:"protected-region-quality",requiredMinimumCornerSJ:options.minimumCornerScaledJacobian,minimumOverallCornerSJ:minimumOverallSJ,
+        minimumTransitionCornerSJ:best.minimumSJ,minimumCoreCornerSJ:coreMinimumSJ,minimumFarFieldCornerSJ:farMinimumSJ,
+        minimumCoreSourceParentId:coreMinimumParent,minimumFarFieldSourceParentId:farMinimumParent,
+        coreSourceParentMinimumCornerSJ:sourceMinimumSJ[coreMinimumParent-1],farFieldCoordinatesAndConnectivityUnchanged:true,
+        exactCorePreserved:true,outputGenerated:false,acceptancePolicyUnchanged:true});
+  }
   let offset=farField.length,maximumCoreCoordinateError=0,maximumParentRelativeVolumeError=0,actualCoreEdge=Infinity,actualTransitionEdge=Infinity,actualTransitionAspect=0;
   for(const r of best.replacements){
     let childVolume=0;const expectedNodes=r.refinement.nodes;
@@ -291,10 +342,12 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
       shellGroups:[...new Set([...shells.values()].map(s=>`${s.depth}:${s.coarseDepth}`))].sort().map(key=>{const [depth,coarseDepth]=key.split(":").map(Number);return {depth,coarseDepth,parents:[...shells.values()].filter(s=>s.depth===depth&&s.coarseDepth===coarseDepth).length,childrenPerParent:hierarchicalShellCount(depth!,coarseDepth!)};}),
       shellExpansion:{requestedLayers:shellLayers,initialParentIds:initialShellParents,additionalParentIds:queue.slice(initialShellParents.length),additionalParentBudget:additionalLimit,policy:"opposite axial faces only; no uniform support-parent promotion"},
       selectedExponent:best.exponent,trials,geometry:best.geometry,quality:result.quality,
-      selectedStationBlend:best.stationBlend,stationProposals:Object.fromEntries(stationProposals),stationProposalEdgeMargin:stationMargin,
+      selectedStationBlend:best.stationBlend,selectedAxialBias:best.axialBias,axialStationSearch:options.axialStationSearch??"standard",
+      stationProposals:Object.fromEntries(stationProposals),stationProposalEdgeMargin:stationMargin,
       sizeDistribution:{coreMinimumEdge:actualCoreEdge,transitionMinimumEdge:actualTransitionEdge,transitionToCoreMinimumEdgeRatio:actualEdgeRatio,maximumTransitionEdgeAspectRatio:actualTransitionAspect,
         requestedMinimumRatio:options.minimumTransitionToCoreEdgeRatio??null,minimumRatioVerified:options.minimumTransitionToCoreEdgeRatio===undefined?null:actualEdgeRatio>=options.minimumTransitionToCoreEdgeRatio},
-      minimumOverallCornerSJ:minimumOverallSJ,maximumCoreCoordinateError,maximumOriginalParentRelativeVolumeError:maximumParentRelativeVolumeError,
+      minimumOverallCornerSJ:minimumOverallSJ,minimumTransitionCornerSJ:best.minimumSJ,minimumCoreCornerSJ:coreMinimumSJ,minimumFarFieldCornerSJ:farMinimumSJ,
+      maximumCoreCoordinateError,maximumOriginalParentRelativeVolumeError:maximumParentRelativeVolumeError,
       cornerGroups,
       limitation:"One fine face per whole source shell parent; no adjacent unequal exact cores, two-front shells or arbitrary CinoLib WB edge/vertex installation. Exterior phase certificate concerns normalized reference stations; no universal physical-surface quality is implied.",
       engineeringAcceptanceVerified:false}};

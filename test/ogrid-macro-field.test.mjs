@@ -47,6 +47,19 @@ test('odd-valence stars distinguish conforming installation from a level-closed 
     const source={kind:'H1',nodes:[],elements:[]};for(let k=0;k<=8;k++)for(const p of section)source.nodes.push([...p,k]);
     for(let k=0;k<8;k++)for(const q of quads)source.elements.push([...q.map(v=>1+v+k*section.length),...q.map(v=>1+v+(k+1)*section.length)]);
     assert.throws(()=>refineOgridMacroField(source,options(source)),e=>e.code==='incompatible-field');
+    const before=structuredClone(source);
+    assert.throws(()=>refineOgridMacroField(source,{...options(source),diagnosticSearchBudget:64}),error=>{
+      assert.equal(error.code,'incompatible-field');
+      assert.equal(error.diagnostics.constraintScope,'shared-faces-and-exterior-phase');
+      assert.equal(error.diagnostics.sharedFaceOnly.status,'feasible');
+      assert.equal(error.diagnostics.sharedFaceOnly.exactWitnessVerified,true);
+      assert.equal(error.diagnostics.sharedFaceOnly.protectedCoreAndFarFacesRetained,true);
+      assert.equal(error.diagnostics.outputGenerated,false);
+      assert.equal(error.diagnostics.acceptancePolicyUnchanged,true);
+      assert.match(error.message,/shared-face-only field exists/);
+      return true;
+    });
+    assert.deepEqual(source,before);
     const r=refineOgridMacroField(source,{...options(source),exteriorPhasePolicy:'unconstrained'});
     assert.equal(r.report.referenceExteriorPhaseClosureVerified,false);assert.equal(r.report.cornerGroups.length,2);
     assert.ok(r.report.cornerGroups.every(g=>g.valence===n&&g.children===31*n&&g.completeOriginalParentsCovered));
@@ -60,7 +73,43 @@ test('budgets, conflicting cores and wrong-axis inputs fail without silently cha
   assert.throws(()=>refineOgridMacroField(m,{...o,axis:0}),e=>e.code==='non-axial-interface');
   assert.throws(()=>refineOgridMacroField(m,{...o,targets:[...o.targets,o.targets[0]]}),/duplicate/);
   const adjacent=structuredClone(o);adjacent.targets[0].level=1;assert.throws(()=>refineOgridMacroField(m,adjacent),e=>e.code==='adjacent-core-levels');
-  assert.throws(()=>refineOgridMacroField(m,{...o,minimumCornerScaledJacobian:.999}),e=>e.code==='requested-quality');
+  assert.throws(()=>refineOgridMacroField(m,{...o,minimumCornerScaledJacobian:.999}),e=>{
+    assert.equal(e.code,'requested-quality');assert.equal(e.diagnostics.requiredMinimumCornerSJ,.999);
+    assert.ok(e.diagnostics.bestSampledShellSJ>0&&e.diagnostics.bestSampledShellSJ<.999);
+    assert.equal(e.diagnostics.exactConstraintWitnessVerified,true);assert.equal(e.diagnostics.outputGenerated,false);
+    assert.ok(e.diagnostics.trials.length>0);return true;
+  });
+  for(const budget of [-1,.5,true,Infinity,100001])assert.throws(()=>refineOgridMacroField(m,{...o,diagnosticSearchBudget:budget}),/diagnostic search budget/);
+  assert.throws(()=>refineOgridMacroField(m,{...o,axialStationSearch:'unbounded'}),/axial station search/);
+  assert.deepEqual(m,before);
+});
+test('extended station search is explicit, finite and cannot reduce best accepted shell quality',()=>{
+  const m=box(),before=structuredClone(m),o=options(m),a=refineOgridMacroField(m,o),b=refineOgridMacroField(m,{...o,axialStationSearch:'extended'});
+  assert.equal(a.report.axialStationSearch,'standard');assert.equal(b.report.axialStationSearch,'extended');
+  assert.equal(b.report.trials.length,a.report.trials.length+25);
+  assert.ok(b.report.minimumTransitionCornerSJ>=a.report.minimumTransitionCornerSJ);
+  assert.deepEqual(m,before);assert.equal(b.report.wholeParentPromotions,0);
+  assert.ok(checkNoHangingNodes(b.mesh,1e-8).ok);
+  assert.ok(b.report.maximumOriginalParentRelativeVolumeError<1e-12);
+  assert.deepEqual(b.sourceParentIds,a.sourceParentIds);
+});
+test('a passing transition cannot hide an unchanged low-quality far-field parent',()=>{
+  const m=box();m.nodes=m.nodes.map(p=>p[2]===0?[p[0]+20,p[1],p[2]]:p);
+  const before=structuredClone(m);
+  assert.throws(()=>refineOgridMacroField(m,{...options(m),minimumCornerScaledJacobian:.1}),error=>{
+    assert.equal(error.code,'requested-quality');
+    assert.equal(error.diagnostics.stage,'protected-region-quality');
+    assert.ok(error.diagnostics.minimumTransitionCornerSJ>=.1);
+    assert.ok(error.diagnostics.minimumCoreCornerSJ>=.1);
+    assert.ok(error.diagnostics.minimumFarFieldCornerSJ>0&&error.diagnostics.minimumFarFieldCornerSJ<.1);
+    const id=error.diagnostics.minimumFarFieldSourceParentId;
+    assert.ok(error.parentIds.includes(id));
+    assert.equal(error.diagnostics.minimumFarFieldCornerSJ,minimumHexCornerScaledJacobian(m.elements[id-1].map(n=>m.nodes[n-1])));
+    assert.equal(error.diagnostics.exactCorePreserved,true);
+    assert.equal(error.diagnostics.outputGenerated,false);
+    assert.equal(error.diagnostics.acceptancePolicyUnchanged,true);
+    return true;
+  });
   assert.deepEqual(m,before);
 });
 for(const [fine,coarse,children] of [[2,1,32],[3,1,128],[3,2,160]])test(`complete graded parent ${fine}->${coarse} compiles ${children} hexes with both tensor interface contracts`,()=>{
