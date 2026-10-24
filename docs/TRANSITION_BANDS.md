@@ -1,5 +1,9 @@
 # Native Transition Bands
 
+For volume-mesh reproductions and adjacent regular solid regions, see
+[Native Solid Transition Domains](TRANSITION_SOLID_MODES.md). This includes
+multi-stage radial-cut compatibility, GUI fields and actual Abaqus comparisons.
+
 These APIs construct new transition meshes. They do not refine an
 arbitrary existing Hex mesh, preserve a CAD partition history, or replace
 the GUI61 target generators. Research motivation and provenance are in
