@@ -12,6 +12,7 @@
     "./concentric-width.contract.ts",
     "./concentric-seeds.contract.ts",
     "./ogrid-macro-field.contract.ts",
-    "./solid-sphere.contract.ts"
+    "./solid-sphere.contract.ts",
+    "./staged-band-plate.contract.ts"
   ]
 }

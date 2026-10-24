@@ -25,7 +25,7 @@ a native HexRefine reproduction or an engineering acceptance certificate.
 
 | Lesson / local HM | H8 | Wedge6 | Auxiliary2D | Native status / main gap |
 |---|---:|---:|---:|---|
-| Plate /pingban |8880|0|151|Readable pure-H8 reference; exact multi-block reproduction not yet certified|
+| Plate /pingban |8880|0|151|Native staged-band API/CLI:12128 nodes,8880 H8; all cell node/face graphs match; coordinates differ slightly|
 | Flange /lesson2 |65216|704|388|Mixed topology; partitions/sweep and wedge semantics not covered by H8 refinement|
 | Bracket /lesson4 |4386|192|714|Mixed topology plus CAD partition/sweep planning|
 | Cylinder /lesson5-yuanzhu |7100|0|284|First independent exterior-dense native prototype validated below|
@@ -39,6 +39,13 @@ volume is not sufficient: the flange's original H8 minimum cornerSJ is about-0.3
 despite positive integrated volumes. It is an explicitly defective reference, not
 a topology/quality truth to copy blindly. Wedge corner degeneracies are not treated
 as negative H8 Jacobians; they require their own element convention and tests.
+
+Mixed H8/W6 transition meshes are legitimate reproduction targets. Wedges do not
+justify stopping at reference export: retain native W6 prism sweeps where the
+original method uses them, or explicitly implement a different all-H8 closure.
+Do not label repeated-node LS-DYNA wedge encoding as eight-distinct-node H8.
+The current pure-H8 installer limitation describes that API, not an impossibility
+of reproducing the mixed course models. Their native mixed-block work remains open.
 
 ## Cylinder Video And First Native Prototype
 
@@ -84,7 +91,7 @@ example does not mean every geometry or course case is integrated.
 - [x] Independent full-solid cylinder prototype, not only surface mesh.
 - [x] Repository-native fixed example CLI, roundtrip/hash/overwrite/refusal tests.
 - [ ] General exterior-dense circular/prism interface, parameter validation and test matrix.
-- [ ] Complete plate/full-attention-region native reproduction, not just local boxes.
+- [x] Complete plate native reproduction: staged Z3/X2/X3 transitions, clean unit core,12128 nodes/8880 H8, independent all-cell face-graph comparison and full K audit; seeSTAGED_BAND_PLATE.md.
 - [ ] Video/mesh partition study for flange, bracket, bolt, cavity, gear and pipe.
 - [ ] Mixed wedge retention/refusal contracts and source-quality repair policy.
 - [ ] CAD block decomposition, generalized curved/twisted sweeps and intersections.

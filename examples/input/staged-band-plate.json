@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "staged-band-plate",
+  "partId": 2,
+  "parameters": {
+    "fullSize": [120, 100, 3],
+    "coreWidth": 20,
+    "coreRows": 20,
+    "coarseSectionCounts": [20, 1],
+    "outerRows": 5,
+    "minimumCornerScaledJacobian": 0.55,
+    "stages": [
+      {"axis": 2, "reduction": 3, "width": 3},
+      {"axis": 0, "reduction": 2, "width": 6},
+      {"axis": 0, "reduction": 3, "width": 2}
+    ]
+  }
+}
