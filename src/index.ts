@@ -119,6 +119,8 @@ export {planTransitionBand,generatePlanarTransitionBand,generateAnnularTransitio
 export {planHybridTransitionBand,generateHybridTransitionBand,type HybridTransitionBandSpec} from "./transition-bands.js";
 export {planRectangularTransitionRings,generateRectangularTransitionRings,type RectangularTransitionRingsSpec} from "./transition-rect-rings.js";
 export {generateAxialTransitionTube,type AxialTransitionTubeSpec} from "./transition-axial-tube.js";
+export {planTransitionAngularSeams,type TransitionAngularSeamOptions,type TransitionAngularSeamPlan} from "./transition-angular-seams.js";
+export type {SolidTransitionRegularRegion,SolidTransitionRegularRegions} from "./transition-solid-regions.js";
 export {generateTransitionMeshRequest,defaultTransitionMeshRequest,normalizeTransitionMeshRequest,suggestTransitionMeshCounts,transitionMeshModes,
   type TransitionMeshRequest,type TransitionMeshMode} from "./transition-mesh-request.js";
 export {mountTransitionMeshWorkbench} from "./transition-mesh-workbench.js";

@@ -5,6 +5,8 @@ import {meshToLsdynaKeyword,meshToLsdynaShellKeyword,preparedExportToInp,convert
 import {parseMeshText} from "./mesh-io.js";
 import {minElementEdgeLength} from "./mesh.js";
 import type {Gui61Generated} from "./gui61-generators.js";
+import {planTransitionAngularSeams,type TransitionAngularSeamOptions} from "./transition-angular-seams.js";
+import {extendSolidTransitionRegions,auditSolidTransitionReadback,type SolidTransitionRegularRegions} from "./transition-solid-regions.js";
 
 export const transitionMeshModes=[
   ["planar","平面直带"],["annular","圆环 / 扇区"],["hybrid","同层混合倍率"],
@@ -14,6 +16,7 @@ export type TransitionMeshMode=typeof transitionMeshModes[number][0];
 export interface TransitionMeshRequest {
   schemaVersion:1;kind:"transition-mesh";mode:TransitionMeshMode;parameters:Record<string,unknown>;
   extrusion?:{height:number;layers:number};
+  regularRegions?:SolidTransitionRegularRegions;
 }
 const DEFAULTS:Record<TransitionMeshMode,Record<string,unknown>>={
   planar:{length:24,depth:6,fineSegments:32,ratios:[2,2],fineSide:"bottom",rotationDegrees:0,origin:[0,0]},
@@ -30,11 +33,13 @@ function record(value:unknown):value is Record<string,unknown>{return !!value&&t
 export function normalizeTransitionMeshRequest(input:unknown):TransitionMeshRequest {
   if(!record(input)||input.schemaVersion!==1||(input.kind!==undefined&&input.kind!=="transition-mesh")
       ||!transitionMeshModes.some(([mode])=>mode===input.mode)||!record(input.parameters)
-      ||Object.keys(input).some(k=>!["schemaVersion","kind","mode","parameters","extrusion"].includes(k)))
+      ||Object.keys(input).some(k=>!["schemaVersion","kind","mode","parameters","extrusion","regularRegions"].includes(k)))
     throw new Error("Expected schemaVersion=1, supported mode and parameters");
   if(input.extrusion!==undefined&&(!record(input.extrusion)||Object.keys(input.extrusion).some(k=>k!=="height"&&k!=="layers")))
     throw new Error("invalid extrusion specification");
   if(input.mode==="axial"&&input.extrusion!==undefined)throw new Error("axial tube already has radial solid layers; extra extrusion is invalid");
+  if(input.regularRegions!==undefined&&(!["planar","annular","axial"].includes(input.mode as string)||!record(input.regularRegions)))
+    throw new RangeError("regularRegions is supported only for planar, annular and axial solid transitions");
   return structuredClone({...input,kind:"transition-mesh"}) as unknown as TransitionMeshRequest;
 }
 
@@ -68,6 +73,20 @@ export function suggestTransitionMeshCounts(input:unknown) {
     const n=integer(p.fineSegments,200000);
     try{planTransitionBand({fineSegments:n,ratios:p.ratios as (2|3)[],depth:1});}
     catch(e){if(!(e instanceof TransitionBandCountError))throw e;update("fineSegments",[...e.nearbyCounts].sort((a,b)=>Math.abs(a-n)-Math.abs(b-n)||a-b)[0]);}
+    if((request.mode==="annular"||request.mode==="axial")&&p.seamAnglesDegrees!==undefined){
+      const plan=planTransitionBand({fineSegments:p.fineSegments as number,ratios:p.ratios as (2|3)[],depth:1});
+      const alignment=planTransitionAngularSeams(plan,p as TransitionAngularSeamOptions);
+      if(alignment.conflicts.some(c=>c.reason==="outside-sector"))throw new RangeError("a declared seam is outside the requested sector; counts cannot fix its location");
+      if(!alignment.compatible){
+        const legal:number[]=[];
+        for(let count=plan.requiredMultiple;count<=200000;count+=plan.requiredMultiple){
+          const counts=[count];for(const r of plan.ratios)counts.push(counts.at(-1)!/r);
+          if(planTransitionAngularSeams({counts,ratios:plan.ratios},p as TransitionAngularSeamOptions).compatible)legal.push(count);
+        }
+        if(!legal.length)throw new RangeError("no compatible whole-template seam count in the supported range [1,200000]");
+        legal.sort((a,b)=>Math.abs(a-n)-Math.abs(b-n)||a-b);update("fineSegments",legal[0]);
+      }
+    }
   }
   return {request,changes,geometryChecked:false as const};
 }
@@ -78,29 +97,34 @@ export function generateTransitionMeshRequest(input:unknown):Gui61Generated {
   const generators={planar:generatePlanarTransitionBand,annular:generateAnnularTransitionBand,
     hybrid:generateHybridTransitionBand,"rectangular-rings":generateRectangularTransitionRings};
   const base=request.mode==="axial"?generateAxialTransitionTube(request.parameters as never):generators[request.mode](request.parameters as never);
-  const result=request.extrusion&&base.mesh.kind==="Q1"
+  const band=request.extrusion&&base.mesh.kind==="Q1"
     ?extrudeTransitionBand(base as Exclude<typeof base,ReturnType<typeof generateAxialTransitionTube>>,request.extrusion.height,request.extrusion.layers):base;
+  const extended=request.regularRegions?extendSolidTransitionRegions(band,request.mode as "planar"|"annular"|"axial",request.parameters,request.regularRegions):undefined;
+  const result=extended??band;
   const keyword=(result.mesh.kind==="H1"?meshToLsdynaKeyword:meshToLsdynaShellKeyword)(result.mesh,{coordinateFormat:"compact"});
   const cellSets=new Map<string,number[]>();
-  result.stageIds.forEach((stage,i)=>{const name=stage===0?"core":`stage_${stage}`;if(!cellSets.has(name))cellSets.set(name,[]);cellSets.get(name)!.push(i+1);});
+  const regionNames=extended?.elementRegions;
+  result.stageIds.forEach((stage,i)=>{const name=regionNames?.[i]??(stage===0?"core":`stage_${stage}`);if(!cellSets.has(name))cellSets.set(name,[]);cellSets.get(name)!.push(i+1);});
   const converted=convertMeshForExport(result.mesh);
   const inp=preparedExportToInp({...converted,sets:{nodeSets:new Map(Object.entries(result.nodeSets)),cellSets,
     missingCellIdsBySet:new Map(),missingNodeIdsBySet:new Map()}},{includeBoundarySets:false,title:"HexRefine native transition mesh"});
   const coordinateErrors:Record<string,number>={};
+  const solidReadback:Record<string,ReturnType<typeof auditSolidTransitionReadback>>={};
   for(const [name,text] of [["mesh.k",keyword],["mesh.inp",inp]] as const){
     const back=parseMeshText(text,name);
     if(back.nodes.length!==result.mesh.nodes.length||JSON.stringify(back.elements)!==JSON.stringify(result.mesh.elements))throw new Error(`${name} connectivity read-back failed`);
     coordinateErrors[name]=back.nodes.reduce((error,p,i)=>Math.max(error,Math.hypot(...p.map((v,a)=>v-result.mesh.nodes[i]![a]!))),0);
     if(coordinateErrors[name]!>minElementEdgeLength(result.mesh)*1e-8)throw new Error(`${name} coordinate precision failed`);
+    if(extended)solidReadback[name]=auditSolidTransitionReadback(back,extended.quality.volume);
   }
   const summary={nodes:result.mesh.nodes.length,solids:result.mesh.kind==="H1"?result.mesh.elements.length:0,
     quads:result.mesh.kind==="Q1"?result.mesh.elements.length:0,beams:0,warnings:[...result.quality.warnings]};
   const report={schemaVersion:1,implementation:"native-existing-hexrefine-templates",request,nodes:summary.nodes,elements:result.mesh.elements.length,
     kind:result.mesh.kind,summary,plan:result.plan,quality:result.quality,baseGeometryQuality:base.quality,
-    checks:{geometry:true,conformance:true,keywordReadback:true,inpReadback:true},coordinateErrors,
+    checks:{geometry:true,conformance:true,keywordReadback:true,inpReadback:true},coordinateErrors,...(extended?{solidReadback}:{}),
     limitations:"Independent generated mesh. No solver material, load, coupling or existing-model replacement is inferred."};
   return {request,mesh:result.mesh,plan:result.plan,quality:result.quality,summary,files:{
     "mesh.k":keyword,"mesh.inp":inp,"request.json":JSON.stringify(request,null,2),"report.json":JSON.stringify(report,null,2),
     "sets.json":JSON.stringify({nodeSets:result.nodeSets,cellSets:Object.fromEntries(cellSets)}),
-    "lineage.json":JSON.stringify({stageIds:result.stageIds,...("elementRoles" in base?{baseElementRoles:base.elementRoles}:{})})}};
+    "lineage.json":JSON.stringify({stageIds:result.stageIds,...("elementRegions" in result?{elementRegions:result.elementRegions}:{}),...("elementRoles" in base?{baseElementRoles:base.elementRoles}:{})})}};
 }

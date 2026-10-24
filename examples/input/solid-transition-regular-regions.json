@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "transition-mesh",
+  "mode": "axial",
+  "parameters": {
+    "innerRadius": 10,
+    "outerRadius": 22,
+    "length": 12,
+    "radialLayers": 2,
+    "fineSegments": 144,
+    "ratios": [3, 3],
+    "seamAnglesDegrees": [0, 90, 180, 270]
+  },
+  "regularRegions": {
+    "fine": {"width": 4, "layers": 4},
+    "coarse": {"width": 4, "layers": 1}
+  }
+}

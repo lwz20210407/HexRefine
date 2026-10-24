@@ -6,6 +6,7 @@ import {auditPlanarQuadMesh} from "./graded-quad.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {minElementEdgeLength} from "./mesh.js";
 import {hexElementSignedVolume,minimumHexCornerScaledJacobian} from "./hex-quality.js";
+import {requireTransitionAngularSeams,type TransitionAngularSeamOptions} from "./transition-angular-seams.js";
 
 export interface TransitionBandSchedule {
   fineSegments:number;
@@ -223,12 +224,12 @@ export function generateHybridTransitionBand(spec:HybridTransitionBandSpec) {
   });
   return {...result,plan,quality:auditBand(result,spec.length*spec.depth)};
 }
-export interface AnnularTransitionBandSpec extends Omit<TransitionBandSchedule,"depth"> {
+export interface AnnularTransitionBandSpec extends Omit<TransitionBandSchedule,"depth">,TransitionAngularSeamOptions {
   innerRadius:number;outerRadius:number;fineSide?:"inner"|"outer";
   center?:readonly [number,number];startAngleDegrees?:number;sweepAngleDegrees?:number;
 }
 export function generateAnnularTransitionBand(spec:AnnularTransitionBandSpec) {
-  if(Object.keys(spec).some(k=>!["fineSegments","ratios","stageDepths","innerRadius","outerRadius","fineSide","center","startAngleDegrees","sweepAngleDegrees"].includes(k)))throw new RangeError("unsupported annular band option");
+  if(Object.keys(spec).some(k=>!["fineSegments","ratios","stageDepths","innerRadius","outerRadius","fineSide","center","startAngleDegrees","sweepAngleDegrees","seamAnglesDegrees"].includes(k)))throw new RangeError("unsupported annular band option");
   const {innerRadius:inner,outerRadius:outer}=spec;positive(inner,"innerRadius");positive(outer,"outerRadius");
   if(!(outer>inner))throw new RangeError("outerRadius must exceed innerRadius");
   const fineSide=spec.fineSide??"inner",center=spec.center??[0,0];checkOrigin(center);
@@ -236,6 +237,7 @@ export function generateAnnularTransitionBand(spec:AnnularTransitionBandSpec) {
   const start=spec.startAngleDegrees??0,sweep=spec.sweepAngleDegrees??360;finite(start,"startAngleDegrees");positive(sweep,"sweepAngleDegrees");
   if(sweep>360)throw new RangeError("sweepAngleDegrees must not exceed 360");
   const plan=planTransitionBand({...spec,depth:outer-inner}),closed=sweep===360;
+  const seamAlignment=requireTransitionAngularSeams(plan,spec);
   if(sweep/plan.counts[plan.counts.length-1]!>90)throw new RangeError("coarse angular intervals must not exceed 90 degrees");
   const angle=sweep*Math.PI/180;
   const result=assemble(plan,closed,(u,d)=>{
@@ -246,7 +248,7 @@ export function generateAnnularTransitionBand(spec:AnnularTransitionBandSpec) {
   const ni=fineSide==="inner"?fine:coarse,no=fineSide==="inner"?coarse:fine;
   const discreteArea=(outer*outer*no*Math.sin(angle/no)-inner*inner*ni*Math.sin(angle/ni))/2;
   const analyticArea=(outer*outer-inner*inner)*angle/2;
-  return {...result,plan:{...plan,mode:"annular" as const,closed,fineSide,innerSegments:ni,outerSegments:no},
+  return {...result,plan:{...plan,mode:"annular" as const,closed,fineSide,innerSegments:ni,outerSegments:no,seamAlignment},
     quality:{...auditBand(result,discreteArea),analyticArea,relativeAnalyticAreaError:Math.abs(discreteArea-analyticArea)/analyticArea}};
 }
 

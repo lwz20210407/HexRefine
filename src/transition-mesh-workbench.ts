@@ -2,6 +2,7 @@ import {defaultTransitionMeshRequest,normalizeTransitionMeshRequest,suggestTrans
 import {planTransitionBand,planHybridTransitionBand} from "./transition-bands.js";
 import {planRectangularTransitionRings} from "./transition-rect-rings.js";
 import type {Gui61Generated} from "./gui61-generators.js";
+import {requireTransitionAngularSeams} from "./transition-angular-seams.js";
 
 export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
   isBusy:()=>boolean;run:(request:TransitionMeshRequest)=>Promise<Gui61Generated>;
@@ -41,7 +42,7 @@ export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
       if(toggle){l.className="toggle";l.append(element,text);}else l.append(text,element);host(group).append(l);
     };
     const number=(path:string,label:string,group="几何与网格")=>{
-      const input=document.createElement("input");input.type="number";input.step=/fineSegments|coarseSegments|radialLayers|extrusion.layers/.test(path)?"1":"any";
+      const input=document.createElement("input");input.type="number";input.step=/fineSegments|coarseSegments|radialLayers|extrusion.layers|regularRegions.*layers/.test(path)?"1":"any";
       input.required=true;input.value=String(value(path)??"");input.dataset.transitionField=path;input.setAttribute("aria-label",label);
       input.addEventListener("input",()=>set(path,input.valueAsNumber));wrap(label,input,group);
     };
@@ -59,6 +60,12 @@ export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
     if(kind==="annular"||kind==="axial"){
       number("parameters.innerRadius","内半径");number("parameters.outerRadius","外半径");
       number("parameters.startAngleDegrees","起始角（度）");number("parameters.sweepAngleDegrees","圆弧范围（度）");
+      const input=document.createElement("input");input.type="text";input.maxLength=20000;
+      input.dataset.transitionField="parameters.seamAnglesDegrees";input.setAttribute("aria-label","已有径向分割角（度）");
+      input.value=Array.isArray(p.seamAnglesDegrees)?p.seamAnglesDegrees.join(", "):"";
+      input.addEventListener("input",()=>{
+        const text=input.value.trim();set("parameters.seamAnglesDegrees",text?text.split(/[,;\s]+/).map(Number):[]);
+      });wrap("已有径向分割角（度）",input,"坐标框架");
     }
     if(kind==="rectangular-rings"){
       number("parameters.innerSize.0","中心区X全长");number("parameters.innerSize.1","中心区Y全长");
@@ -110,8 +117,21 @@ export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
       const name=kind==="annular"?"center":"origin";
       for(const [i,a] of ["X","Y"].entries())number(`parameters.${name}.${i}`,`${a}向平移`,"坐标框架");
       if(kind!=="annular")number("parameters.rotationDegrees","平面旋转（度）","坐标框架");
-      toggle("extrusion-enabled","生成实体六面体",!!current.extrusion,v=>{if(v)current.extrusion={height:2,layers:2};else delete current.extrusion;},"实体");
+      toggle("extrusion-enabled","生成实体六面体",!!current.extrusion,v=>{if(v)current.extrusion={height:2,layers:2};else{delete current.extrusion;delete current.regularRegions;}},"实体");
       if(current.extrusion){number("extrusion.height","挤出厚度","实体");number("extrusion.layers","厚度层数","实体");}
+    }
+    if((kind==="planar"||kind==="annular"||kind==="axial")&&(kind==="axial"||current.extrusion)){
+      for(const side of ["fine","coarse"] as const){
+        const label=side==="fine"?"细端规则区":"粗端规则区";
+        toggle(`regular-${side}`,label,!!current.regularRegions?.[side],enabled=>{
+          if(enabled){current.regularRegions??={};current.regularRegions[side]={width:2,layers:2};}
+          else if(current.regularRegions){delete current.regularRegions[side];if(!Object.keys(current.regularRegions).length)delete current.regularRegions;}
+        },"相邻规则实体");
+        if(current.regularRegions?.[side]){
+          number(`regularRegions.${side}.width`,`${label}宽度`,"相邻规则实体");
+          number(`regularRegions.${side}.layers`,`${label}层数`,"相邻规则实体");
+        }
+      }
     }
   }
   function open(){if(!pending&&!options.isBusy()){render();dialog.showModal();}}
@@ -124,7 +144,8 @@ export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
     try{
       const p=current.parameters,plan=current.mode==="hybrid"?planHybridTransitionBand(p as never):current.mode==="rectangular-rings"?planRectangularTransitionRings(p as never)
         :planTransitionBand({fineSegments:p.fineSegments as number,ratios:p.ratios as (2|3)[],depth:current.mode==="planar"?p.depth as number:current.mode==="axial"?p.length as number:(p.outerRadius as number)-(p.innerRadius as number),...(p.stageDepths!==undefined?{stageDepths:p.stageDepths as number[]}:{})});
-      error.textContent="";resolved.textContent=JSON.stringify({counts:plan.counts,stageCount:plan.stageCount,geometryChecked:false,
+      const seamAlignment=current.mode==="annular"||current.mode==="axial"?requireTransitionAngularSeams(plan as never,p):undefined;
+      error.textContent="";resolved.textContent=JSON.stringify({counts:plan.counts,stageCount:plan.stageCount,geometryChecked:false,seamAlignment,
         ...("requiredMultiple" in plan?{requiredMultiple:plan.requiredMultiple}:{}),...("outerSize" in plan?{outerSize:plan.outerSize}:{}),...("blocks" in plan?{blocks:plan.blocks.length}:{})},null,2);
     }catch(e){error.textContent=e instanceof Error?e.message:String(e);resolved.textContent="";}
   });
@@ -153,6 +174,7 @@ export function mountTransitionMeshWorkbench(root:HTMLElement,options:{
       if(p.ratios!==undefined&&(!Array.isArray(p.ratios)||p.ratios.length<1||p.ratios.length>8||p.ratios.some(r=>r!==2&&r!==3)))throw new Error("倍率序列无效");
       if(p.stageDepths!==undefined&&(!Array.isArray(p.stageDepths)||!Array.isArray(p.ratios)||p.stageDepths.length!==p.ratios.length))throw new Error("分级带宽数量与倍率级数不一致");
       if(p.blocks!==undefined&&(!Array.isArray(p.blocks)||p.blocks.some(b=>b!=="single3"&&b!=="pair2")))throw new Error("混排块类型无效");
+      if(p.seamAnglesDegrees!==undefined&&(!Array.isArray(p.seamAnglesDegrees)||p.seamAnglesDegrees.length>4096||p.seamAnglesDegrees.some(a=>typeof a!=="number"||!Number.isFinite(a))))throw new Error("径向分割角必须是有限数字数组");
       if(request.mode==="rectangular-rings"&&(!Array.isArray(p.fineSegments)||p.fineSegments.length!==2))throw new Error("矩形细分数需要X/Y两个值");
       current=request;changed();render();
     }catch(e){error.textContent=e instanceof Error?e.message:String(e);}finally{file.value="";}

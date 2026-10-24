@@ -5,8 +5,9 @@ import {hexJacobian} from "./hex-quality-internal.js";
 import {determinant3Scaled,materializeScaledValue} from "./hex-numeric-internal.js";
 import {checkNoHangingNodes} from "./conformance.js";
 import {minElementEdgeLength} from "./mesh.js";
+import {requireTransitionAngularSeams,type TransitionAngularSeamOptions} from "./transition-angular-seams.js";
 
-export interface AxialTransitionTubeSpec extends Omit<TransitionBandSchedule,"depth"> {
+export interface AxialTransitionTubeSpec extends Omit<TransitionBandSchedule,"depth">,TransitionAngularSeamOptions {
   innerRadius:number;outerRadius:number;length:number;radialLayers:number;
   fineEnd?:"start"|"end";startAngleDegrees?:number;sweepAngleDegrees?:number;
   origin?:readonly [number,number,number];axis?:readonly [number,number,number];
@@ -48,7 +49,7 @@ function surfaceVolume(mesh:Mesh,boundarySets:Set<number>[]) {
 /** Map an angular/axial transition strip through the wall of a hollow cylinder. */
 export function generateAxialTransitionTube(spec:AxialTransitionTubeSpec) {
   if(Object.keys(spec).some(k=>!["innerRadius","outerRadius","length","radialLayers","fineSegments","ratios","stageDepths",
-    "fineEnd","startAngleDegrees","sweepAngleDegrees","origin","axis"].includes(k)))throw new RangeError("unsupported axial tube option");
+    "fineEnd","startAngleDegrees","sweepAngleDegrees","origin","axis","seamAnglesDegrees"].includes(k)))throw new RangeError("unsupported axial tube option");
   if([spec.innerRadius,spec.outerRadius,spec.length].some(v=>!Number.isFinite(v)||v<=0)||spec.outerRadius<=spec.innerRadius)
     throw new RangeError("axial tube needs positive length and ordered positive radii");
   if(!Number.isSafeInteger(spec.radialLayers)||spec.radialLayers<1||spec.radialLayers>1000)throw new RangeError("invalid radial layer count");
@@ -57,6 +58,7 @@ export function generateAxialTransitionTube(spec:AxialTransitionTubeSpec) {
   const schedule={fineSegments:spec.fineSegments,ratios:spec.ratios,depth:spec.length,
     ...(spec.stageDepths!==undefined?{stageDepths:spec.stageDepths}:{})};
   const plan=planTransitionBand(schedule);
+  const seamAlignment=requireTransitionAngularSeams(plan,spec);
   if(sweep/plan.counts.at(-1)!>90)throw new RangeError("coarse angular intervals must not exceed 90 degrees");
   const expectedCells=plan.ratios.reduce((sum,r,i)=>sum+plan.counts[i]!*(r===2?1.5:4/3),0)*spec.radialLayers;
   if(expectedCells>1000000)throw new RangeError("axial tube exceeds one million hexes");
@@ -112,7 +114,7 @@ export function generateAxialTransitionTube(spec:AxialTransitionTubeSpec) {
   if(!(minSJ>0&&minGauss>0&&Number.isFinite(volume)&&volume>0&&error<1e-8))throw new Error("axial tube Jacobian or boundary-volume audit failed");
   if(!checkNoHangingNodes(mesh,minElementEdgeLength(mesh)*1e-8).ok)throw new Error("axial tube has hanging interfaces");
   const analyticVolume=angle/2*(spec.outerRadius-spec.innerRadius)*(spec.outerRadius+spec.innerRadius)*spec.length;
-  return {mesh,nodeSets,stageIds,plan:{...plan,mode:"axial" as const,closed,fineEnd,axis,origin:[...origin],radialLayers:spec.radialLayers,length:spec.length},
+  return {mesh,nodeSets,stageIds,plan:{...plan,mode:"axial" as const,closed,fineEnd,axis,origin:[...origin],radialLayers:spec.radialLayers,length:spec.length,seamAlignment},
     quality:{volume,discreteBoundaryVolume:boundary.volume,relativeVolumeError:error,minimumCornerScaledJacobian:minSJ,minimumGaussDeterminant:minGauss,
       analyticVolume,relativeAnalyticVolumeError:Math.abs(volume-analyticVolume)/analyticVolume,boundaryFaces:boundary.boundaryFaces,
       warnings:minSJ<.2?["Low axial-tube SJ requires engineering review."]:[]}};
