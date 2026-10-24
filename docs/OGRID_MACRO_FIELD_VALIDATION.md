@@ -128,7 +128,16 @@ global0.15 request and creates no output. Neither changing the gate nor moving
 protected source/core nodes has been silently substituted for acceptance.
 
 Evidence and private candidate: `F:/PythonWoking/temp/20261024-r1-shared-face`.
-See [R1 correction](R1_SHARED_FACE_CORRECTION.md) for the remaining acceptance decision.
+The user subsequently confirmed preserving inherited source quality while requiring
+new transitionSJ>=0.15. The explicit `minimumTransitionCornerScaledJacobian` contract
+now checks every original core parent for nonregression and the transition floor
+again after K readback. The formal scoped-accepted R1 K is136626 H8 with the same
+geometry and retained source/far identities; independent maximum per-core-parent
+SJ loss is1.45e-13 (fixed arithmetic allowance9.09e-13). All1680 parents, physical
+outer traces, volumes and closed boundaries pass. This does not change or claim to
+pass an explicit global0.15 gate. Full updated regression1134/1134, no skips.
+Current evidence: `F:/PythonWoking/temp/20261024-r1-source-preserving-acceptance`.
+See [R1 correction](R1_SHARED_FACE_CORRECTION.md) for the exact acceptance scope.
 
 Remaining: genuinely general3D CinoLib edge/vertex WB installation, compatible
 multi-front/colliding shells, broader non-axial/odd-valence boundary contracts,

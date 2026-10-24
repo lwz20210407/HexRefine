@@ -51,6 +51,24 @@ test('macro CLI preserves noncontiguous original node/far-field EIDs and inherit
     assert.equal(refusal.diagnostics.requiredMinimumCornerSJ,.999);
     assert.ok(refusal.diagnostics.bestSampledShellSJ<.999);assert.equal(refusal.diagnostics.outputGenerated,false);
     await assert.rejects(fs.stat(path.join(root,'quality-refusal')),{code:'ENOENT'});
+    let card='';const inherited=keyword.split('\n').map(line=>{
+      if(line.startsWith('*')){card=line;return line;}
+      if(card==='*NODE'&&line.trim()&&Number(line.slice(40,56))===0)return line.slice(0,8)+String(Number(line.slice(8,24))+20).padStart(16)+line.slice(24);
+      return line;
+    }).join('\n');
+    await fs.writeFile(source,inherited);
+    await fs.writeFile(input,JSON.stringify({...request,options:{...request.options,minimumTransitionCornerScaledJacobian:.15}}));
+    r=run(path.join(root,'inherited-quality'));assert.equal(r.status,0,r.stderr);
+    const scoped=JSON.parse(await fs.readFile(path.join(root,'inherited-quality','report.json')));
+    assert.ok(scoped.minimumOverallCornerSJ<.15);assert.equal(scoped.sourcePreservingQuality.passed,true);
+    assert.equal(scoped.readback.sourcePreservingQuality.passed,true);assert.ok(scoped.readback.sourcePreservingQuality.minimumTransitionCornerSJ>=.15);
+    assert.equal(scoped.readback.sourcePreservingQuality.originalSourceNodesExact,true);
+    await fs.writeFile(input,JSON.stringify({...request,options:{...request.options,minimumTransitionCornerScaledJacobian:.15,minimumCornerScaledJacobian:.15}}));
+    r=run(path.join(root,'global-still-refuses'));assert.notEqual(r.status,0);
+    await assert.rejects(fs.stat(path.join(root,'global-still-refuses')),{code:'ENOENT'});
+    await fs.writeFile(input,JSON.stringify({...request,options:{...request.options,minimumTransitionCornerScaledJacobian:.999}}));
+    r=run(path.join(root,'transition-refusal'));assert.notEqual(r.status,0);assert.equal(JSON.parse(r.stderr).code,'transition-quality');
+    await assert.rejects(fs.stat(path.join(root,'transition-refusal')),{code:'ENOENT'});
     await fs.writeFile(input,JSON.stringify(request));
     await fs.writeFile(source,keyword.replace('*END','*MAT_ELASTIC\n1,1,1\n*END'));
     r=run(path.join(root,'refused'));assert.notEqual(r.status,0);assert.match(r.stderr,/Mesh-only/);

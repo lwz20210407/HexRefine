@@ -3,6 +3,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {parseMeshText,refineOgridMacroField,iterateLsdynaKeywordLines,minElementEdgeLength} from '../dist/index.js';
 import {fixedInteger} from '../dist/lsdyna-format-internal.js';
+import {auditOgridSourcePreservingQuality} from '../dist/ogrid-source-quality-internal.js';
 
 function identities(text){
   const nodeIds=[],elementIds=[],pids=[];let section='';
@@ -66,13 +67,18 @@ async function main(){
   if(JSON.stringify(back.elements)!==JSON.stringify(result.mesh.elements)||JSON.stringify(written.nodeIds)!==JSON.stringify(nodes)||JSON.stringify(written.elementIds)!==JSON.stringify(elements))throw new Error('K geometry/connectivity/external identity readback failed');
   let error=0;for(let i=0;i<back.nodes.length;i++)for(let a=0;a<3;a++)error=Math.max(error,Math.abs(back.nodes[i][a]-result.mesh.nodes[i][a]));
   if(error>minElementEdgeLength(result.mesh)*1e-8)throw new Error('K coordinate precision exceeds the unchanged scale-relative tolerance');
+  let readbackSourcePreservingQuality=null;
+  try{
+    if(options.minimumTransitionCornerScaledJacobian!==undefined)readbackSourcePreservingQuality=auditOgridSourcePreservingQuality(mesh,back,result.sourceParentIds,
+      new Map(options.targets.map(t=>[t.elementId,t.level])),new Set(result.sourceParentIds.filter((_,i)=>result.roles[i].endsWith('transition'))),options.minimumTransitionCornerScaledJacobian);
+  }catch(e){e.sourceExternalParentIds=(e.parentIds??[]).map(id=>source.elementIds[id-1]??null);throw e;}
   const lineageText=JSON.stringify({sourceParentIds:result.sourceParentIds,uniformCells:result.uniformCells,roles:result.roles,
     sourceExternalNodeIds:source.nodeIds,sourceExternalElementIds:source.elementIds,outputExternalNodeIds:nodes,outputExternalElementIds:elements});
   const report={schemaVersion:1,source:{path:sourcePath,sha256:createHash('sha256').update(text).digest('hex'),partId:source.partId},targetIdSpace,
     nativeTargetIdSpace:'ordinal',requestedTargets:request.options.targets,...result.report,
     nativeTopologyIdSpace:'Source-parent/node indices and output cell indices are import-ordinal; external K identities are recorded in lineage.json.',
     readback:{nodes:back.nodes.length,elements:back.elements.length,maximumCoordinateError:error,sha256:createHash('sha256').update(keyword).digest('hex'),
-      allSourceNodeIdsPreserved:true,farFieldExternalElementIdsPreserved:true,refinedChildrenUseFreshElementIds:true},
+      allSourceNodeIdsPreserved:true,farFieldExternalElementIdsPreserved:true,refinedChildrenUseFreshElementIds:true,sourcePreservingQuality:readbackSourcePreservingQuality},
     keywordScope:'NODE + ELEMENT_SOLID, single inherited specimen PID; no solver cards, sets or analysis state migration.'};
   const reportText=JSON.stringify(report,null,2),requestText=JSON.stringify({...request,targetIdSpace,meshFile:path.relative(out,sourcePath)},null,2);
   const estimatedBytes=[keyword,lineageText,reportText,requestText].reduce((s,t)=>s+Buffer.byteLength(t),0),disk=await fs.statfs(path.dirname(out));

@@ -87,6 +87,28 @@ result. `minimumTransitionToCoreEdgeRatio` optionally gates actual merged edge
 lengths, not just the proposed stations. No gate is lowered to rescue a candidate.
 Sampled Jacobians are not a proof of positivity everywhere or nonlocal nonoverlap.
 
+### Preserving Inherited Source Quality
+
+`minimumTransitionCornerScaledJacobian` is a separate, explicit acceptance contract
+for preserving an already imperfect source. It requires the actual merged transition
+minimum to meet the specified floor and every original core parent's child minimum
+cornerSJ to be no worse than that same original parent's minimum. Untouched far-field
+nodes/connectivity and one-cell-per-parent coverage must remain exact. Core parents
+still have exactly8/64/512 children; the existing tensor coordinate/connectivity,
+volume and Gauss guards remain active. This is not a global-minimum comparison.
+
+The only core nonregression allowance is fixed arithmetic roundoff:
+4096*Number.EPSILON (about9.09e-13 in dimensionless SJ), not a configurable quality
+relaxation. The observed maximum loss and worst parent are reported. The transition
+floor itself has no such subtraction. Original coordinates must be exactly retained
+even after K readback; requests that cannot satisfy this are refused.
+
+The CLI repeats this audit on the actual formatted K **before** creating an output
+directory. Its report records `sourcePreservingQuality` both on the mesh and under
+`readback`. This permits inherited low SJ only under an explicit transition-floor
+request, not silently. If `minimumCornerScaledJacobian` is also provided, its global
+gate remains in force independently. Neither option certifies solver performance.
+
 `exteriorPhasePolicy` defaults `level-closed`: non-axis diagonal **endpoint** station
 patterns agree across a connected exterior field. Lateral `symmetryPlanes` must
 be actual exterior coordinate planes; they exempt only phase comparisons, never

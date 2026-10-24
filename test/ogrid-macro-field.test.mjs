@@ -4,6 +4,7 @@ import {compileHierarchicalShellReferences,compileGradedShellReferences} from '.
 import {refineOgridMacroField,checkNoHangingNodes,createHexUnitCubeMesh,hexElementSignedVolume,minimumHexCornerScaledJacobian,mergeCoincidentNodes} from '../dist/index.js';
 import {properCubeRotations} from '../dist/two-to-one-templates.js';
 import {hexJacobian} from '../dist/hex-quality-internal.js';
+import {auditOgridSourcePreservingQuality,CORE_SJ_ROUNDOFF} from '../dist/ogrid-source-quality-internal.js';
 
 function box(){const m=createHexUnitCubeMesh(2,2,8);m.nodes=m.nodes.map(p=>[2*p[0],2*p[1],8*p[2]]);return m;}
 function targets(m,level){return m.elements.flatMap((e,i)=>{const z=e.reduce((s,n)=>s+m.nodes[n-1][2],0)/8;return z>=3&&z<5?[{elementId:i+1,level}]:[];});}
@@ -111,6 +112,32 @@ test('a passing transition cannot hide an unchanged low-quality far-field parent
     return true;
   });
   assert.deepEqual(m,before);
+});
+test('explicit transition-only floor preserves inherited low far-field quality without changing the global gate',()=>{
+  const m=box();m.nodes=m.nodes.map(p=>p[2]===0?[p[0]+20,p[1],p[2]]:p);
+  const before=structuredClone(m),o={...options(m),minimumTransitionCornerScaledJacobian:.15},r=refineOgridMacroField(m,o);
+  assert.ok(r.report.minimumOverallCornerSJ<.15);
+  const audit=r.report.sourcePreservingQuality;
+  assert.equal(audit.scope,'transition-floor-with-source-nonregression');assert.equal(audit.passed,true);
+  assert.ok(audit.minimumTransitionCornerSJ>=.15);assert.ok(audit.maximumCoreParentCornerSJLoss<=CORE_SJ_ROUNDOFF);
+  assert.equal(audit.checkedCoreParents,8);assert.equal(audit.checkedFarFieldParents,16);assert.equal(audit.originalSourceNodesExact,true);
+  assert.throws(()=>refineOgridMacroField(m,{...o,minimumCornerScaledJacobian:.15}),e=>e.code==='requested-quality');
+  assert.throws(()=>refineOgridMacroField(m,{...o,minimumTransitionCornerScaledJacobian:.999}),e=>e.code==='transition-quality');
+  for(const invalid of [0,-1,NaN,Infinity,1.1,true])assert.throws(()=>refineOgridMacroField(m,{...o,minimumTransitionCornerScaledJacobian:invalid}),/minimum transition corner SJ/);
+  assert.deepEqual(m,before);
+});
+test('inherited-quality check rejects a newly degraded individual core even when the global minimum is unchanged',()=>{
+  const m=box();m.nodes=m.nodes.map(p=>p[2]===0?[p[0]+20,p[1],p[2]]:p);
+  const o=options(m),r=refineOgridMacroField(m,o),cores=new Map(o.targets.map(t=>[t.elementId,t.level]));
+  const shells=new Set(r.sourceParentIds.filter((_,i)=>r.roles[i].endsWith('transition'))),mutant=structuredClone(r.mesh);
+  const index=mutant.nodes.findIndex(p=>Math.abs(p[0]-.5)<1e-12&&Math.abs(p[1]-.5)<1e-12&&Math.abs(p[2]-3.5)<1e-12);
+  assert.ok(index>=m.nodes.length);mutant.nodes[index][0]+=.04;
+  assert.throws(()=>auditOgridSourcePreservingQuality(m,mutant,r.sourceParentIds,cores,shells,.15),error=>{
+    assert.equal(error.code,'core-quality-regression');assert.ok(error.diagnostics.loss>1e-3);
+    assert.ok(error.diagnostics.sourceMinimumCornerSJ>.99);assert.equal(error.diagnostics.outputGenerated,false);return true;
+  });
+  const moved=structuredClone(r.mesh);moved.nodes[0][0]+=1e-6;
+  assert.throws(()=>auditOgridSourcePreservingQuality(m,moved,r.sourceParentIds,cores,shells,.15),e=>e.code==='protected-source-nodes');
 });
 for(const [fine,coarse,children] of [[2,1,32],[3,1,128],[3,2,160]])test(`complete graded parent ${fine}->${coarse} compiles ${children} hexes with both tensor interface contracts`,()=>{
   for(const t of compileGradedShellReferences(fine,coarse)){

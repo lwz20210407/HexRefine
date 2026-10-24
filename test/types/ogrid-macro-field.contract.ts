@@ -6,9 +6,11 @@ function contract(mesh:Mesh,options:OgridMacroFieldOptions){
 }
 // @ts-expect-error Only explicitly bounded target levels are supported.
 const wrong:OgridMacroFieldOptions={axis:2,targets:[{elementId:1,level:4}]};
-const extended:OgridMacroFieldOptions={axis:1,targets:[{elementId:1,level:2}],axialStationSearch:"extended",diagnosticSearchBudget:32};
+const extended:OgridMacroFieldOptions={axis:1,targets:[{elementId:1,level:2}],axialStationSearch:"extended",diagnosticSearchBudget:32,minimumTransitionCornerScaledJacobian:.15};
 // @ts-expect-error Geometry searches are explicitly bounded families.
 const wrongSearch:OgridMacroFieldOptions={axis:1,targets:[{elementId:1,level:2}],axialStationSearch:"unlimited"};
 // @ts-expect-error Failure-only search budgets must be numeric.
 const wrongDiagnostic:OgridMacroFieldOptions={axis:1,targets:[{elementId:1,level:2}],diagnosticSearchBudget:"32"};
-void contract;void wrong;void extended;void wrongSearch;void wrongDiagnostic;void OgridMacroFieldError;
+// @ts-expect-error Transition gates must be numeric, not truthy toggles.
+const wrongTransitionFloor:OgridMacroFieldOptions={axis:1,targets:[{elementId:1,level:2}],minimumTransitionCornerScaledJacobian:true};
+void contract;void wrong;void extended;void wrongSearch;void wrongDiagnostic;void wrongTransitionFloor;void OgridMacroFieldError;

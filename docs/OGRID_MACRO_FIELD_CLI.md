@@ -57,6 +57,13 @@ monotone geometry profiles, without changing the global quality gate or protecte
 source/core/far-field contracts. `protected-region-quality` diagnostics identify
 inherited low-quality source/core cells separately from a passing shell.
 
+For the user-confirmed retain-source contract, explicitly request
+`options.minimumTransitionCornerScaledJacobian:0.15`. This also enforces per-core-
+parent SJ nonregression, fixed roundoff only, exact source nodes and unchanged far
+parents. The audit is repeated on K readback before publishing. It does not imply
+globalSJ>=0.15. An additional `minimumCornerScaledJacobian` still enforces that
+separate global floor; do not remove it from unrelated callers automatically.
+
 ## Preserved Semantics
 
 - Input is a single-PID, eight-distinct-node mesh-only K. KEYWORD/TITLE/NODE/SOLID/END

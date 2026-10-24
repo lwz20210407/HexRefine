@@ -13,6 +13,7 @@ import {hexJacobian} from "./hex-quality-internal.js";
 import {determinant3Scaled,scaledValueSign} from "./hex-numeric-internal.js";
 import {proposeAxialStations} from "./axial-station-planner.js";
 import {createBiasedPowerAxialProfile} from "./axial-profile-internal.js";
+import {auditOgridSourcePreservingQuality,SourcePreservingQualityError} from "./ogrid-source-quality-internal.js";
 
 export interface OgridMacroFieldOptions {
   axis:0|1|2;
@@ -27,6 +28,8 @@ export interface OgridMacroFieldOptions {
   transitionGeometry?:"trilinear"|"conservative-face-flux";
   maximumFaceDisplacementFraction?:number;
   minimumCornerScaledJacobian?:number;
+  /** Independent transition floor, with mandatory per-original-core-parent SJ nonregression. */
+  minimumTransitionCornerScaledJacobian?:number;
   exteriorPhasePolicy?:"level-closed"|"unconstrained";
   symmetryPlanes?:readonly {axis:0|1|2;coordinate:number}[];
   /** Spread the finite level drop over up to three original-parent layers; default compact1. */
@@ -87,7 +90,7 @@ export class OgridMacroFieldError extends Error {
 
 /** Direct whole-original-parent installation. No original node movement or hidden core promotion. */
 export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions){
-  if(!options||Object.keys(options).some(k=>!["axis","targets","maxOutputElements","maxShellParents","maximumSearchDecisions","diagnosticSearchBudget","axialStationSearch","transitionGeometry","maximumFaceDisplacementFraction","minimumCornerScaledJacobian","exteriorPhasePolicy","symmetryPlanes","shellLayers","maxAdditionalShellParents","minimumTransitionToCoreEdgeRatio"].includes(k))||![0,1,2].includes(options.axis))throw new RangeError("invalid macro-field options");
+  if(!options||Object.keys(options).some(k=>!["axis","targets","maxOutputElements","maxShellParents","maximumSearchDecisions","diagnosticSearchBudget","axialStationSearch","transitionGeometry","maximumFaceDisplacementFraction","minimumCornerScaledJacobian","minimumTransitionCornerScaledJacobian","exteriorPhasePolicy","symmetryPlanes","shellLayers","maxAdditionalShellParents","minimumTransitionToCoreEdgeRatio"].includes(k))||![0,1,2].includes(options.axis))throw new RangeError("invalid macro-field options");
   if(source.kind!=="H1"||!source.elements.length||source.nodes.some(p=>p.length!==3||p.some(v=>!Number.isFinite(v))))throw new RangeError("macro field requires finite 3D H8 input");
   const limit=options.maxOutputElements??2000000,shellLimit=options.maxShellParents??4096,searchLimit=options.maximumSearchDecisions??4096;
   if(![limit,shellLimit,searchLimit].every(n=>Number.isSafeInteger(n)&&n>0)||limit>2000000||shellLimit>8192||searchLimit>100000)throw new RangeError("invalid macro-field budgets");
@@ -97,6 +100,7 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
   if(options.transitionGeometry!==undefined&&!["trilinear","conservative-face-flux"].includes(options.transitionGeometry))throw new RangeError("invalid transition geometry");
   if(options.maximumFaceDisplacementFraction!==undefined&&(options.transitionGeometry!=="conservative-face-flux"||!Number.isFinite(options.maximumFaceDisplacementFraction)||options.maximumFaceDisplacementFraction<=0||options.maximumFaceDisplacementFraction>.05))throw new RangeError("invalid conservative face budget");
   if(options.minimumCornerScaledJacobian!==undefined&&(!Number.isFinite(options.minimumCornerScaledJacobian)||options.minimumCornerScaledJacobian<=0||options.minimumCornerScaledJacobian>1))throw new RangeError("invalid minimum corner SJ");
+  if(options.minimumTransitionCornerScaledJacobian!==undefined&&(!Number.isFinite(options.minimumTransitionCornerScaledJacobian)||options.minimumTransitionCornerScaledJacobian<=0||options.minimumTransitionCornerScaledJacobian>1))throw new RangeError("invalid minimum transition corner SJ");
   if(options.exteriorPhasePolicy!==undefined&&!["level-closed","unconstrained"].includes(options.exteriorPhasePolicy))throw new RangeError("invalid exterior phase policy");
   if(options.minimumTransitionToCoreEdgeRatio!==undefined&&(!Number.isFinite(options.minimumTransitionToCoreEdgeRatio)||options.minimumTransitionToCoreEdgeRatio<=0))throw new RangeError("invalid transition/core minimum edge ratio");
   const shellLayers=options.shellLayers??1,additionalLimit=options.maxAdditionalShellParents??0;
@@ -282,6 +286,8 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
     }catch(e){trials.push({...exponent===null?{stationBlend:stationBlend!}:{exponent,axialBias},error:String(e)});}
   }
   if(!best)throw new OgridMacroFieldError("mapped-quality","No mapped candidate meets positive sampled Jacobians and the configured edge floor in this finite station family. "+JSON.stringify(trials.slice(0,2)),parentIds);
+  if(options.minimumTransitionCornerScaledJacobian!==undefined&&best.minimumSJ<options.minimumTransitionCornerScaledJacobian)throw new OgridMacroFieldError("transition-quality","No sampled transition meets its requested minimum corner SJ.",parentIds,[],[],
+    {stage:"mapped-quality",requiredMinimumTransitionCornerSJ:options.minimumTransitionCornerScaledJacobian,actualMinimumTransitionCornerSJ:best.minimumSJ,outputGenerated:false});
   if(options.minimumCornerScaledJacobian!==undefined&&best.minimumSJ<options.minimumCornerScaledJacobian)throw new OgridMacroFieldError("requested-quality","Best sampled shell SJ is below the requested gate.",parentIds,[],[],
     {stage:"mapped-quality",requiredMinimumCornerSJ:options.minimumCornerScaledJacobian,bestSampledShellSJ:best.minimumSJ,
       exactConstraintWitnessVerified:true,exteriorPhasePolicy:options.exteriorPhasePolicy??"level-closed",trials,
@@ -321,6 +327,11 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
   if(maximumCoreCoordinateError>tolerance/100)throw new OgridMacroFieldError("protected-core","Node merging changed the exact tensor core beyond the protected precision budget.");
   const actualEdgeRatio=actualTransitionEdge/actualCoreEdge;
   if(options.minimumTransitionToCoreEdgeRatio!==undefined&&actualEdgeRatio<options.minimumTransitionToCoreEdgeRatio)throw new OgridMacroFieldError("final-edge-floor","Merged output fails the unchanged transition/core edge floor.");
+  let sourcePreservingQuality:ReturnType<typeof auditOgridSourcePreservingQuality>|null=null;
+  if(options.minimumTransitionCornerScaledJacobian!==undefined){
+    try{sourcePreservingQuality=auditOgridSourcePreservingQuality(source,result.mesh,outputParents,targets,new Set(shells.keys()),options.minimumTransitionCornerScaledJacobian,sourceMinimumSJ);}
+    catch(error){if(!(error instanceof SourcePreservingQualityError))throw error;throw new OgridMacroFieldError(error.code,error.message,error.parentIds,[],[],error.diagnostics);}
+  }
   const edgeTemplates=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]],edgeParents=new Map<string,number[]>(),freeEdges=new Set<string>();
   for(const owners of incidence.values())if(owners.length===1){const o=owners[0]!,e=source.elements[o.parent-1]!,f=H1_FACES[o.face]!;f.forEach((n,i)=>freeEdges.add(boundaryKey([e[n-1]!,e[f[(i+1)%4]!-1]!])));}
   source.elements.forEach((e,i)=>{for(const [a,b] of edgeTemplates){const key=boundaryKey([e[a!]!,e[b!]!]),owners=edgeParents.get(key)??[];owners.push(i+1);edgeParents.set(key,owners);}});
@@ -347,6 +358,7 @@ export function refineOgridMacroField(source:Mesh,options:OgridMacroFieldOptions
       sizeDistribution:{coreMinimumEdge:actualCoreEdge,transitionMinimumEdge:actualTransitionEdge,transitionToCoreMinimumEdgeRatio:actualEdgeRatio,maximumTransitionEdgeAspectRatio:actualTransitionAspect,
         requestedMinimumRatio:options.minimumTransitionToCoreEdgeRatio??null,minimumRatioVerified:options.minimumTransitionToCoreEdgeRatio===undefined?null:actualEdgeRatio>=options.minimumTransitionToCoreEdgeRatio},
       minimumOverallCornerSJ:minimumOverallSJ,minimumTransitionCornerSJ:best.minimumSJ,minimumCoreCornerSJ:coreMinimumSJ,minimumFarFieldCornerSJ:farMinimumSJ,
+      sourcePreservingQuality,
       maximumCoreCoordinateError,maximumOriginalParentRelativeVolumeError:maximumParentRelativeVolumeError,
       cornerGroups,
       limitation:"One fine face per whole source shell parent; no adjacent unequal exact cores, two-front shells or arbitrary CinoLib WB edge/vertex installation. Exterior phase certificate concerns normalized reference stations; no universal physical-surface quality is implied.",
