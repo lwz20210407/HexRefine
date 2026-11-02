@@ -124,3 +124,5 @@ export type {SolidTransitionRegularRegion,SolidTransitionRegularRegions} from ".
 export {generateTransitionMeshRequest,defaultTransitionMeshRequest,normalizeTransitionMeshRequest,suggestTransitionMeshCounts,transitionMeshModes,
   type TransitionMeshRequest,type TransitionMeshMode} from "./transition-mesh-request.js";
 export {mountTransitionMeshWorkbench} from "./transition-mesh-workbench.js";
+export {helicalThreadRadius,generateThreadedShaft,generateThreadedNut,
+  type HelicalThreadProfile,type ThreadedShaftSpec,type ThreadedNutSpec,type ThreadedSolidResult} from "./threaded-solid.js";

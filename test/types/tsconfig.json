@@ -14,6 +14,7 @@
     "./ogrid-macro-field.contract.ts",
     "./solid-sphere.contract.ts",
     "./staged-band-plate.contract.ts",
-    "./transition-angular-seams.contract.ts"
+    "./transition-angular-seams.contract.ts",
+    "./threaded-solid.contract.ts"
   ]
 }
