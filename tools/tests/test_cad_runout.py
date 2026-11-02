@@ -7,6 +7,13 @@ from tools.bolthex.cad_runout import NutRunoutMap
 
 
 class RunoutOptionGuards(unittest.TestCase):
+    def test_smoke_fixture_selects_only_a_few_local_columns(self):
+        from tools.bolthex.dev_smoke import local_section,MAX_PATCH_H8
+        from tools.bolthex.mesh_core import build_nut_section
+        section=local_section(build_nut_section(48,3,8,13),dict(refA=290,refB=291.25),288)
+        self.assertEqual(len(section.quads),15)
+        self.assertLess(len(section.quads)*8,MAX_PATCH_H8)
+
     def test_unknown_mapping_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'boundary_mapping'):
             MeshSeeds(boundary_mapping='silently-fallback').validate()

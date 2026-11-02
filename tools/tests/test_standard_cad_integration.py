@@ -1,7 +1,7 @@
 """Opt-in real CAD regression, including strict rejected round-trip cases.
 
-Set HEXREFINE_CAD_SOURCE to the pinned warehouse checkout and BOLTHEX_TEST_ROOT
-to an existing task directory; use the CAD interpreter, not the mesh runtime.
+Set HEXREFINE_RUN_SLOW_CAD=1, HEXREFINE_CAD_SOURCE to the pinned checkout and
+BOLTHEX_TEST_ROOT to an existing task directory; use the CAD interpreter.
 """
 import os
 from pathlib import Path
@@ -10,7 +10,7 @@ import unittest
 from tools.bolthex.standard_cad import generate
 
 
-@unittest.skipUnless(os.environ.get('HEXREFINE_CAD_SOURCE'), 'optional pinned CAD backend not selected')
+@unittest.skipUnless(os.environ.get('HEXREFINE_CAD_SOURCE') and os.environ.get('HEXREFINE_RUN_SLOW_CAD')=='1', 'slow CAD construction suite requires explicit HEXREFINE_RUN_SLOW_CAD=1')
 class StandardCadIntegrationTests(unittest.TestCase):
     def test_real_nominal_design_geometry(self):
         source = Path(os.environ['HEXREFINE_CAD_SOURCE'])

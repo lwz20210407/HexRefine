@@ -105,6 +105,7 @@ requested square-ended through-thread M6 nut. Reproduce with:
 
 ```powershell
 $env:HEXREFINE_CAD_SOURCE = '<pinned-checkout>'
+$env:HEXREFINE_RUN_SLOW_CAD = '1'
 $env:BOLTHEX_TEST_ROOT = '<existing-task-directory>'
 python -B -m unittest discover -s tools/tests -p test_standard_cad_integration.py -v
 ```

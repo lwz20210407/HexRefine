@@ -15,11 +15,13 @@ test('CAD H8 binary bridge writes actual mesh-only K and rejects malformed conne
     const n=Buffer.alloc(8*24),e=Buffer.alloc(32);
     points.forEach((p,i)=>p.forEach((x,a)=>n.writeDoubleLE(x,i*24+a*8)));
     for(let i=0;i<8;i++)e.writeInt32LE(i,i*4);
-    await fs.writeFile(path.join(root,'mesh-binary.json'),JSON.stringify({schemaVersion:1,nodes:8,elements:1}));
+    await fs.writeFile(path.join(root,'mesh-binary.json'),JSON.stringify({schemaVersion:1,nodes:8,elements:1,inspectionOnly:true}));
     await fs.writeFile(path.join(root,'nodes.f64'),n);await fs.writeFile(path.join(root,'elements.i32'),e);
     let run=spawnSync(process.execPath,[script,root],{encoding:'utf8'});
     assert.equal(run.status,0,run.stderr);
-    const parsed=parseNativeLsdynaMixedKeyword(await fs.readFile(path.join(root,'model.k'),'utf8'));
+    const keyword=await fs.readFile(path.join(root,'model.k'),'utf8');
+    assert.match(keyword,/INSPECTION SUBSET ONLY/);
+    const parsed=parseNativeLsdynaMixedKeyword(keyword);
     assert.deepEqual(parsed.nodes,points);assert.equal(parsed.solids.length,1);
     assert.deepEqual(parsed.solids[0].nodes,[1,2,3,4,5,6,7,8]);
     run=spawnSync(process.execPath,[script,root],{encoding:'utf8'});
