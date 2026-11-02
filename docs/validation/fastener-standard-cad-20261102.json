@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-02",
+  "scope": "Independent unmeshed nominal CAD only; no matching H8 certification",
+  "backend": "bd_warehouse v0.3.0",
+  "backendCommit": "28696f9b4c765c3b0385ccef1d41f45de245e8ad",
+  "build123d": "0.11.1",
+  "realCases": 7,
+  "acceptedCad": 5,
+  "rejectedCad": 2,
+  "reopenRelativeVolumeLimit": 1e-8,
+  "reproducer": "tools/tests/test_standard_cad_integration.py",
+  "cases": [
+    {"case": "iso4017 M6-1 L12 right", "accepted": true, "solids": 1, "faces": 161, "relativeVolumeError": 4.802563618943093e-10},
+    {"case": "iso4032 M6-1", "accepted": false, "reason": "STEP mass changed", "relativeVolumeError": 1.4285977707215072e-8},
+    {"case": "iso4017 M8-1.25 L16 left", "accepted": true, "solids": 1, "faces": 169, "relativeVolumeError": 6.506772957190467e-9},
+    {"case": "iso4032 M8-1.25", "accepted": true, "solids": 1, "faces": 101, "relativeVolumeError": 2.7924969429187467e-11},
+    {"case": "iso4762 M6-1 L12 right", "accepted": true, "solids": 1, "faces": 158, "relativeVolumeError": 4.304515966425533e-10},
+    {"case": "din1587 M6-1", "accepted": false, "reason": "STEP mass changed", "relativeVolumeError": 1.0971309375460334e-8},
+    {"case": "asme_b18.3 1/4-20 L19.05mm right", "accepted": true, "solids": 1, "faces": 194, "relativeVolumeError": 5.417142098689766e-10}
+  ],
+  "checks": ["All material/thread solids fused", "Valid single solid", "Positive integrated volume", "Periodic nonconstant flank occupancy before and after STEP export", "Socket void and floor where applicable", "Design Z datum", "STEP mass round-trip"],
+  "notVerified": ["GB equivalence", "Standards edition", "Manufacturing tolerance classes", "Matching H8 mesh", "CAD-mesh native HM", "All upstream parameter combinations"]
+}

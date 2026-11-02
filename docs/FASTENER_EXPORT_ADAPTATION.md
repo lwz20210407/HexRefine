@@ -5,6 +5,11 @@ upstream feature or GB product family.
 
 ## Acceptance correction
 
+New work: [independent standard CAD](STANDARD_FASTENER_CAD.md) accepts design
+parameters only. Five real cases pass; two remain rejected by the strict STEP
+round-trip gate. It is not yet matched to an H8 mesh. The complete status matrix
+is in [fastener development TODO](FASTENER_DEVELOPMENT_TODO.md).
+
 The FE-station ruled STEP and its CAD-plus-mesh HM outputs are **not accepted as
 independent unmeshed CAD models**. They were constructed with the FE sampling
 stations and their validity/volume/read-back checks do not establish that goal.
