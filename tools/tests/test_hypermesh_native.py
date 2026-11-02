@@ -4,11 +4,47 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from tools.hypermesh_native import make_tcl, export_hm
+from tools.hypermesh_native import make_tcl, export_hm, _cached_boundary_count
 from tools.bolthex.export_step import export_sections
 
 
 class NativeExportGuards(unittest.TestCase):
+    def test_native_layout_reserves_geometry_ids_and_keeps_duplicate_k_optional(self):
+        text=make_tcl(Path('F:/in.k'),Path('F:/in.step'),Path('F:/out'),Path('F:/template'),8,1,1,False,1e-7,[1,2,3,4,5,6,7,8])
+        self.assertIn('*renumber components 1 1001 1 0 0',text)
+        self.assertIn('Native import changed source part IDs',text)
+        self.assertIn('if {0} {\n                *feoutputmergeincludefiles',text)
+        self.assertIn('sha256',text)
+
+    def test_invalid_host_timeout_is_not_an_unbounded_background_job(self):
+        for value in [False,0,3601,1.5]:
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'Host timeout'):
+                export_hm(None,None,None,None,host_timeout=value)
+
+    def test_exact_audit_cache_rejects_nonfinite_and_stale_quality(self):
+        report=dict(kSHA256='same',nodes=8,elements=1,volume=1)
+        baseline=dict(report,reader='ansys-dyna-core',minimumCornerScaledJacobian=1,
+                      nonmanifoldFaces=0,nonmanifoldBoundaryEdges=0,boundaryFaces=6,boundaryEuler=2)
+        self.assertEqual(_cached_boundary_count(report,baseline),8)
+        for key,value in [('kSHA256','changed'),('volume',float('nan')),('minimumCornerScaledJacobian',float('nan')),
+                          ('minimumCornerScaledJacobian',.149),('boundaryFaces',99),('nodes',True)]:
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                _cached_boundary_count(report,dict(baseline,**{key:value}))
+
+    def test_equal_volume_without_exact_k_binding_is_not_matching_cad(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get('BOLTHEX_TEST_ROOT')) as temporary:
+            root=Path(temporary);exe=root/'hmbatch.exe';exe.write_bytes(b'not executed')
+            mesh=root/'model.k';mesh.write_text('*KEYWORD\n*END\n')
+            report=root/'source.json'
+            report.write_text(json.dumps(dict(kSHA256=hashlib.sha256(mesh.read_bytes()).hexdigest(),nodes=8,elements=1,volume=1)))
+            cad=root/'model.step';cad.write_text('not imported')
+            certificate=root/'cad.json'
+            certificate.write_text(json.dumps(dict(stepSHA256=hashlib.sha256(cad.read_bytes()).hexdigest(),solids=1,
+                meshVolume=1,relativeMeshVolumeError=0,geometryIndependentOfMesh=True,matchedMeshVerified=True,matchedKSHA256='another-mesh')))
+            with self.assertRaisesRegex(ValueError,'this exact K'):
+                export_hm(mesh,report,exe,root/'result',cad,certificate)
+            self.assertFalse((root/'result').exists())
+
     def test_fe_station_brep_cannot_be_promoted_as_design_cad(self):
         with self.assertRaisesRegex(ValueError,'not an accepted independent CAD'):
             export_sections(None,None)

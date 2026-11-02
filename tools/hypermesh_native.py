@@ -5,19 +5,45 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import sys
 
 
 def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda:stream.read(1048576),b''):
+            digest.update(block)
+    return digest.hexdigest()
 
 
-def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary):
+def _cached_boundary_count(report, validated):
+    integer_fields=('nodes','elements','boundaryFaces','boundaryEuler')
+    if (any(type(validated.get(key)) is not int for key in integer_fields)
+            or validated.get('kSHA256')!=report['kSHA256'] or validated.get('reader')!='ansys-dyna-core'
+            or validated['nodes']!=report['nodes'] or validated['elements']!=report['elements']
+            or not math.isfinite(validated.get('volume',float('nan')))
+            or not math.isfinite(validated.get('minimumCornerScaledJacobian',float('nan')))
+            or abs(validated['volume']-report['volume'])/report['volume']>1e-10
+            or validated['minimumCornerScaledJacobian']<.15
+            or validated.get('nonmanifoldFaces')!=0 or validated.get('nonmanifoldBoundaryEdges')!=0):
+        raise ValueError('Existing independent K audit does not certify this mesh')
+    count=validated['boundaryFaces']+validated['boundaryEuler']
+    if not 0<count<=report['nodes']:
+        raise ValueError('Invalid certified boundary node count')
+    return count
+
+
+def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,)):
     source = Path(__file__).with_suffix('.tcl').read_text(encoding='utf-8')
     values = dict(MESH=str(mesh).encode().hex(), CAD=('' if cad is None else str(cad)).encode().hex(),
                   DATABASE=str(output / 'model.hm').encode().hex(), AUDIT=str(output / 'host-audit.txt').encode().hex(),
                   TEMPLATE=str(template).encode().hex(), ROUNDTRIP=str(output / 'roundtrip.k').encode().hex(),
                   NODES=str(nodes), ELEMENTS=str(elements), SOLIDS=str(solids),
                   ASSOCIATE=str(int(associate)), TOLERANCE=format(tolerance, '.17g'),
+                  PYTHON=sys.executable.encode().hex(),
+                  BOUNDARYCOUNT=str(len(boundary) if boundary_count is None else boundary_count),
+                  NATIVEKEXPORT=str(int(native_k_export)),
+                  GEOCOMPSTART=str(max(source_pids)+1000),SOURCEPIDS=' '.join(str(int(pid)) for pid in source_pids),
                   BOUNDARY=' '.join(str(int(n)) for n in boundary))
     for key, value in values.items():
         source = source.replace('@' + key + '@', value)
@@ -25,7 +51,9 @@ def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, to
 
 
 def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None,
-              associate=False, tolerance=1e-7, debug_discrete_cad=False):
+              associate=False, tolerance=1e-7, debug_discrete_cad=False,native_k_export=False,host_timeout=300):
+    if type(host_timeout) is not int or not 1<=host_timeout<=3600:
+        raise ValueError('Host timeout must be an integer in [1,3600] seconds')
     mesh, source_report, executable, output = [Path(p).resolve() for p in [mesh, source_report, executable, output]]
     if output.exists() or not output.parent.is_dir():
         raise ValueError('Require a new output directory with an existing parent')
@@ -36,6 +64,8 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
     report = json.loads(source_report.read_text())
     if _sha(mesh) != report['kSHA256'] or not all(type(report[k]) is int and report[k] > 0 for k in ['nodes', 'elements']):
         raise ValueError('Source mesh certificate does not match the K file')
+    if not math.isfinite(report.get('volume',float('nan'))) or report['volume']<=0:
+        raise ValueError('Source mesh certificate must have positive finite volume')
     if not math.isfinite(tolerance) or not 0 < tolerance <= 1e-5:
         raise ValueError('Association tolerance must be positive and no more than 1e-5; snapping is disabled')
     solids = 0
@@ -48,6 +78,8 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
             raise ValueError('Independent design CAD is required; FE-station geometry is diagnostic only')
         if _sha(cad) != cr['stepSHA256'] or type(cr['solids']) is not int or cr['solids'] < 1:
             raise ValueError('CAD certificate does not match STEP')
+        if not debug_discrete_cad and (not cr.get('matchedMeshVerified') or cr.get('matchedKSHA256') != report['kSHA256']):
+            raise ValueError('CAD boundary matching must be certified for this exact K file')
         if cr['relativeMeshVolumeError'] is None or cr['relativeMeshVolumeError'] > 1e-4:
             raise ValueError('CAD has not been checked against this discrete mesh volume')
         if abs(cr['meshVolume'] - report['volume']) / report['volume'] > 1e-10:
@@ -56,27 +88,40 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
     elif associate:
         raise ValueError('Association requires CAD')
     template = executable.parents[3] / 'templates/feoutput/ls-dyna971/dyna971_R112.key'
-    if not template.is_file():
+    if native_k_export and not template.is_file():
         raise ValueError('Matching LS-DYNA R11 output template is unavailable')
-    from ansys.dyna.core import Deck
-    import numpy as np
-    deck = Deck(); deck.import_file(str(mesh))
-    nd = next(deck.get_kwds_by_type('NODE')).nodes
-    ed = next(deck.get_kwds_by_full_type('ELEMENT', 'SOLID')).elements
-    ids = nd['nid'].to_numpy(np.int64)
-    elements = ed[[f'n{i}' for i in range(1, 9)]].to_numpy(np.int64)
-    if len(ids) != report['nodes'] or len(elements) != report['elements'] or not np.array_equal(ids, np.arange(1, len(ids) + 1)):
-        raise ValueError('K certificate/count/ID mismatch')
-    if elements.min() < 1 or elements.max() > len(ids) or not np.all(np.diff(np.sort(elements, axis=1), axis=1) > 0):
-        raise ValueError('Invalid H8 connectivity')
-    faces = elements[:, [[0,3,2,1],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]]].reshape(-1,4)
-    _, first, counts = np.unique(np.sort(faces, axis=1), axis=0, return_index=True, return_counts=True)
-    if np.any(counts > 2):
-        raise ValueError('Nonmanifold input faces')
-    boundary = np.unique(faces[first[counts == 1]])
+    baseline=mesh.parent/'independent-k-audit.json'
+    reused_audit=False
+    if not associate and baseline.is_file():
+        validated=json.loads(baseline.read_text())
+        # A closed quad boundary has E=2F, hence V=F+Euler. IDs are only
+        # required by the explicitly requested node-to-CAD association path.
+        boundary_count=_cached_boundary_count(report,validated)
+        source_pids=[1]  # validate_cad_k certifies the bounded single-PID recipe.
+        boundary=[]
+        reused_audit=True
+    else:
+        from ansys.dyna.core import Deck
+        import numpy as np
+        deck = Deck(); deck.import_file(str(mesh))
+        nd = next(deck.get_kwds_by_type('NODE')).nodes
+        ed = next(deck.get_kwds_by_full_type('ELEMENT', 'SOLID')).elements
+        source_pids=sorted(int(pid) for pid in ed['pid'].unique())
+        ids = nd['nid'].to_numpy(np.int64)
+        elements = ed[[f'n{i}' for i in range(1, 9)]].to_numpy(np.int64)
+        if len(ids) != report['nodes'] or len(elements) != report['elements'] or not np.array_equal(ids, np.arange(1, len(ids) + 1)):
+            raise ValueError('K certificate/count/ID mismatch')
+        if elements.min() < 1 or elements.max() > len(ids) or not np.all(np.diff(np.sort(elements, axis=1), axis=1) > 0):
+            raise ValueError('Invalid H8 connectivity')
+        faces = elements[:, [[0,3,2,1],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]]].reshape(-1,4)
+        _, first, counts = np.unique(np.sort(faces, axis=1), axis=0, return_index=True, return_counts=True)
+        if np.any(counts > 2):
+            raise ValueError('Nonmanifold input faces')
+        boundary = np.unique(faces[first[counts == 1]])
+        boundary_count=len(boundary)
     output.mkdir()
     tcl = output / 'export.tcl'
-    tcl.write_text(make_tcl(mesh, cad, output, template, report['nodes'], report['elements'], solids, associate, tolerance, boundary), encoding='utf-8')
+    tcl.write_text(make_tcl(mesh, cad, output, template, report['nodes'], report['elements'], solids, associate, tolerance, boundary,boundary_count,native_k_export,source_pids), encoding='utf-8')
     startup = None
     if hasattr(subprocess, 'STARTUPINFO'):
         startup = subprocess.STARTUPINFO();startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -85,7 +130,7 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         process = subprocess.Popen([str(executable), '-tcl', str(tcl), '-nocommand'], cwd=output,
                                    stdout=stdout, stderr=stderr, startupinfo=startup)
         try:
-            process.wait(timeout=300)
+            process.wait(timeout=host_timeout)
         except subprocess.TimeoutExpired:
             # hmbatch is a launcher on Windows; terminate only this owned tree.
             if process.poll() is None:
@@ -102,12 +147,27 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         raise RuntimeError('HyperMesh export/reopen did not pass; inspect retained host logs')
     if _sha(mesh) != report['kSHA256']:
         raise RuntimeError('Source K changed during native export')
+    cad_bounds = None
+    if cad is not None and not debug_discrete_cad:
+        cad_bounds=[float(value) for value in stats.get('cadBounds','').split()]
+        expected=cr['bbox']['min']+cr['bbox']['max']
+        if len(cad_bounds)!=6 or max(abs(a-b) for a,b in zip(cad_bounds,expected))>1e-5:
+            raise RuntimeError('Native HM geometry bounds differ from the independent CAD')
     database = output / 'model.hm'
     result = dict(schemaVersion=1, mode='cad-and-mesh' if cad else 'mesh-only',
         host=str(executable), nativeHm=True, hmSHA256=_sha(database), sourceKSHA256=_sha(mesh),
         sourceStepSHA256=None if cad is None else _sha(cad), hostExitCode=process.returncode,
-        **{key:int(stats[key]) for key in ['nodes', 'elements', 'surfaces', 'solids', 'associatedNodes', 'boundaryNodes']},
+        **{key:int(stats[key]) for key in ['nodes', 'elements', 'surfaces', 'solids', 'boundaryNodes']},
+        associatedNodes=None if stats['associatedNodes']=='-1' else int(stats['associatedNodes']),
+        associationAudited=stats['associatedNodes']!='-1',
+        reusedExactIndependentKAudit=reused_audit,
+        nativeKeywordRoundtrip=native_k_export,
+        sourcePartIds=source_pids,geometryComponentStart=max(source_pids)+1000,
+        sourcePartIdsVerified=True,diagnosticOnly=bool(debug_discrete_cad),
+        independentCadVerified=cad is not None and not debug_discrete_cad,
+        hostTimeoutSeconds=host_timeout,
         savedAndReopened=True, meshDataUnchanged=True, nodeSnapping=False,
+        cadBounds=cad_bounds,cadBoundsVerified=cad_bounds is not None,
         associationTolerance=tolerance if associate else None,
         limitations=['Native HM requires installed HyperMesh; K/INP do not.',
           'CAD mode retains the supplied STEP representation; it does not manufacture missing CAD.',
@@ -122,5 +182,7 @@ if __name__ == '__main__':
     p.add_argument('--hmbatch', required=True);p.add_argument('--cad');p.add_argument('--cad-report')
     p.add_argument('--associate', action='store_true');p.add_argument('--tolerance', type=float, default=1e-7)
     p.add_argument('--debug-discrete-cad', action='store_true')
+    p.add_argument('--native-k-export', action='store_true')
+    p.add_argument('--host-timeout',type=int,default=300)
     a = p.parse_args()
-    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad), indent=2))
+    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad,a.native_k_export,a.host_timeout), indent=2))
