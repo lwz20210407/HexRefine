@@ -1,0 +1,61 @@
+{
+  "originalProduct": "BoltHex 1.0.0",
+  "originalExecutableSHA256": "65758e8b26bd651fd82872c36ccf4c47b874663f124d229b59660a99e549955b",
+  "recovery": "Python 3.13 bytecode decompilation plus manual control-flow correction",
+  "authorizedLocalIntegration": true,
+  "licenseKeyCopied": false,
+  "originalNoticesPreserved": true,
+  "catalogueCases": 224,
+  "byteIdenticalINPCases": 224,
+  "limitations": [
+    "GUI not ported or certified by this package.",
+    "Equivalence is not engineering-quality acceptance."
+  ],
+  "modules": [
+    {
+      "module": "inp_writer",
+      "sourceSHA256": "2f735d910a34faf5b8aa3edbec0aad2bbf9d853931d49b3aae0808ef83d336c5",
+      "packagedSHA256": "5cd706a5e498c4937c83eb7e4108ab5393ac38e3f364fe4be6098180fbc7e23b",
+      "transformations": [
+        "package-relative imports",
+        "AST formatting only"
+      ]
+    },
+    {
+      "module": "mesh_core",
+      "sourceSHA256": "a0b8a7a20519abfe983af85aafa7a8c0c112cff34409b2d88582ed1df61bd6f3",
+      "packagedSHA256": "264ead4737c3bc1bc4653b9ab5ced53c1adb860710b96e055d9ebe614fa79269",
+      "transformations": [
+        "package-relative imports",
+        "AST formatting only"
+      ]
+    },
+    {
+      "module": "parts",
+      "sourceSHA256": "289b55df9025bb508ae6f581569c7777ecf2eac44cfc9ab3dc05121763ad452b",
+      "packagedSHA256": "33f0b10d42882da85608695563902c56ad667d692e430b718a0c7b9bd69a65d4",
+      "transformations": [
+        "package-relative imports",
+        "AST formatting only"
+      ]
+    },
+    {
+      "module": "standards",
+      "sourceSHA256": "28487cf7d150203cc7e9641ded192b6dde2b6548878c6175e0018c4f9f232525",
+      "packagedSHA256": "74e1fa155cd5a97eead78f9e376cbcb6d9d63ca9d12865bfb5bdd50fa64b48ff",
+      "transformations": [
+        "package-relative imports",
+        "AST formatting only"
+      ]
+    },
+    {
+      "module": "version",
+      "sourceSHA256": "24eaaab41f7d0a00806ddf39e9994dd99d62f2b4d6931559e7d19fefb5cef775",
+      "packagedSHA256": "f360bb67f0a3a11504ca34c36872bdaed0cb03515925195ae3ca2b35b649baa4",
+      "transformations": [
+        "package-relative imports",
+        "AST formatting only"
+      ]
+    }
+  ]
+}
