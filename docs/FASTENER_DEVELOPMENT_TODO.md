@@ -78,6 +78,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | IO-03 | Real native mesh-only HM | DONE | HyperMesh2022.3 save/clear/reopen; not renamed Tcl/CMF |
 | IO-04 | STEP+mesh native HM transfer | DONE, BOUNDED | Through-nut 385,920 H8/117 surfaces/1 solid and bolt 3,579,648 H8/173 surfaces/1 solid; native save/clear/reopen, unchanged mesh SHA, verified CAD bounds and source PID1. General families/performance remain limited |
 | IO-05 | No-motion CAD association | NOT VERIFIED | Tested host moved ~1e-7 despite no-snap; strict gate rejected, not loosened |
+| IO-06 | Direct native-CAD witness diagnostic | DONE, BOUNDED | `hypermesh_geometry_probe`: read-only HM, hash-bound STEP reference, finite surface probes plus off-surface trim controls. Actual socket HM: 10/241 surface witnesses exceed unchanged 2e-6 mm; diagnostic rejects, does not certify exact CAD or change production gates |
 | STD-01 | Versioned GB/ISO/DIN/ASME catalogue | PARTIAL | Pinned CAD tables enumerable for selected ISO/DIN/ASME families; no certified edition/GB crosswalk; recovered 14-size table is not authoritative |
 | STD-02 | Internal/external limits and tolerance classes | TODO | Nominal/limit models; radial clearance is not a 6g/6H model |
 | STD-03 | Validate cross-standard mappings | TODO | Similar ISO/DIN data must not automatically be relabelled GB/EN |
@@ -132,7 +133,11 @@ threshold was relaxed; native host runtime budget is a separate option.
   the unchanged 0.01% production limit. Native HM geometry still remains
   unverified: turning CAD export optimization off did not fix drift, and tight
   import cleanup lost closed-solid topology on STEP re-export. Neither was
-  promoted to the production adapter; see SOCKET_DEVELOPMENT.md.
+  promoted to the production adapter. Direct internal native volume is within
+  about 5.47e-8 relative of source, but 10/241 point queries still exceed 2e-6 mm;
+  geometry vs host projection accuracy remains to be separated. A reusable
+  diagnostic now detects this instead of accepting on volume alone.
+  See SOCKET_DEVELOPMENT.md.
 - Old profile-pair meshes and standard-library CAD are different designs; their
   combination remains withdrawn. New matched bundles bind exact K/STEP hashes.
 - No complete GB/US/European universal family/tolerance catalogue exists in this

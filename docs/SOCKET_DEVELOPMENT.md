@@ -73,8 +73,9 @@ an explicit budget/volume rejection. No SJ, face matching or solver certificate
 is issued by preflight. Fine fillet block allocation also has an internal
 five-million-cell bound; original MeshSeeds positional argument order stays.
 
-New code is covered by 70 fast tests (61 passed / 9 optional skips); nine
-saved-CAD socket/fillet tests passed separately, followed by two saved-CAD
+New code plus the native probe is covered by 75 fast tests (66 passed / 9
+optional skips); nine socket/fillet tests with saved CAD enabled passed
+separately (four exercise real CAD), followed by two saved-CAD
 count/interface assertions. Full TS and slow eight-case CAD reconstruction
 were not rerun. Local logs retain a failed scratch image-export manifest and
 its corrected successful retry; neither changed the accepted source mesh.
@@ -92,6 +93,29 @@ Two additional host experiments were run, not merely inferred:
 Thus the new K/INP fidelity result does not imply a newly accepted exact-CAD
 HM. Earlier diagnostic native HM remains explicitly diagnostic. Evidence is
 in `socket-local/fidelity/native-variants.json` and actual LSPP/INP-section PNGs.
+
+A subsequent direct HM probe separates internal geometry from STEP export:
+`hm_getvolumeofsolid` reports 699.719658159 mm^3 versus source 699.719619882,
+about 5.47e-8 relative. Nevertheless, 10 of 241 source-surface witnesses
+queried through `hm_findclosestpointonsurface` exceed 2e-6 mm; maximum is
+3.3399108e-5 mm, at thread surfaces. Four deliberately off-surface controls
+match independent trimmed-CAD distances within about 3.5e-13 mm. Thus an
+untrimmed-plane false match is not hiding this sampled failure. The remaining
+deviation may involve geometry conversion or closest-point query accuracy;
+these finite tests do not prove either cause or global BRep equivalence.
+
+`tools/hypermesh_geometry_probe.py` now implements this as a bounded reusable
+read-only diagnostic. It verifies input hashes and source point distances,
+requires controls, caps references at 4096 points and host time at 600 seconds,
+and refuses partial/duplicate/failed output. The actual socket case returns
+exit 2 with a negative report; no product acceptance gate is changed. Example:
+
+```powershell
+python -B -m tools.hypermesh_geometry_probe INPUT_HM SOURCE_STEP REFERENCES_JSON NEW_OUTPUT --hmbatch HMBATCH_EXE
+```
+
+Exit 0 means only finite sampled witnesses passed, never exact-CAD or complete
+product acceptance. K/INP mesh generation still has no HyperMesh runtime need.
 
 ## Historical medium development result
 
@@ -172,10 +196,10 @@ This intermittent host-file issue is retained in local logs, not described as
 a socket-mesher failure or silently removed. Full TypeScript and slow eight-CAD
 construction suites were not run during this socket increment.
 
-## Remaining work
+## Current remaining work
 
-1. Improve local thread/fillet boundary representation without blanket extreme
-   whole-body refinement, and rerun unchanged CAD fidelity gates.
+1. The stated M6 fillet-block fidelity case now passes. Extend other supported
+   socket sizes/runouts without treating this single case as family coverage.
 2. Diagnose native CAD translation tolerances independently of coarse host
    bounding-box reporting; do not change global installed translator settings.
 3. Extend tested sizes, runouts and recessed families, then blind caps and GUI.
