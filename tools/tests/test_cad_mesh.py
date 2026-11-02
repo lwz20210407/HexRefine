@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from tools.bolthex.cad_mesh import MeshSeeds, _join_exact, _z_layers
+from tools.bolthex.cad_mesh import MeshSeeds, _join_exact, _z_layers,map_saved_cad
 from tools.bolthex.mesh_audit import audit_h8
 from tools.bolthex.mesh_core import Mesh3D
 
@@ -24,6 +24,11 @@ class CadMeshGuards(unittest.TestCase):
             with self.subTest(count=count),self.assertRaisesRegex(ValueError,'even'):
                 MeshSeeds(head_mapping='fillet_blocks',head_curve_segments=count).validate()
         MeshSeeds(head_mapping='fillet_blocks',head_curve_segments=8).validate()
+
+    def test_early_socket_volume_gate_cannot_be_relaxed_or_nonfinite(self):
+        for limit in (True,0,-1,1e-3,float('nan')):
+            with self.subTest(limit=limit),self.assertRaisesRegex(ValueError,'no more than 1e-4'):
+                map_saved_cad(None,None,socket_volume_limit=limit)
 
     def test_cube_audit_and_inversion_rejection(self):
         report,boundary=audit_h8(CUBE,np.arange(8).reshape(1,8),2)

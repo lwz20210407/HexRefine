@@ -37,6 +37,8 @@ class StandardCadIntegrationTests(unittest.TestCase):
                         self.assertFalse(result['matchedMeshVerified'])
                         self.assertEqual(result['solids'], 1)
                         self.assertTrue(result['thread']['onePitchPeriodic'])
+                        self.assertEqual(result['designThread']['unit'],'mm')
+                        self.assertGreater(result['designThread']['majorDiameterMm']/2,result['thread']['samplingRadiusMm'])
                         self.assertLessEqual(result['relativeReopenVolumeError'], 1e-7)
                         self.assertTrue((target / 'model.step').is_file())
                     else:

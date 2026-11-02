@@ -10,13 +10,16 @@ from .cad_mesh_pipeline import _sha
 from .cad_socket import socket_floor,socket_features
 
 
-def topology_counts(shape,request,seeds):
+def topology_counts(shape,request,seeds,design_dimensions=None):
     seeds.validate()
     if request.get('family')!='socket_bolt' or seeds.boundary_mapping!='radial' or seeds.z_features:
         raise ValueError('Socket preflight requires socket CAD and supported radial mapping')
+    if not request['size'].startswith('M') and request.get('standard')!='asme_b18.3':
+        raise ValueError('Nonmetric socket preflight currently supports certified ASME B18.3 only')
     from .mesh_core import build_bolt_section
     floor=socket_floor(shape);height=max(v.Z for v in shape.vertices())
-    diameter=float(request['size'].split('-')[0][1:]);pitch=float(request['size'].split('-')[1])
+    from .thread_dimensions import dimensions_for
+    diameter,pitch=dimensions_for(request,design_dimensions)
     length=request['length']
     if (type(length) not in (int,float) or not math.isfinite(length) or length<=0
             or not all(math.isfinite(v) and v>0 for v in (diameter,pitch))):
@@ -63,7 +66,8 @@ def plan(cad_directory,seeds,maximum_elements=1_000_000):
     shape=import_step(directory/'model.step')
     if not shape.is_valid or len(shape.solids())!=1:
         raise ValueError('Preflight requires one valid CAD solid')
-    counts=topology_counts(shape,certificate['request'],seeds)
+    if certificate.get('unit')!='mm':raise ValueError('Socket preflight requires CAD coordinates certified in mm')
+    counts=topology_counts(shape,certificate['request'],seeds,certificate.get('designThread'))
     result=dict(schemaVersion=1,purpose='socket-allocation-preflight',sourceStepSHA256=certificate['stepSHA256'],
                 request=certificate['request'],seeds=seeds.__dict__,counts=counts,maximumElements=maximum_elements,
                 fullModelAcceptance=False,cornerAndGaussAudited=False,nodeAndFaceMatchingAudited=False,
@@ -73,6 +77,8 @@ def plan(cad_directory,seeds,maximum_elements=1_000_000):
         return result
     floor=socket_floor(shape)
     sampler=RadialCad(shape,hole=lambda z:z>floor['z']+1e-9)
+    from .thread_dimensions import dimensions_for
+    sampler.thread_dimensions=dimensions_for(certificate['request'],certificate.get('designThread'))
     volume=estimate_mesh_volume(sampler,certificate['request'],seeds)
     error=abs(volume-certificate['reopenedVolume'])/certificate['reopenedVolume']
     result.update(estimatedDiscreteVolume=volume,relativeCadVolumeError=error,

@@ -154,7 +154,9 @@ def generate(cad_directory, output, node, seeds=MeshSeeds()):
     step=cad_directory/'model.step'
     source_certificate=cad_directory/'cad-report.json'
     certificate=json.loads(source_certificate.read_text(encoding='utf-8'))
-    mesh,shape,sampler=map_saved_cad(step,source_certificate,seeds)
+    if certificate['request']['family']=='socket_bolt':
+        print('Checking socket CAD volume before 3D allocation; CAD ray cache will be reused',flush=True)
+    mesh,shape,sampler=map_saved_cad(step,source_certificate,seeds,socket_volume_limit=1e-4)
     request=certificate['request']
     print(f'Mapped {len(mesh.elems)} H8; auditing',flush=True)
     report,boundary=audit_h8(mesh.nodes,mesh.elems,0 if request['family']=='hex_nut' else 2)
@@ -185,10 +187,12 @@ def generate(cad_directory, output, node, seeds=MeshSeeds()):
         report.update(schemaVersion=1,generator='independent-STEP-mapped-H8',request=request,seeds=asdict(seeds),
                       coreGrading=mesh.dims.get('coreGrading'),
                       socket=mesh.dims.get('socket'),
+                      threadDimensionsMm=mesh.dims.get('threadDimensionsMm'),
+                      volumePreflight=mesh.dims.get('volumePreflight'),
                       matchedMeshVerified=True,matching=matching,relativeCadVolumeError=relative,
                       volumeLimit=1e-4,minimumAllowedCornerSJ=.15,inpReadbackCoordinateError=error,
                       kSHA256=exported['kSHA256'],inpSHA256=_sha(stage/'model.inp'),partId=1,
-                      limitations=['Bounded metric bolt/open-nut/socket topology only',
+                      limitations=['Bounded metric hex/open-nut and certified metric/ASME socket topology only',
                                    'H8 approximates CAD curved faces; finite interpolation error is measured',
                                    'No general cap mesh or GB/tolerance-class certification'])
         certificate.update(meshVolume=report['volume'],relativeMeshVolumeError=relative,matchedMeshVerified=True,

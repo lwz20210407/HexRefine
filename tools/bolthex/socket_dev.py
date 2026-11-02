@@ -41,7 +41,10 @@ def check_features(mesh,shape,boundary):
 
 def measure_feature_resolution(mesh,boundary,cad,request,seeds):
     """Measure actual represented features; file size is not a resolution metric."""
-    pitch=float(request['size'].split('-')[1]);length=request['length']
+    from .thread_dimensions import dimensions_for
+    dimensions=getattr(cad,'thread_dimensions',None)
+    pitch=(dimensions if dimensions is not None else dimensions_for(request))[1]
+    length=request['length']
     points=mesh.nodes[boundary]
     side=(np.ptp(points[:,:,2],axis=1)>1e-9)&(points[:,:,2].max(axis=1)<=-pitch)
     ids=np.unique(boundary[side])

@@ -37,14 +37,30 @@ def socket_features(shape,floor,segments=6):
     return result,rounded
 
 
-def map_socket_bolt(shape,request,seeds):
+def map_socket_bolt(shape,request,seeds,dimensions=None,cad_volume=None,volume_limit=None):
     from .cad_mesh import RadialCad,_sweep,_z_layers,_join_exact
     from .mesh_core import build_bolt_section,build_head_ring_section
     floor=socket_floor(shape)
     features,rounded=socket_features(shape,floor,seeds.head_curve_segments)
     cad=RadialCad(shape,hole=lambda z:z>floor['z']+1e-9)
-    radius=float(request['size'].split('-')[0][1:])/2
-    pitch=float(request['size'].split('-')[1])
+    from .thread_dimensions import dimensions_for
+    diameter,pitch=dimensions if dimensions is not None else dimensions_for(request)
+    radius=diameter/2
+    cad.thread_dimensions=(diameter,pitch)
+    preflight=None
+    if volume_limit is not None:
+        if type(volume_limit) not in (int,float) or not math.isfinite(volume_limit) or not 0<volume_limit<=1e-4:
+            raise ValueError('Early socket volume limit cannot exceed 1e-4')
+        if type(cad_volume) not in (int,float) or not math.isfinite(cad_volume) or cad_volume<=0:
+            raise ValueError('Early socket volume check requires a positive certified CAD volume')
+        estimated=estimate_socket_volume(cad,request,seeds)
+        if not math.isfinite(estimated) or estimated<=0:
+            raise ValueError('Pre-allocation socket volume must be finite and positive')
+        error=abs(estimated-cad_volume)/cad_volume
+        if error>volume_limit:
+            raise ValueError(f'Pre-allocation socket CAD volume error {error} exceeds {volume_limit}; no 3D cells allocated')
+        preflight=dict(estimatedVolume=estimated,relativeCadVolumeError=error,limit=volume_limit,
+                       before3DAllocation=True,cadQueriesReused=True)
     count=6*seeds.sector
     angles=np.arange(count)*360/count
     shaft_top={i:cad.radii(float(theta),-1e-7)[1] for i,theta in enumerate(angles)}
@@ -86,6 +102,8 @@ def map_socket_bolt(shape,request,seeds):
         head=_sweep(head_section,head_zs,lambda t,z:cad.radii(t,max(z,1e-7))[1],annulus_inner,'SOCKET_HEAD')
     mesh=_join_exact(core,head,'CAD_SOCKET_BOLT')
     mesh.dims=dict(request=request,seeds=seeds.__dict__,source='saved-independent-STEP',
+                   threadDimensionsMm=dict(majorDiameter=diameter,pitch=pitch),
+                   volumePreflight=preflight,
                    featurePlanes=dict(socketFloor=floor['z']),socket=dict(floor=floor,roundedHeadBands=rounded,
                    coreStopsAtFloor=True,recessIsVoid=True,coreTopFaceCount=len(core_section.quads)))
     if fillet:mesh.dims['socket']['filletBlocks']=fillet
@@ -98,7 +116,9 @@ def estimate_socket_volume(cad,request,seeds):
     from .cad_mesh import _z_layers
     floor=socket_floor(cad.shape)
     features,_=socket_features(cad.shape,floor,seeds.head_curve_segments)
-    pitch=float(request['size'].split('-')[1])
+    from .thread_dimensions import dimensions_for
+    dimensions=getattr(cad,'thread_dimensions',None)
+    pitch=(dimensions if dimensions is not None else dimensions_for(request))[1]
     angles=np.arange(6*seeds.sector)*60/seeds.sector
     head_zs=_z_layers(0,cad.zmax,cad.zmax/seeds.head,features)
     bands=[(_z_layers(-request['length'],0,pitch/seeds.per_pitch),False),

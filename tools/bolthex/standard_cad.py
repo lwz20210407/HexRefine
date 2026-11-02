@@ -126,7 +126,7 @@ def _thread_check(shape, part, request):
     base, period, shifted = mask(0), mask(pitch), mask(pitch / 2)
     if not any(base) or all(base) or base != period or shifted == base:
         raise ValueError('Real periodic helical flank occupancy check failed')
-    return dict(samples=32, pitchMm=pitch, radiusMm=sample_radius, zMm=z,
+    return dict(samples=32, pitchMm=pitch, radiusMm=sample_radius, samplingRadiusMm=sample_radius, zMm=z,
                 onePitchPeriodic=True, halfPitchChanges=True, occupancy=base)
 
 
@@ -206,6 +206,7 @@ def generate(request, output, source=None):
                       reopenedVolume=reopened_mass, relativeReopenVolumeError=relative_error,
                       cadRoundtripVolumeLimit=CAD_ROUNDTRIP_VOLUME_LIMIT,
                       bbox=dict(min=list(bounds.min), max=list(bounds.max)), thread=thread, features=features,
+                      designThread=dict(unit='mm',majorDiameterMm=part.thread_diameter,pitchMm=part.thread_pitch),
                       meshVolume=None, relativeMeshVolumeError=None,
                       limitations=['Nominal library geometry, not certified tolerance-class limits',
                                    'No verified GB/EN equivalence or standards edition',

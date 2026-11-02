@@ -297,8 +297,10 @@ def _join_exact(first, second, name):
     return result
 
 
-def map_saved_cad(step, certificate, seeds=MeshSeeds()):
+def map_saved_cad(step, certificate, seeds=MeshSeeds(),*,socket_volume_limit=None):
     seeds.validate()
+    if socket_volume_limit is not None and (type(socket_volume_limit) not in (int,float) or not math.isfinite(socket_volume_limit) or not 0<socket_volume_limit<=1e-4):
+        raise ValueError('Early socket volume limit must be finite, positive and no more than 1e-4')
     step = Path(step).resolve()
     certificate = json.loads(Path(certificate).read_text(encoding='utf-8'))
     if not certificate.get('geometryIndependentOfMesh') or not certificate.get('acceptedAsIndependentCad'):
@@ -307,8 +309,14 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         raise ValueError('STEP certificate/hash mismatch')
     request = certificate['request']
     family = request['family']
-    if family not in ('hex_bolt', 'hex_nut','socket_bolt') or not request['size'].startswith('M'):
-        raise ValueError('Only metric hex bolts, open hex nuts and socket bolts have mapped topology')
+    nonmetric_socket=family=='socket_bolt' and request.get('standard')=='asme_b18.3'
+    if family not in ('hex_bolt', 'hex_nut','socket_bolt') or (not request['size'].startswith('M') and not nonmetric_socket):
+        raise ValueError('Mapped topology supports metric hex bolts/open nuts and metric or certified ASME socket bolts')
+    socket_dimensions=None
+    if family=='socket_bolt':
+        from .thread_dimensions import dimensions_for
+        if certificate.get('unit')!='mm':raise ValueError('Mapped socket CAD coordinates must be certified in mm')
+        socket_dimensions=dimensions_for(request,certificate.get('designThread'))
     from build123d import import_step
     shape = import_step(step)
     if not shape.is_valid or len(shape.solids()) != 1:
@@ -317,7 +325,8 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         if seeds.boundary_mapping!='radial' or seeds.z_features:
             raise ValueError('Socket mapping currently requires radial seeds without additional feature overrides')
         from .cad_socket import map_socket_bolt
-        return map_socket_bolt(shape,request,seeds)
+        return map_socket_bolt(shape,request,seeds,socket_dimensions,
+                               certificate.get('reopenedVolume'),socket_volume_limit)
     if seeds.head_mapping!='radial':
         raise ValueError('Fillet-block head mapping is exposed only for socket bolts')
     sampler = RadialCad(shape, hole=family=='hex_nut')

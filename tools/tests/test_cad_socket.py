@@ -30,6 +30,19 @@ class SocketFloorGuards(unittest.TestCase):
         self.assertAlmostEqual(levels[-1],6)
         self.assertAlmostEqual(levels[-1]-levels[-2],levels[2]-levels[1])
 
+    def test_nonfinite_preflight_never_allocates_cells(self):
+        from unittest.mock import patch
+        from tools.bolthex.cad_socket import map_socket_bolt
+        from tools.bolthex.cad_mesh import MeshSeeds
+        with patch('tools.bolthex.cad_socket.socket_floor',return_value=dict(z=3)), \
+             patch('tools.bolthex.cad_socket.socket_features',return_value=([],[])), \
+             patch('tools.bolthex.cad_mesh.RadialCad',return_value=Obj()), \
+             patch('tools.bolthex.cad_socket.estimate_socket_volume',return_value=float('nan')), \
+             patch('tools.bolthex.cad_mesh._sweep') as sweep:
+            with self.assertRaisesRegex(ValueError,'finite and positive'):
+                map_socket_bolt(None,dict(size='M6-1'),MeshSeeds(),(6,1),700,1e-4)
+            sweep.assert_not_called()
+
 
 @unittest.skipUnless(os.environ.get('HEXREFINE_CAD_FIXTURES'),'saved socket CAD fixture not selected')
 class SavedSocketCadTests(unittest.TestCase):
@@ -49,6 +62,15 @@ class SavedSocketCadTests(unittest.TestCase):
         self.assertGreaterEqual(quality['minimumCornerScaledJacobian'],.15)
         self.assertTrue(features['recessNotFilled'])
         self.assertLess(features['relativeFloorAreaError'],1e-9)
+
+    def test_coarse_production_volume_rejection_precedes_any_3d_allocation(self):
+        from tools.bolthex.cad_mesh import map_saved_cad
+        from unittest.mock import patch
+        base=Path(os.environ['HEXREFINE_CAD_FIXTURES'])/'socket-M6'
+        with patch('tools.bolthex.cad_mesh._sweep') as sweep:
+            with self.assertRaisesRegex(ValueError,'no 3D cells allocated'):
+                map_saved_cad(base/'model.step',base/'cad-report.json',self.seeds,socket_volume_limit=1e-4)
+            sweep.assert_not_called()
 
     def test_kernel_detects_solid_to_annulus_and_conserves_discrete_volume(self):
         from tools.bolthex.mesh_audit import audit_h8
