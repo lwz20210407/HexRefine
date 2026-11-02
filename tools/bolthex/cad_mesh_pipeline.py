@@ -84,13 +84,38 @@ def _cad_boundary_check(mesh, boundary, shape, sampler, request, step):
     """
     faces=mesh.nodes[boundary]
     blocks=np.column_stack((faces.mean(axis=1),np.ptp(faces[:,:,2],axis=1)<1e-10))
+    critical_blocks=np.empty((0,4))
+    runout=mesh.dims.get('runoutMapping')
+    critical_faces=0
+    if runout and runout['caps']:
+        radius=float(request['size'].split('-')[0][1:])/2
+        pitch=float(request['size'].split('-')[1])
+        theta=np.degrees(np.arctan2(blocks[:,1],blocks[:,0]))%360
+        near=np.zeros(len(faces),dtype=bool)
+        for cap in runout['caps']:
+            near|=(np.abs((theta-cap['theta']+180)%360-180)<10)&(faces[:,:,2].min(axis=1)<cap['zmax']+pitch/16)&(faces[:,:,2].max(axis=1)>cap['zmin']-pitch/16)
+        near&=(blocks[:,3]==0)&(np.hypot(blocks[:,0],blocks[:,1])<radius+1e-4)
+        selected=faces[near]
+        critical_faces=len(selected)
+        probes=[]
+        for u in (.25,.5,.75):
+            for v in (.25,.5,.75):
+                if u==v==.5:
+                    continue
+                probes.append((1-u)*(1-v)*selected[:,0]+u*(1-v)*selected[:,1]+u*v*selected[:,2]+(1-u)*v*selected[:,3])
+        if len(selected):
+            probes=np.concatenate(probes)
+            critical_blocks=np.column_stack((probes,np.zeros(len(probes))))
     del faces
     jobs=[blocks[i:i+4096] for i in range(0,len(blocks),4096)]
+    critical_jobs=[critical_blocks[i:i+4096] for i in range(0,len(critical_blocks),4096)]
     with ProcessPoolExecutor(max_workers=2,initializer=_face_worker_init,initargs=(str(step),request)) as pool:
         results=list(pool.map(_face_worker,jobs))
-    max_face_error=max(r['maximum'] for r in results)
-    max_radial_error=max(r['radialMaximum'] for r in results)
-    exact_face_queries=sum(r['exact'] for r in results)
+        critical_results=list(pool.map(_face_worker,critical_jobs))
+    all_results=results+critical_results
+    max_face_error=max(r['maximum'] for r in all_results)
+    max_radial_error=max(r['radialMaximum'] for r in all_results)
+    exact_face_queries=sum(r['exact'] for r in all_results)
     plane_count=sum(r['planes'] for r in results)
     radial_count=sum(r['radials'] for r in results)
     if max_face_error>0.02 or sampler.max_fallback_distance>2e-6:
@@ -109,6 +134,8 @@ def _cad_boundary_check(mesh, boundary, shape, sampler, request, step):
                 maximumIntersectionLineResidual=sampler.max_hit_residual,
                 seamFallbacks=sampler.seam_fallbacks,maximumSeamFallbackDistance=sampler.max_fallback_distance,
                 nodeDistanceLimit=2e-6,faceCentreDistanceLimit=.02,
+                runoutMapping=runout,criticalRunoutFaces=critical_faces,
+                additionalRunoutSurfaceProbes=len(critical_blocks),
                 scope='All face centres; CAD ray witnesses for side nodes; 256 independent nearest-shell node probes')
 
 
@@ -149,6 +176,7 @@ def generate(cad_directory, output, node, seeds=MeshSeeds()):
         if not np.array_equal(cells,mesh.elems) or error>1e-8 or len(reopened.cells)!=1:
             raise ValueError('Independent INP read-back changed mesh geometry or H8 connectivity')
         report.update(schemaVersion=1,generator='independent-STEP-mapped-H8',request=request,seeds=asdict(seeds),
+                      coreGrading=mesh.dims.get('coreGrading'),
                       matchedMeshVerified=True,matching=matching,relativeCadVolumeError=relative,
                       volumeLimit=1e-4,minimumAllowedCornerSJ=.15,inpReadbackCoordinateError=error,
                       kSHA256=exported['kSHA256'],inpSHA256=_sha(stage/'model.inp'),partId=1,

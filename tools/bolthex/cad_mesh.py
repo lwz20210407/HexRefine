@@ -24,9 +24,19 @@ class MeshSeeds:
     per_pitch: int = 24
     head: int = 12
     z_features: tuple[float,...] = ()
+    boundary_mapping: str = 'radial'
+    core_mapping: str = 'uniform'
 
     def validate(self):
         for name, value in self.__dict__.items():
+            if name=='core_mapping':
+                if value not in ('uniform','graded_2to1'):
+                    raise ValueError('core_mapping must be uniform or graded_2to1')
+                continue
+            if name=='boundary_mapping':
+                if value not in ('radial','runout'):
+                    raise ValueError('boundary_mapping must be radial or runout')
+                continue
             if name=='z_features':
                 if not isinstance(value,(list,tuple)) or len(value)>128 or any(type(v) not in (int,float) or not math.isfinite(v) for v in value):
                     raise ValueError('z_features must contain at most 128 finite design-axis positions')
@@ -162,7 +172,7 @@ class RadialCad:
         return result
 
 
-def _sweep(section, zs, outer, inner=None, name='CAD_H8'):
+def _sweep(section, zs, outer, inner=None, name='CAD_H8',xy_map=None):
     rho = np.asarray(section.rho)
     theta = np.asarray(section.theta)
     alpha, beta = np.asarray(section.alpha), np.asarray(section.beta)
@@ -173,6 +183,11 @@ def _sweep(section, zs, outer, inner=None, name='CAD_H8'):
     nodes = np.empty((len(zs) * points, 3))
     angles = np.radians(theta)
     for layer, z in enumerate(zs):
+        if xy_map is not None:
+            sl=slice(layer*points,(layer+1)*points)
+            nodes[sl,:2]=xy_map(section,z)
+            nodes[sl,2]=z
+            continue
         radius = rho.copy()
         for ids, fn, weights, base in [(alpha > 0, outer, alpha, reference),
                                       (beta > 0, inner, beta, section.rin_ref)]:
@@ -205,7 +220,12 @@ def estimate_mesh_volume(sampler, request, seeds):
     flats=2*max(abs(sampler.bounds.min.Y),abs(sampler.bounds.max.Y))
     bevel=(flats/math.cos(math.pi/6)-flats)*math.tan(math.pi/12)/2
     if request['family']=='hex_nut':
-        bands=[_z_layers(sampler.zmin,sampler.zmax,pitch/seeds.per_pitch,(sampler.zmin+bevel,sampler.zmax-bevel,*seeds.z_features))]
+        runout=None
+        if seeds.boundary_mapping=='runout':
+            from .cad_runout import NutRunoutMap
+            runout=NutRunoutMap(sampler,6*seeds.sector,pitch)
+        features=[] if runout is None else runout.axial_features()
+        bands=[_z_layers(sampler.zmin,sampler.zmax,pitch/seeds.per_pitch,(sampler.zmin+bevel,sampler.zmax-bevel,*seeds.z_features,*features))]
     else:
         bands=[_z_layers(-request['length'],0,pitch/seeds.per_pitch),
                _z_layers(0,sampler.zmax,sampler.zmax/seeds.head,
@@ -218,6 +238,16 @@ def estimate_mesh_volume(sampler, request, seeds):
     for b,zs in enumerate(bands):
         previous=None
         for z in zs:
+            if request['family']=='hex_nut' and runout is not None:
+                outer,inner=runout.boundaries(z)
+                polygons=np.stack((inner,outer),axis=1)
+                def polygon_area(points):
+                    return .5*np.sum(points[:,0]*np.roll(points[:,1],-1)-points[:,1]*np.roll(points[:,0],-1))
+                if previous is not None:
+                    before,z0=previous;mid=(before+polygons)/2
+                    volume+=(z-z0)/6*sum(weight*(polygon_area(p[:,1])-polygon_area(p[:,0])) for weight,p in [(1,before),(4,mid),(1,polygons)])
+                previous=polygons,z
+                continue
             rz=max(z,1e-8) if len(bands)>1 and b==1 else min(z,-1e-8) if len(bands)>1 else z
             radii=np.array([sampler.radii(float(t),rz) for t in angles])
             if request['family']=='hex_bolt':
@@ -271,6 +301,10 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
     if not shape.is_valid or len(shape.solids()) != 1:
         raise ValueError('CAD must be one valid solid')
     sampler = RadialCad(shape, hole=family=='hex_nut')
+    if seeds.core_mapping=='graded_2to1' and family!='hex_bolt':
+        raise ValueError('Graded solid-core mapping is currently exposed for external-hex bolts only')
+    if seeds.boundary_mapping=='runout' and family!='hex_nut':
+        raise ValueError('Runout-cap mapping is currently exposed for open nuts only')
     if seeds.z_features and family!='hex_nut':
         raise ValueError('Additional axial feature planes are currently exposed for open nuts only')
     if any(z<sampler.zmin or z>sampler.zmax for z in seeds.z_features):
@@ -283,6 +317,14 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
     bevel = (flats/math.cos(math.pi/6)-flats)*math.tan(math.pi/12)/2
     if family == 'hex_nut':
         section = build_nut_section(seeds.sector, seeds.radial, diameter, flats)
+        if seeds.boundary_mapping=='runout':
+            from .cad_runout import NutRunoutMap
+            runout=NutRunoutMap(sampler,6*seeds.sector,pitch)
+            zs=_z_layers(sampler.zmin,sampler.zmax,pitch/seeds.per_pitch,
+                         (sampler.zmin+bevel,sampler.zmax-bevel,*seeds.z_features,*runout.axial_features()))
+            mesh=_sweep(section,zs,None,name='CAD_RUNOUT_NUT',xy_map=runout.section_xy)
+            mesh.dims=dict(request=request,seeds=seeds.__dict__,source='saved-independent-STEP',runoutMapping=runout.report())
+            return mesh,shape,sampler
         zs = _z_layers(sampler.zmin, sampler.zmax, pitch/seeds.per_pitch,
                        (sampler.zmin+bevel, sampler.zmax-bevel,*seeds.z_features))
         mesh = _sweep(section, zs, lambda t,z: sampler.radii(t,z)[1],
@@ -297,11 +339,17 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         shaft_zs = _z_layers(-request['length'], 0, pitch/seeds.per_pitch)
         head_zs = _z_layers(0, sampler.zmax, sampler.zmax/seeds.head,
                             [sampler.zmax-bevel+bevel*i/12 for i in range(12)])
-        section = build_bolt_section(seeds.sector, seeds.core_rings, seeds.radial, diameter, diameter, ref_circle=True)
+        if seeds.core_mapping=='graded_2to1':
+            from .graded_core import build_graded_bolt_section
+            section=build_graded_bolt_section(seeds.sector,seeds.core_rings,seeds.radial,diameter)
+        else:
+            section = build_bolt_section(seeds.sector, seeds.core_rings, seeds.radial, diameter, diameter, ref_circle=True)
         body = _sweep(section, np.concatenate((shaft_zs, head_zs[1:])), core_outer, name='CAD_BOLT_CORE')
         ring = build_head_ring_section(seeds.sector, seeds.radial, radius, flats)
         ring.beta = [1-a for a in ring.alpha]
         head = _sweep(ring, head_zs, lambda t,z: sampler.radii(t,max(1e-8,z))[1], core_outer, 'CAD_BOLT_HEAD')
         mesh = _join_exact(body, head, 'CAD_HEX_BOLT')
     mesh.dims = dict(request=request, seeds=seeds.__dict__, source='saved-independent-STEP')
+    if seeds.core_mapping=='graded_2to1':
+        mesh.dims['coreGrading']=section.grading
     return mesh, shape, sampler
