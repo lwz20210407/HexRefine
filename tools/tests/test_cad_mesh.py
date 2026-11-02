@@ -19,6 +19,12 @@ class CadMeshGuards(unittest.TestCase):
         self.assertIn(.17,result);self.assertIn(.87,result)
         self.assertTrue(np.all(np.diff(result)>0))
 
+    def test_fillet_mode_rejects_bad_counts_before_geometry_work(self):
+        for count in (2,5):
+            with self.subTest(count=count),self.assertRaisesRegex(ValueError,'even'):
+                MeshSeeds(head_mapping='fillet_blocks',head_curve_segments=count).validate()
+        MeshSeeds(head_mapping='fillet_blocks',head_curve_segments=8).validate()
+
     def test_cube_audit_and_inversion_rejection(self):
         report,boundary=audit_h8(CUBE,np.arange(8).reshape(1,8),2)
         self.assertAlmostEqual(report['volume'],1)

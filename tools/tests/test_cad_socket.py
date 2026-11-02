@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace as Obj
 import unittest
-from tools.bolthex.cad_socket import socket_floor
+from tools.bolthex.cad_socket import socket_floor,socket_features
 
 
 class SocketFloorGuards(unittest.TestCase):
@@ -20,6 +20,15 @@ class SocketFloorGuards(unittest.TestCase):
     def test_multiple_internal_floor_levels_are_explicitly_rejected(self):
         with self.assertRaisesRegex(ValueError,'one exposed planar floor'):
             socket_floor(self.shape([.3,.7],0))
+
+    def test_legacy_fillet_heights_retain_bounded_uniform_sampling(self):
+        face=Obj(geom_type=Obj(name='TORUS'),vertices=lambda:[Obj(Z=5.55),Obj(Z=6)])
+        shape=Obj(faces=lambda:[face])
+        levels,bands=socket_features(shape,dict(z=3),24)
+        self.assertEqual(bands,[[5.55,6]])
+        self.assertEqual(len(levels),26)
+        self.assertAlmostEqual(levels[-1],6)
+        self.assertAlmostEqual(levels[-1]-levels[-2],levels[2]-levels[1])
 
 
 @unittest.skipUnless(os.environ.get('HEXREFINE_CAD_FIXTURES'),'saved socket CAD fixture not selected')
@@ -49,6 +58,49 @@ class SavedSocketCadTests(unittest.TestCase):
         report,_=audit_h8(self.mesh.nodes,self.mesh.elems,2)
         estimate=estimate_mesh_volume(self.cad,self.mesh.dims['request'],self.seeds)
         self.assertLess(abs(estimate-report['volume'])/report['volume'],1e-10)
+
+    def test_compact_core_reaches_the_same_floor_without_changing_fine_boundary(self):
+        import numpy as np
+        from tools.bolthex.cad_mesh import map_saved_cad,MeshSeeds
+        from tools.bolthex.mesh_audit import audit_h8
+        from tools.bolthex.socket_dev import check_features
+        base=Path(os.environ['HEXREFINE_CAD_FIXTURES'])/'socket-M6'
+        coarse=MeshSeeds(sector=16,core_rings=2,radial=2,per_pitch=2,head=4,core_mapping='graded_2to1_compact')
+        mesh,shape,_=map_saved_cad(base/'model.step',base/'cad-report.json',coarse)
+        quality,boundary=audit_h8(mesh.nodes,mesh.elems,2)
+        self.assertTrue(check_features(mesh,shape,boundary)['recessNotFilled'])
+        self.assertEqual(mesh.dims['coreGrading']['patchQuads'],6)
+        self.assertGreaterEqual(quality['minimumCornerScaledJacobian'],.15)
+        fine=MeshSeeds(sector=16,core_rings=2,radial=2,per_pitch=2,head=4)
+        baseline,_,_=map_saved_cad(base/'model.step',base/'cad-report.json',fine)
+        baseline_quality,baseline_boundary=audit_h8(baseline.nodes,baseline.elems,2)
+        # The recess floor has interior boundary nodes that legitimately differ;
+        # compare exterior shaft/head side nodes, not the re-tessellated floor.
+        def side(m,b):
+            xyz=m.nodes[b]
+            ids=np.unique(b[np.ptp(xyz[:,:,2],axis=1)>1e-9])
+            return np.array(sorted(map(tuple,np.round(m.nodes[ids],9))))
+        np.testing.assert_array_equal(side(mesh,boundary),side(baseline,baseline_boundary))
+        self.assertAlmostEqual(quality['volume'],baseline_quality['volume'],places=10)
+        self.assertLess(len(mesh.elems),len(baseline.elems))
+        from tools.bolthex.socket_plan import topology_counts
+        self.assertEqual(topology_counts(shape,mesh.dims['request'],coarse)['elements'],len(mesh.elems))
+
+    def test_fillet_blocks_close_the_actual_complete_socket_without_a_flat_tangent_sliver(self):
+        from tools.bolthex.cad_mesh import map_saved_cad,MeshSeeds,estimate_mesh_volume
+        from tools.bolthex.mesh_audit import audit_h8
+        from tools.bolthex.socket_dev import check_features
+        base=Path(os.environ['HEXREFINE_CAD_FIXTURES'])/'socket-M6'
+        seeds=MeshSeeds(sector=16,core_rings=2,radial=2,per_pitch=2,head=4,
+                        core_mapping='graded_2to1_compact',head_mapping='fillet_blocks',head_curve_segments=8)
+        mesh,shape,sampler=map_saved_cad(base/'model.step',base/'cad-report.json',seeds)
+        report,boundary=audit_h8(mesh.nodes,mesh.elems,2)
+        self.assertTrue(check_features(mesh,shape,boundary)['recessNotFilled'])
+        estimate=estimate_mesh_volume(sampler,mesh.dims['request'],seeds)
+        self.assertLess(abs(estimate-report['volume'])/report['volume'],1e-10)
+        self.assertIn('filletBlocks',mesh.dims['socket'])
+        from tools.bolthex.socket_plan import topology_counts
+        self.assertEqual(topology_counts(shape,mesh.dims['request'],seeds)['elements'],len(mesh.elems))
 
 
 if __name__=='__main__':unittest.main()

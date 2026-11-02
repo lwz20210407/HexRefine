@@ -27,12 +27,18 @@ class MeshSeeds:
     z_features: tuple[float,...] = ()
     boundary_mapping: str = 'radial'
     core_mapping: str = 'uniform'
+    head_curve_segments: int = 6
+    head_mapping: str = 'radial'
 
     def validate(self):
         for name, value in self.__dict__.items():
+            if name=='head_mapping':
+                if value not in ('radial','fillet_blocks'):
+                    raise ValueError('head_mapping must be radial or fillet_blocks')
+                continue
             if name=='core_mapping':
-                if value not in ('uniform','graded_2to1'):
-                    raise ValueError('core_mapping must be uniform or graded_2to1')
+                if value not in ('uniform','graded_2to1','graded_2to1_compact'):
+                    raise ValueError('core_mapping must be uniform, graded_2to1 or graded_2to1_compact')
                 continue
             if name=='boundary_mapping':
                 if value not in ('radial','runout'):
@@ -44,6 +50,8 @@ class MeshSeeds:
                 continue
             if type(value) is not int or value < 2 or value > 256:
                 raise ValueError(f'{name} seed must be an integer in [2,256]')
+        if self.head_mapping=='fillet_blocks' and (self.head_curve_segments<4 or self.head_curve_segments%2):
+            raise ValueError('Fillet-block curve count must be even and at least four')
 
 
 class RadialCad:
@@ -306,12 +314,14 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
     if not shape.is_valid or len(shape.solids()) != 1:
         raise ValueError('CAD must be one valid solid')
     if family=='socket_bolt':
-        if seeds.boundary_mapping!='radial' or seeds.core_mapping!='uniform' or seeds.z_features:
-            raise ValueError('Socket mapping currently requires radial/uniform seeds without additional feature overrides')
+        if seeds.boundary_mapping!='radial' or seeds.z_features:
+            raise ValueError('Socket mapping currently requires radial seeds without additional feature overrides')
         from .cad_socket import map_socket_bolt
         return map_socket_bolt(shape,request,seeds)
+    if seeds.head_mapping!='radial':
+        raise ValueError('Fillet-block head mapping is exposed only for socket bolts')
     sampler = RadialCad(shape, hole=family=='hex_nut')
-    if seeds.core_mapping=='graded_2to1' and family!='hex_bolt':
+    if seeds.core_mapping.startswith('graded_2to1') and family!='hex_bolt':
         raise ValueError('Graded solid-core mapping is currently exposed for external-hex bolts only')
     if seeds.boundary_mapping=='runout' and family!='hex_nut':
         raise ValueError('Runout-cap mapping is currently exposed for open nuts only')
@@ -349,9 +359,10 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         shaft_zs = _z_layers(-request['length'], 0, pitch/seeds.per_pitch)
         head_zs = _z_layers(0, sampler.zmax, sampler.zmax/seeds.head,
                             [sampler.zmax-bevel+bevel*i/12 for i in range(12)])
-        if seeds.core_mapping=='graded_2to1':
+        if seeds.core_mapping.startswith('graded_2to1'):
             from .graded_core import build_graded_bolt_section
-            section=build_graded_bolt_section(seeds.sector,seeds.core_rings,seeds.radial,diameter)
+            section=build_graded_bolt_section(seeds.sector,seeds.core_rings,seeds.radial,diameter,
+                                             compact=seeds.core_mapping=='graded_2to1_compact')
         else:
             section = build_bolt_section(seeds.sector, seeds.core_rings, seeds.radial, diameter, diameter, ref_circle=True)
         body = _sweep(section, np.concatenate((shaft_zs, head_zs[1:])), core_outer, name='CAD_BOLT_CORE')
@@ -360,6 +371,6 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         head = _sweep(ring, head_zs, lambda t,z: sampler.radii(t,max(1e-8,z))[1], core_outer, 'CAD_BOLT_HEAD')
         mesh = _join_exact(body, head, 'CAD_HEX_BOLT')
     mesh.dims = dict(request=request, seeds=seeds.__dict__, source='saved-independent-STEP')
-    if seeds.core_mapping=='graded_2to1':
+    if seeds.core_mapping.startswith('graded_2to1'):
         mesh.dims['coreGrading']=section.grading
     return mesh, shape, sampler

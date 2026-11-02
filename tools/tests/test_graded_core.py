@@ -7,6 +7,36 @@ from tools.bolthex.mesh_audit import audit_h8
 
 
 class GradedCoreTests(unittest.TestCase):
+    def test_compact_pair_keeps_boundary_and_positive_hex_quality(self):
+        old,_=paired_quad_patch()
+        points,quads=paired_quad_patch(compact=True)
+        self.assertEqual((len(points),len(quads)),(11,6))
+        np.testing.assert_array_equal(points[:8],old[:8])
+        nodes=np.vstack((np.column_stack((points,np.zeros(len(points)))),
+                         np.column_stack((points,np.ones(len(points))))))
+        elems=np.column_stack((quads,quads+len(points)))
+        quality,_=audit_h8(nodes,elems,2)
+        self.assertAlmostEqual(quality['volume'],2)
+        self.assertGreaterEqual(quality['minimumCornerScaledJacobian'],.15)
+
+    def test_compact_graded_section_preserves_ring_and_full_volume(self):
+        baseline=build_graded_bolt_section(32,2,5,6)
+        compact=build_graded_bolt_section(32,2,5,6,compact=True)
+        self.assertLess(len(compact.quads),len(baseline.quads))
+        def ring(section):
+            ids=np.unique(np.array(section.quads)[np.array(section.qband)=='ring2'])
+            return np.array(sorted(map(tuple,np.round(np.column_stack((section.x,section.y))[ids],11))))
+        np.testing.assert_array_equal(ring(compact),ring(baseline))
+        a,_=audit_h8(*self.swept(compact),2)
+        b,_=audit_h8(*self.swept(baseline),2)
+        self.assertAlmostEqual(a['volume'],b['volume'],places=12)
+        self.assertGreaterEqual(a['minimumCornerScaledJacobian'],.15)
+
+    @staticmethod
+    def swept(section):
+        mesh=_sweep(section,[0,.1],lambda t,z:3)
+        return mesh.nodes,mesh.elems
+
     def test_paired_patch_has_complete_even_boundary_and_positive_area(self):
         points,quads=paired_quad_patch()
         self.assertEqual((len(points),len(quads)),(17,12))
