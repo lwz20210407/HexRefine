@@ -20,7 +20,9 @@ test('recovered demo CLI writes verified K/INP, distinct PIDs, original surfaces
       assert.equal(report.pythonBackend,true);assert.equal(report.guiPorted,false);
       assert.ok(report.minimumCornerScaledJacobian>=.15);assert.ok(report.maximumCoordinateReadbackError<1e-8);
       const inp=await fs.readFile(path.join(out,'model.inp'));
-      assert.equal(createHash('sha256').update(inp).digest('hex'),'7ff46daa0e757b0e46db305bdbdb5640cabb33a603fbfdc4d69df2aaa71af7e0');
+      assert.equal(createHash('sha256').update(inp).digest('hex'),report.inpSHA256);
+      const canonicalWindowsText=inp.toString('utf8').replace(/\r?\n/g,'\r\n');
+      assert.equal(createHash('sha256').update(canonicalWindowsText).digest('hex'),'7ff46daa0e757b0e46db305bdbdb5640cabb33a603fbfdc4d69df2aaa71af7e0');
       const k=await fs.readFile(path.join(out,'model.k'),'utf8'),model=parseNativeLsdynaMixedKeyword(k);
       assert.deepEqual([...new Set(model.solids.map(e=>e.partId))],[1,2,3]);assert.equal(model.beams.length,0);
       const parts=JSON.parse(await fs.readFile(path.join(out,'parts-and-surfaces.json'),'utf8'));
