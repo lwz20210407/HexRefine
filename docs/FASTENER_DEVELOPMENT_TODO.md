@@ -35,7 +35,10 @@ without changing its fine ring. Daily development is now a separate 210-H8
 smoke tier (about 70 KiB), not these heavy acceptance fixtures. Representative
 complete-feature development is a separate medium tier: the M6 socket bolt
 has 160,704 H8, a 21.65 MiB K and a 19.12 MiB INP. It is not represented by
-the tiny smoke tier. No mesh QA
+the tiny smoke tier. A later explicit socket fidelity run now passes unchanged
+CAD/H8/K/INP gates with mapped fillet blocks and a compact 2:1 core: 818,112 H8,
+minimum SJ 0.272627, CAD-volume error 0.00872952%. It is not the daily default
+and does not certify native HM geometry exchange. No mesh QA
 threshold was relaxed; native host runtime budget is a separate option.
 
 ## Scope and evidence
@@ -62,13 +65,13 @@ threshold was relaxed; native host runtime budget is a separate option.
 | MESH-02 | Independent TypeScript shaft/nut foundation | PARTIAL | Separate experimental API, not equivalent full Python port |
 | MESH-03 | Whole bodies around adapted profiles | DONE, BOUNDED | Two 36,528-H8 pairs; no upstream full-product or GB conformity claim |
 | MESH-04 | CAD-driven automatic multi-block planning | PARTIAL | Saved-STEP radial intersections and shared shaft/head H8 mapping for bounded external-hex/open-nut cases; arbitrary CAD, terminating features and non-star runouts pending |
-| MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 solid core circumferential 48->96->192 grading: 3,579,648->1,845,168 H8; 960,768 fine-ring/head node positions agree within 1.01e-13 mm. Axial/isotropic 3D and 3:1 thread grading remain pending |
+| MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 external-hex case retained. New socket case uses compact 6-quad paired patches and 48->96->192->384 circumferential grading, preserving fine ring in tests. Axial/isotropic 3D and 3:1 thread grading remain pending |
 | MESH-06 | General corners, weak balance and multiple fronts | TODO | Existing broader mesh-project gaps are not resolved by profile mapping |
 | CAD-01 | Independent unmeshed design geometry | PARTIAL | Design-only `standard_cad.py`: eight real cases pass without FE input under approved CAD exchange policy; broader family cases remain |
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
-| CAD-05 | Real driver recess and blind cap geometry | PARTIAL | Socket floor-aware H8 mapper implemented; M6 complete-feature development model preserves recess and exact floor partition. Strict CAD/H8 fidelity and blind-cap topology remain pending |
+| CAD-05 | Real driver recess and blind cap geometry | PARTIAL | M6 socket floor-aware core plus three mapped fillet blocks now passes full CAD/H8/K/INP gates. Other socket specifications and blind-cap topology remain pending |
 | CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 now passes unchanged STEP/H8/K/INP/HM using opt-in planar-cap mapping, including 7,144 extra surface probes. M6 and through-nut cases retained; arbitrary runouts/recesses still unsupported |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
@@ -79,7 +82,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | STD-02 | Internal/external limits and tolerance classes | TODO | Nominal/limit models; radial clearance is not a 6g/6H model |
 | STD-03 | Validate cross-standard mappings | TODO | Similar ISO/DIN data must not automatically be relabelled GB/EN |
 | FAM-01 | Rod/stud, partial/full thread, hands/fine pitch | PARTIAL | Profile hand/phase tests done; complete family/request coverage pending |
-| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | M6 socket complete-feature H8/K/INP and diagnostic CAD+mesh HM implemented; other families and strict socket fidelity pending |
+| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | M6 socket full H8/K/INP matching now passes; native HM geometry verification and other families pending |
 | VAL-01 | Corner/Gauss/volume and boundary checks | PARTIAL | Existing case audits passed; not a proof for arbitrary imported CAD |
 | VAL-02 | Independent CAD acceptance | PARTIAL | Eight opt-in real CAD regressions pass at explicitly approved 1e-7 exchange limit. CAD/H8 QA stays volume<=1e-4, cornerSJ>=.15, nodal witness<=2e-6 mm and face-centre distance<=.02 mm |
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |
@@ -90,6 +93,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | CLEAN-01 | Keep exports on F, runtimes on D, clean duplicates | ONGOING | Do not delete active LSPP models; logs/licences/large models excluded from Git |
 | DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
 | DEV-02 | Representative complete-feature development | DONE, BOUNDED | `socket_dev` defaults to feature profile, 72 circumferential segments and 16 axial intervals/pitch. Measured pitch, tooth crest and recess dimensions; strict CAD-volume test fails and is explicitly labelled, not waived |
+| DEV-03 | Preflight counts and volume before 3D allocation | DONE, BOUNDED | `socket_plan` CLI: exact socket topology counts and independent swept-boundary volume, source hash checks, element budget rejection. 818,112 predicted equals generated. Preflight explicitly does not certify SJ, face matching or solver convergence |
 
 ## Next execution sequence
 
@@ -123,9 +127,12 @@ threshold was relaxed; native host runtime budget is a separate option.
 - The recovered cylindrical head has no internal socket and its dome nut has
   an open bore. The new independent socket mapper now stops its solid core at
   the actual CAD floor and continues a head annulus above it. The representative
-  M6 model passes H8 validity but has measured CAD-volume error 0.16266%, above
-  the unchanged 0.01% production limit. Native HM saves/reopens unchanged mesh,
-  but strict imported CAD bounds remain unverified; see SOCKET_DEVELOPMENT.md.
+  medium M6 development model retains measured CAD-volume error 0.16266% as
+  history. The new fillet-block fidelity case passes at 0.00872952%, below
+  the unchanged 0.01% production limit. Native HM geometry still remains
+  unverified: turning CAD export optimization off did not fix drift, and tight
+  import cleanup lost closed-solid topology on STEP re-export. Neither was
+  promoted to the production adapter; see SOCKET_DEVELOPMENT.md.
 - Old profile-pair meshes and standard-library CAD are different designs; their
   combination remains withdrawn. New matched bundles bind exact K/STEP hashes.
 - No complete GB/US/European universal family/tolerance catalogue exists in this
