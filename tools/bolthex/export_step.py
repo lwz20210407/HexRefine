@@ -14,7 +14,9 @@ def _value(value):
     return value() if callable(value) else value
 
 
-def export_sections(source, output, mesh_report=None):
+def export_sections(source, output, mesh_report=None, debug_discrete_brep=False):
+    if not debug_discrete_brep:
+        raise ValueError('Discrete FE-station BRep is not an accepted independent CAD model. Use --debug-discrete-brep only for diagnostics.')
     from build123d import Solid, Wire, Compound, export_step, import_step
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
@@ -92,6 +94,7 @@ def export_sections(source, output, mesh_report=None):
     if not _value(reopened.is_valid) or len(reopened.solids()) != len(records) or abs(reopened_volume - volume) / volume > 1e-8:
         raise ValueError('STEP reopen changed solids, validity or volume')
     report = dict(schemaVersion=1, representation=spec['representation'], analyticHelix=False,
+        acceptedAsIndependentCad=False, geometryIndependentOfMesh=False, diagnosticOnly=True,
         stepSHA256=hashlib.sha256(target.read_bytes()).hexdigest(), sourceSHA256=hashlib.sha256(source.read_bytes()).hexdigest(),
         solids=len(records), parts=records, volume=volume, reopenedVolume=reopened_volume,
         meshVolume=expected, relativeMeshVolumeError=None if expected is None else abs(volume - expected) / expected,
@@ -105,5 +108,6 @@ if __name__ == '__main__':
     parser.add_argument('source', type=Path)
     parser.add_argument('output', type=Path)
     parser.add_argument('--mesh-report', type=Path)
+    parser.add_argument('--debug-discrete-brep', action='store_true')
     a = parser.parse_args()
-    print(json.dumps(export_sections(a.source, a.output, a.mesh_report), indent=2))
+    print(json.dumps(export_sections(a.source, a.output, a.mesh_report, a.debug_discrete_brep), indent=2))

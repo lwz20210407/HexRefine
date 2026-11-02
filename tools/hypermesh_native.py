@@ -25,7 +25,7 @@ def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, to
 
 
 def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None,
-              associate=False, tolerance=1e-7):
+              associate=False, tolerance=1e-7, debug_discrete_cad=False):
     mesh, source_report, executable, output = [Path(p).resolve() for p in [mesh, source_report, executable, output]]
     if output.exists() or not output.parent.is_dir():
         raise ValueError('Require a new output directory with an existing parent')
@@ -44,6 +44,8 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         if cad_report is None or cad.suffix.lower() not in ('.step', '.stp'):
             raise ValueError('CAD mode requires STEP and its generation certificate')
         cr = json.loads(Path(cad_report).read_text())
+        if not debug_discrete_cad and not cr.get('geometryIndependentOfMesh', False):
+            raise ValueError('Independent design CAD is required; FE-station geometry is diagnostic only')
         if _sha(cad) != cr['stepSHA256'] or type(cr['solids']) is not int or cr['solids'] < 1:
             raise ValueError('CAD certificate does not match STEP')
         if cr['relativeMeshVolumeError'] is None or cr['relativeMeshVolumeError'] > 1e-4:
@@ -119,5 +121,6 @@ if __name__ == '__main__':
     p.add_argument('mesh');p.add_argument('source_report');p.add_argument('output')
     p.add_argument('--hmbatch', required=True);p.add_argument('--cad');p.add_argument('--cad-report')
     p.add_argument('--associate', action='store_true');p.add_argument('--tolerance', type=float, default=1e-7)
+    p.add_argument('--debug-discrete-cad', action='store_true')
     a = p.parse_args()
-    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance), indent=2))
+    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad), indent=2))

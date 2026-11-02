@@ -3,6 +3,19 @@
 Status: two bounded profile routes and native-format export adapters, not every
 upstream feature or GB product family.
 
+## Acceptance correction
+
+The FE-station ruled STEP and its CAD-plus-mesh HM outputs are **not accepted as
+independent unmeshed CAD models**. They were constructed with the FE sampling
+stations and their validity/volume/read-back checks do not establish that goal.
+The old section exporter now requires an explicit diagnostic flag; the HM CAD
+adapter rejects such geometry by default. K/INP mesh results and native HM
+mesh-only transfer evidence are separate and are not withdrawn by this correction.
+
+The replacement must generate design CAD without nodes, elements or mesh-seed
+inputs, then export STEP before the meshing stage. The older commands/evidence
+below describe the diagnostic route only, not a completed CAD-first workflow.
+
 ## Algorithms integrated
 
 1. `tools/bolthex/femssc_profile.py`: the four-point R-Z tooth construction from
