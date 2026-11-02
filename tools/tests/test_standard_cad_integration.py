@@ -23,8 +23,9 @@ class StandardCadIntegrationTests(unittest.TestCase):
             ('hex-left', dict(family='hex_bolt', standard='iso4017', size='M8-1.25', length=16, hand='left'), True),
             ('socket-M6', dict(family='socket_bolt', standard='iso4762', size='M6-1', length=12), True),
             ('socket-US', dict(family='socket_bolt', standard='asme_b18.3', size='1/4-20', length=19.05), True),
-            ('rejected-nut-M6', dict(family='hex_nut', standard='iso4032', size='M6-1'), False),
-            ('rejected-cap-M6', dict(family='cap_nut', standard='din1587', size='M6-1'), False),
+            ('nut-M6', dict(family='hex_nut', standard='iso4032', size='M6-1'), True),
+            ('cap-M6', dict(family='cap_nut', standard='din1587', size='M6-1'), True),
+            ('through-nut-M6', dict(family='hex_nut', standard='iso4032', size='M6-1',thread_ends='square'), True),
         ]
         with tempfile.TemporaryDirectory(prefix='standard-cad-tests-', dir=parent) as temporary:
             for name, request, accepted in cases:
@@ -36,7 +37,7 @@ class StandardCadIntegrationTests(unittest.TestCase):
                         self.assertFalse(result['matchedMeshVerified'])
                         self.assertEqual(result['solids'], 1)
                         self.assertTrue(result['thread']['onePitchPeriodic'])
-                        self.assertLessEqual(result['relativeReopenVolumeError'], 1e-8)
+                        self.assertLessEqual(result['relativeReopenVolumeError'], 1e-7)
                         self.assertTrue((target / 'model.step').is_file())
                     else:
                         with self.assertRaisesRegex(ValueError, 'STEP mass changed'):

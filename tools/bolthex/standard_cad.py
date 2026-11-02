@@ -20,6 +20,7 @@ import tempfile
 
 
 WAREHOUSE_COMMIT = '28696f9b4c765c3b0385ccef1d41f45de245e8ad'
+CAD_ROUNDTRIP_VOLUME_LIMIT = 1e-7  # User-approved CAD file exchange policy, 2026-11-02.
 FAMILIES = {
     'hex_bolt': ('HexHeadScrew', ('iso4017',)),
     'hex_nut': ('HexNut', ('iso4032', 'iso4033', 'iso4035')),
@@ -35,6 +36,7 @@ class CadRequest:
     size: str
     hand: str = 'right'
     length: float | None = None
+    thread_ends: str = 'library'
 
     @classmethod
     def parse(cls, data):
@@ -54,6 +56,8 @@ class CadRequest:
             raise ValueError(f'Unsupported standard for {result.family}: {result.standard}')
         if result.hand not in ('right', 'left'):
             raise ValueError('hand must be right or left')
+        if result.thread_ends not in ('library','square') or (result.thread_ends=='square' and result.family!='hex_nut'):
+            raise ValueError('square thread ends are only exposed for open hex nuts')
         if result.family.endswith('bolt'):
             if type(result.length) not in (int, float) or not math.isfinite(result.length) or result.length <= 0:
                 raise ValueError('Bolt length must be a positive finite number in mm')
@@ -153,8 +157,18 @@ def generate(request, output, source=None):
     kwargs = dict(size=request.size, fastener_type=request.standard, hand=request.hand, simple=False)
     if request.length is not None:
         kwargs['length'] = request.length
-    part = factory(**kwargs)
-    raw = list(part.solids())
+    if request.thread_ends=='square':
+        # This is a separately requested through-thread CAD design, not a
+        # modification of an existing faded-runout STEP to pass a mesh audit.
+        from bd_warehouse.thread import IsoThread
+        kwargs['simple']=True
+        part=factory(**kwargs)
+        thread=IsoThread(major_diameter=part.thread_diameter,pitch=part.thread_pitch,length=part.nut_data['m'],
+                         external=False,hand=request.hand,end_finishes=('square','square'),simple=False)
+        raw=list(part.solids())+list(thread.solids())
+    else:
+        part = factory(**kwargs)
+        raw = list(part.solids())
     if not raw:
         raise ValueError('CAD backend returned no material')
     # Never discard thread solids by selecting the largest body of a compound.
@@ -180,7 +194,7 @@ def generate(request, output, source=None):
             raise ValueError('STEP read-back lost a valid single material solid')
         reopened_mass = _mass(reopened)
         relative_error = abs(reopened_mass - mass) / mass
-        if relative_error > 1e-8:
+        if relative_error > CAD_ROUNDTRIP_VOLUME_LIMIT:
             raise ValueError(f'STEP mass changed: {relative_error}')
         _thread_check(reopened, part, request)
         _feature_check(reopened, part, request)
@@ -190,6 +204,7 @@ def generate(request, output, source=None):
                       build123dVersion='0.11.1', solids=1, rawSolids=len(raw), faces=len(shape.faces()),
                       stepSHA256=hashlib.sha256(target.read_bytes()).hexdigest(), volume=mass,
                       reopenedVolume=reopened_mass, relativeReopenVolumeError=relative_error,
+                      cadRoundtripVolumeLimit=CAD_ROUNDTRIP_VOLUME_LIMIT,
                       bbox=dict(min=list(bounds.min), max=list(bounds.max)), thread=thread, features=features,
                       meshVolume=None, relativeMeshVolumeError=None,
                       limitations=['Nominal library geometry, not certified tolerance-class limits',

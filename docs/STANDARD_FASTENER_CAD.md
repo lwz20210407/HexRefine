@@ -73,7 +73,8 @@ that every extreme or short geometry passes Boolean/STEP validation.
 6. Check socket void/floor and cap bore/closed material where applicable.
 7. Use span-aware Gauss-Kronrod mass integration on helical BSpline surfaces;
    require the estimated integration error below 1e-9 and STEP relative
-   volume change no greater than 1e-8. Failures are not relabelled as passes.
+   volume change no greater than 1e-7. The CAD-only exchange limit was explicitly
+   approved by the user on 2026-11-02; mesh quality/distance/volume gates did not change.
 8. CAD/mesh matching remains false. This certificate alone cannot satisfy the
    native HM workflow's separate matching-mesh volume gate.
 
@@ -87,19 +88,20 @@ that every extreme or short geometry passes Boolean/STEP validation.
   some thin nuts/short screws are therefore explicitly rejected.
 - H8 geometry association, socket/cap H8 partitioning and near-thread 2:1/3:1
   reduction are unfinished. Do not combine old mismatched mesh with this CAD.
-- The M6 ISO4032 test currently fails the strict STEP mass round-trip gate
-  (~1.43e-8 relative), despite valid solids. It is a rejected regression case,
-  not an accepted CAD delivery. No tolerance was increased to pass it.
-- M6 DIN1587 likewise fails this gate (~1.10e-8). The closed-cap probe before
-  export passes, but that alone is not accepted as complete CAD round-trip.
+- M6 ISO4032 (~1.43e-8) and DIN1587 (~1.10e-8) failed the former 1e-8 CAD
+  exchange policy. Both pass the user-approved 1e-7 policy in the new regression.
+  The old evidence file retains the earlier rejected results as historical data.
+  CAD acceptance alone does not imply these families have a matching H8 mesh.
 - Upstream tables themselves still need standards verification. For example,
   this pin supplies ISO4017 M6 head height 4.24 mm. The adapter reproduces that
   value, not an independently certified nominal/limit dimension.
 
 ## Recorded regression
 
-`docs/validation/fastener-standard-cad-20261102.json` records five accepted and
-two rejected real cases. Reproduce the optional CAD checks with:
+`docs/validation/fastener-standard-cad-20261102.json` records the historical five
+accepted/two rejected cases under 1e-8. The current optional regression has eight
+accepted cases under the approved CAD-only 1e-7 policy, including an explicitly
+requested square-ended through-thread M6 nut. Reproduce with:
 
 ```powershell
 $env:HEXREFINE_CAD_SOURCE = '<pinned-checkout>'
@@ -107,8 +109,11 @@ $env:BOLTHEX_TEST_ROOT = '<existing-task-directory>'
 python -B -m unittest discover -s tools/tests -p test_standard_cad_integration.py -v
 ```
 
-Use the CAD interpreter. The test explicitly checks both accepted output and
-rejected-case non-publication; a green negative test does not mean its CAD was
-accepted. The design-only request guards need no CAD installation.
+Use the CAD interpreter. The design-only request guards need no CAD installation.
+
+For open hex nuts, `thread_ends: "square"` is a separately requested full-through
+CAD design; the default `"library"` preserves the upstream faded runout. This
+option does not alter an existing STEP or fix the original faded-runout H8 case.
+See `CAD_MAPPED_FASTENERS.md` for matching mesh and native HM semantics.
 
 See `FASTENER_DEVELOPMENT_TODO.md` for all remaining fastener requirements.

@@ -27,6 +27,8 @@ class StandardCadRequestTests(unittest.TestCase):
             CadRequest.parse(dict(family='hex_bolt', standard='GB5783', size='M6-1', length=12))
 
     def test_family_semantics(self):
+        with self.assertRaisesRegex(ValueError,'only exposed'):
+            CadRequest.parse(dict(family='hex_bolt',standard='iso4017',size='M6-1',length=12,thread_ends='square'))
         with self.assertRaises(ValueError):
             CadRequest.parse(dict(family='cap_nut', standard='din1587', size='M6-1', length=6))
         with self.assertRaises(ValueError):
