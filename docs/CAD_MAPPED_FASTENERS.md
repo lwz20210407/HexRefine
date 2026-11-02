@@ -103,13 +103,15 @@ and native save/reopen SHA checks do not require writing another giant K.
 
 ## Known gaps
 
-- The original library-faded M8 nut still fails local face-distance validation
-  around its runout. It is not accepted merely because volume and SJ pass.
+- The original library-faded M8 nut now passes using the opt-in planar-cap
+  runout map; the old constant-angle radial mode still fails that case.
+  See `FASTENER_RUNOUT_AND_CORE.md`. Other runouts are not generally covered.
 - Socket recesses, blind domes, drill tips and arbitrary CAD require different
   block topology; this mapper refuses those families.
-- Near-thread 2:1/3:1 count reduction and coarse interior planning are unfinished.
-  The M6 bolt fidelity case currently has about 3.58 million H8 cells and is a
-  heavy validation case, not an optimized production meshing recommendation.
+- Circumferential 2:1 solid-core grading now reduces the M6 fidelity case from
+  3.58 to 1.85 million H8, retaining its fine ring. Axial/3D and 3:1 count
+  reduction remain unfinished. These are slow acceptance fixtures, not default
+  development tests or production recommendations; use the small smoke tier.
 - Large-HM transport performance must be tracked separately from K/INP/CAD
   matching. A small HM smoke test is never a substitute for the full specimen.
 - GUI, complete upstream example ports, standards editions and fit tolerances

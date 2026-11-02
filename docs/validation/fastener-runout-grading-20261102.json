@@ -1,0 +1,179 @@
+{
+  "date": "2026-11-02",
+  "timezone": "Asia/Shanghai",
+  "cases": [
+    {
+      "case": "m8-original-runout-matched",
+      "sourceStepSHA256": "0aa5781b7a940f95946a6bfee95588c82510a45f0c4699a35f538f47d42627ca",
+      "h8": 917568,
+      "nodes": 1072512,
+      "minimumCornerSJ": 0.17539165417377903,
+      "relativeCadVolumeError": 1.233038479778041e-05,
+      "matching": {
+        "allBoundaryFacesChecked": true,
+        "boundaryNodes": 309312,
+        "nearestShellProbeNodes": 256,
+        "maximumProbedNodeDistance": 6.485082515216264e-13,
+        "maximumFaceCentreDistanceBound": 0.019345124276635595,
+        "maximumFaceCentreRadialError": 0.046130604167208045,
+        "exactFaceDistanceQueries": 96,
+        "radialFaces": 305856,
+        "planarFaces": 3456,
+        "rayIntersections": 176420,
+        "maximumIntersectionLineResidual": 8.881784197001252e-16,
+        "seamFallbacks": 0,
+        "maximumSeamFallbackDistance": 0.0,
+        "nodeDistanceLimit": 2e-06,
+        "faceCentreDistanceLimit": 0.02,
+        "runoutMapping": {
+          "mode": "planar-radial-cap-reparameterization",
+          "caps": [
+            {
+              "face": 2,
+              "theta": 270.0000000061045,
+              "zmin": 0.262784076119,
+              "zmax": 0.362215894301,
+              "jumpSign": -1.0,
+              "refA": 290.0,
+              "refB": 291.25,
+              "window": 55.0,
+              "verticesZ": [
+                0.262784076119,
+                0.298295439755,
+                0.326704530665,
+                0.362215894301
+              ],
+              "peakSampledJump": 0.06150755514017181
+            },
+            {
+              "face": 39,
+              "theta": 248.3999999712303,
+              "zmin": 6.437784076382,
+              "zmax": 6.537215894564,
+              "jumpSign": 1.0,
+              "refA": 227.5,
+              "refB": 228.75,
+              "window": 55.0,
+              "verticesZ": [
+                6.437784076382,
+                6.473295440083,
+                6.501704530992,
+                6.537215894564
+              ],
+              "peakSampledJump": 0.06150755449724299
+            }
+          ],
+          "snapHeight": 0.025,
+          "snappedBoundaryNodes": 32,
+          "maximumSnappedNodeDistance": 7.792324381058448e-08,
+          "originalCadUnchanged": true
+        },
+        "criticalRunoutFaces": 893,
+        "additionalRunoutSurfaceProbes": 7144,
+        "scope": "All face centres; CAD ray witnesses for side nodes; 256 independent nearest-shell node probes"
+      },
+      "kSHA256": "874b18ff6947e5b10e687a7b8ef1e62c50d560e7e2937456fd920ba297fad8c4",
+      "inpSHA256": "68f46f0f00b2c839af4cca219b8ee183e9e8e27d278a3b760c4e5d895f52f79d",
+      "coreGrading": null,
+      "nativeHm": {
+        "sha256": "1e6ded86017c41e8c66903975a184faabd326d961700fdeebddd1877be9a6ca1",
+        "surfaces": 107,
+        "solids": 1,
+        "h8": 917568,
+        "savedAndReopened": true,
+        "meshDataUnchanged": true,
+        "sourcePartIds": [
+          1
+        ],
+        "sourcePartIdsVerified": true
+      }
+    },
+    {
+      "case": "m6-graded-core-matched",
+      "sourceStepSHA256": "d6de3cf315cd2b398d1c9054614eb9d8ab1399d16b809c527b65a3d356655049",
+      "h8": 1845168,
+      "nodes": 1926372,
+      "minimumCornerSJ": 0.22414391823119267,
+      "relativeCadVolumeError": 9.130859084913013e-05,
+      "matching": {
+        "allBoundaryFacesChecked": true,
+        "boundaryNodes": 160610,
+        "nearestShellProbeNodes": 256,
+        "maximumProbedNodeDistance": 1.4085860808039129e-12,
+        "maximumFaceCentreDistanceBound": 0.019965649028121035,
+        "maximumFaceCentreRadialError": 0.019965649028121035,
+        "exactFaceDistanceQueries": 0,
+        "radialFaces": 154176,
+        "planarFaces": 6432,
+        "rayIntersections": 154556,
+        "maximumIntersectionLineResidual": 8.881784197001252e-16,
+        "seamFallbacks": 4,
+        "maximumSeamFallbackDistance": 8.691742178654509e-07,
+        "nodeDistanceLimit": 2e-06,
+        "faceCentreDistanceLimit": 0.02,
+        "runoutMapping": null,
+        "criticalRunoutFaces": 0,
+        "additionalRunoutSurfaceProbes": 0,
+        "scope": "All face centres; CAD ray witnesses for side nodes; 256 independent nearest-shell node probes"
+      },
+      "kSHA256": "9441b6fc718cf12c2e22fa13ca27c406c04deac1e3d999b2830054920774cd75",
+      "inpSHA256": "f3b626d419ea92603866c09650c1b1696e0792629cf096b940f5854deb89e739",
+      "coreGrading": {
+        "mode": "circumferential-2to1",
+        "levels": 2,
+        "coreCircumferentialSeeds": 48,
+        "threadCircumferentialSeeds": 192,
+        "transitionInnerRadius": 1.2000000000000002,
+        "transitionOuterRadius": 1.7999999999999998,
+        "fineOuterRingPreserved": true,
+        "axialGrading": false
+      },
+      "nativeHm": {
+        "sha256": "497132572516808cd86e308e3e92b1e11f884afe39d2477c6c8e5ab0bbe0ab19",
+        "surfaces": 173,
+        "solids": 1,
+        "h8": 1845168,
+        "savedAndReopened": true,
+        "meshDataUnchanged": true,
+        "sourcePartIds": [
+          1
+        ],
+        "sourcePartIdsVerified": true
+      }
+    }
+  ],
+  "fineFocusComparison": {
+    "originalKSHA256": "e75d9dba297e81b828ae0a8c5acfbbd808708ad9b8a499b6c97ad09eae8fe08a",
+    "gradedKSHA256": "9441b6fc718cf12c2e22fa13ca27c406c04deac1e3d999b2830054920774cd75",
+    "stepSHA256": "d6de3cf315cd2b398d1c9054614eb9d8ab1399d16b809c527b65a3d356655049",
+    "matchedNodes": 960768,
+    "minimumRadius": 1.7999999999999998,
+    "maximumCoordinateDifference": 1.0036416142611415e-13,
+    "unchangedFineFocus": true,
+    "originalElements": 3579648,
+    "gradedElements": 1845168,
+    "elementReductionFraction": 0.48453926196095254,
+    "scope": "Unordered node geometry in fine outer ring and head; IDs are regenerated, not preserved"
+  },
+  "defaultDevelopment": {
+    "totalH8": 210,
+    "h8PerPatch": 105,
+    "artifactBytes": 70518,
+    "maximumH8PerPatch": 256,
+    "maximumArtifactBytes": 1048576,
+    "notFullModelAcceptance": true,
+    "slowTestsExplicitOptIn": true
+  },
+  "meshAcceptanceUnchanged": {
+    "relativeCadVolume": 0.0001,
+    "minimumCornerSJ": 0.15,
+    "nodeDistanceMm": 2e-06,
+    "surfaceProbeMm": 0.02
+  },
+  "limitations": [
+    "Planar radial caps only; overlapping supports rejected",
+    "Circumferential grading only, no axial grading",
+    "CLI/Python backend, GUI binding not complete",
+    "No universal standards/tolerance or solver-validation claim"
+  ]
+}

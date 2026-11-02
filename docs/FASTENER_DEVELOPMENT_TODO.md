@@ -20,7 +20,8 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
 - [ ] Reproduce all researched upstream complete examples (profiles alone are partial).
 - [ ] Complete independent design CAD for all exposed standard/family cases.
 - [ ] Mesh that CAD with matching H8 geometry, including recesses and blind ends.
-- [ ] Store true design CAD plus its corresponding mesh in a native HM model.
+- [x] Store true independent CAD plus matching H8 in HM for the stated M6/M8 cases.
+- [ ] Cover every exposed fastener family/combination with the same CAD+H8+HM workflow.
 - [ ] Complete GB/ISO/DIN/ASME coverage, tolerances and verified equivalences.
 - [ ] Add local near-thread count coarsening and complete GUI integration.
 
@@ -28,7 +29,10 @@ Latest bounded increment: eight real CAD cases pass the user-approved CAD-only
 STEP exchange policy (1e-7). M6 bolt and explicitly square-ended through-thread
 M6 nut pass full-body CAD/H8/K/INP matching. Both also have real saved/reopened
 CAD+mesh HM, including the 3.58-million-cell bolt and source PID preservation.
-The original library-faded M8 nut is still rejected locally. No mesh QA
+The original library-faded M8 nut now also passes via the explicit planar-cap
+runout mapping. M6 circumferential 2:1 core grading cuts H8 count by 48.45%
+without changing its fine ring. Daily development is now a separate 210-H8
+smoke tier (about 70 KiB), not these heavy acceptance fixtures. No mesh QA
 threshold was relaxed; native host runtime budget is a separate option.
 
 ## Scope and evidence
@@ -37,7 +41,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | --- | --- | --- | --- |
 | BASE-01 | Preserve original worktree and isolate development | DONE | Dedicated worktree/branch; unrelated CAD/flange edits preserved |
 | BASE-02 | Stage local Git backups | DONE | c438c7f, 9b5a55f, 4c4a93a; subsequent fixes separate |
-| BASE-03 | Push validated development to user's fork | DONE | `fork/codex/bolt-thread-native`, b0c5086 remotely verified; further validated increments use the same branch |
+| BASE-03 | Push validated development to user's fork | DONE, INCREMENTS | `fork/codex/bolt-thread-native`; staged increments are pushed/verified separately, not merged into main |
 | REC-01 | Recover readable Python mesh/part/INP core | DONE | Authorized recovered `tools/bolthex`, no EXE/bytecode runtime needed |
 | REC-02 | Replay original built-in assembly | DONE | M16 bolt/nut/threaded plate INP byte-identical |
 | REC-03 | Catalogue replay across original shapes/sizes | DONE, BOUNDED | 224 fixed-seed cases, 14 sizes; not arbitrary parameters or 224 GUI runs |
@@ -55,14 +59,14 @@ threshold was relaxed; native host runtime budget is a separate option.
 | MESH-02 | Independent TypeScript shaft/nut foundation | PARTIAL | Separate experimental API, not equivalent full Python port |
 | MESH-03 | Whole bodies around adapted profiles | DONE, BOUNDED | Two 36,528-H8 pairs; no upstream full-product or GB conformity claim |
 | MESH-04 | CAD-driven automatic multi-block planning | PARTIAL | Saved-STEP radial intersections and shared shaft/head H8 mapping for bounded external-hex/open-nut cases; arbitrary CAD, terminating features and non-star runouts pending |
-| MESH-05 | Near-thread 2:1 / 3:1 count reduction | TODO | Preserve tooth focus, core and far-field; no substitute uniform over-refinement |
+| MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 solid core circumferential 48->96->192 grading: 3,579,648->1,845,168 H8; 960,768 fine-ring/head node positions agree within 1.01e-13 mm. Axial/isotropic 3D and 3:1 thread grading remain pending |
 | MESH-06 | General corners, weak balance and multiple fronts | TODO | Existing broader mesh-project gaps are not resolved by profile mapping |
 | CAD-01 | Independent unmeshed design geometry | PARTIAL | Design-only `standard_cad.py`: eight real cases pass without FE input under approved CAD exchange policy; broader family cases remain |
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
 | CAD-05 | Real driver recess and blind cap geometry | PARTIAL | Socket and closed-cap CAD accepted; matching H8 recess/cap topology is not implemented |
-| CAD-06 | CAD/FE boundary matching | PARTIAL | M6 bolt + separately designed square-ended M6 nut pass complete H8, CAD volume, all face-centre checks, node witnesses, K and INP audits; original faded M8 runout still rejected |
+| CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 now passes unchanged STEP/H8/K/INP/HM using opt-in planar-cap mapping, including 7,144 extra surface probes. M6 and through-nut cases retained; arbitrary runouts/recesses still unsupported |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
 | IO-03 | Real native mesh-only HM | DONE | HyperMesh2022.3 save/clear/reopen; not renamed Tcl/CMF |
@@ -77,10 +81,11 @@ threshold was relaxed; native host runtime budget is a separate option.
 | VAL-02 | Independent CAD acceptance | PARTIAL | Eight opt-in real CAD regressions pass at explicitly approved 1e-7 exchange limit. CAD/H8 QA stays volume<=1e-4, cornerSJ>=.15, nodal witness<=2e-6 mm and face-centre distance<=.02 mm |
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |
 | VAL-04 | Extreme/odd seeds, tolerance/clearance, invalid inputs | PARTIAL | Limited guards; complete product-family validation matrix pending |
-| VAL-05 | Regression coverage after current changes | PARTIAL, STATED SCOPE | This increment: Python 41 pass/3 optional skips, all three optional methods rerun in CAD runtime (eight CAD cases plus two saved-STEP tests); Node CLI 4/4 and typecheck pass. Prior full TS baseline 1204 pass/2 skips; full TS suite not rerun for this increment |
+| VAL-05 | Regression coverage after current changes | PARTIAL, STATED SCOPE | Latest fast suite: 47 pass/5 optional skips; two new saved-runout CAD methods run separately; 210-H8 dev CLI and tiny Node export pass. Original M8 and graded M6 full acceptance recorded once. Slow eight-case CAD construction and full TS suite not rerun in this iteration |
 | UI-01 | Unified request/schema and GUI integration | TODO | Clearly distinguish Node, recovered Python and optional CAD/host backends |
 | DOC-01 | Screenshots/HTML track honest acceptance | PARTIAL | Latest CAD/H8 review shows both complete M6 models, independent CAD and actual LSPP screenshots, K/INP/STEP/HM links, and original M8 runout rejection; broader cases pending |
 | CLEAN-01 | Keep exports on F, runtimes on D, clean duplicates | ONGOING | Do not delete active LSPP models; logs/licences/large models excluded from Git |
+| DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
 
 ## Next execution sequence
 
@@ -88,9 +93,10 @@ threshold was relaxed; native host runtime budget is a separate option.
 2. DONE, BOUNDED: independent stock CAD via a pinned optional backend; eight
    cases pass the explicitly approved CAD-only 1e-7 exchange policy. Retain
    former 1e-8 rejection evidence as history, not as current failures.
-3. PARTIAL: full-body external-hex bolt and square-ended through-nut matching
-   plus actual native HM validated. Next: original faded runout topology and
-   interior/near-thread count reduction; do not replace failed CAD cases silently.
+3. PARTIAL: full-body bolt, square-ended nut and original faded M8 runout now
+   validated with native HM. Circumferential core grading is implemented. Next:
+   broader runout/recess families and axial/3D thread-region grading. Iterate
+   using the small development tier, not repeated million-cell exports.
 4. Replay full upstream mesh cases and implement remaining source-specific
    methods: femssc drill-tip/washer, sunwhale full meshes, TrueGrid Screw and
    Coreform open-kernel partition equivalents.
@@ -103,12 +109,13 @@ threshold was relaxed; native host runtime budget is a separate option.
 - The CAD-only exchange policy changed from 1e-8 to 1e-7 with explicit user
   approval on 2026-11-02. Earlier M6 ISO4032/DIN1587 rejections are historical;
   eight CAD cases pass the current policy. No FE/CAD or SJ gate changed.
-- The original faded M8 nut still has a local runout face-distance failure;
-  passing global volume and SJ does not accept it. The square-ended through-nut
-  is a distinct requested design, not the original case repaired.
+- The old constant-angle radial mapper still fails the faded M8 cap, retained
+  as a negative control. The new planar-cap-aware mode passes the original
+  unchanged STEP. Other caps/overlapping supports need separate coverage.
 - The current M6 bolt fidelity model has 3.58 million H8 cells. It now passes
   full K/INP/CAD/native-HM audits, with a 900-second host processing budget.
-  It is still overly dense for many production uses; count reduction is pending.
+  A 1.85-million-H8 core-graded counterpart now preserves the fine ring and passes
+  full audits. Both are optional high-fidelity references, not daily test defaults.
 - The recovered cylindrical head has no internal socket and its dome nut has
   an open bore. New independent socket CAD does not fix the corresponding H8
   mesh automatically: new topology/partition planning is still required.
