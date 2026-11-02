@@ -1,6 +1,6 @@
 # Fastener development TODO
 
-Updated: 2026-11-02, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-03, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
@@ -40,6 +40,10 @@ CAD/H8/K/INP gates with mapped fillet blocks and a compact 2:1 core: 818,112 H8,
 minimum SJ 0.272627, CAD-volume error 0.00872952%. It is not the daily default
 and does not certify native HM geometry exchange. No mesh QA
 threshold was relaxed; native host runtime budget is a separate option.
+Canonical mm design dimensions and the ASME 1/4-20 socket case now also pass:
+1,244,256 H8, minSJ 0.272627, CAD-volume error 0.00899857%. Production socket
+generation rejects volume errors before 3D allocation and reuses CAD queries.
+See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 
 ## Scope and evidence
 
@@ -71,7 +75,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
-| CAD-05 | Real driver recess and blind cap geometry | PARTIAL | M6 socket floor-aware core plus three mapped fillet blocks now passes full CAD/H8/K/INP gates. Other socket specifications and blind-cap topology remain pending |
+| CAD-05 | Real driver recess and blind cap geometry | PARTIAL | M6 and explicit ASME 1/4-20 socket cases pass full CAD/H8/K/INP gates using floor-aware core and fillet blocks. Other socket specifications and blind-cap topology remain pending |
 | CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 now passes unchanged STEP/H8/K/INP/HM using opt-in planar-cap mapping, including 7,144 extra surface probes. M6 and through-nut cases retained; arbitrary runouts/recesses still unsupported |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
@@ -79,7 +83,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | IO-04 | STEP+mesh native HM transfer | DONE, BOUNDED | Through-nut 385,920 H8/117 surfaces/1 solid and bolt 3,579,648 H8/173 surfaces/1 solid; native save/clear/reopen, unchanged mesh SHA, verified CAD bounds and source PID1. General families/performance remain limited |
 | IO-05 | No-motion CAD association | NOT VERIFIED | Tested host moved ~1e-7 despite no-snap; strict gate rejected, not loosened |
 | IO-06 | Direct native-CAD witness diagnostic | DONE, BOUNDED | `hypermesh_geometry_probe`: read-only HM, hash-bound STEP reference, finite surface probes plus off-surface trim controls. Actual socket HM: 10/241 surface witnesses exceed unchanged 2e-6 mm; diagnostic rejects, does not certify exact CAD or change production gates |
-| STD-01 | Versioned GB/ISO/DIN/ASME catalogue | PARTIAL | Pinned CAD tables enumerable for selected ISO/DIN/ASME families; no certified edition/GB crosswalk; recovered 14-size table is not authoritative |
+| STD-01 | Versioned GB/ISO/DIN/ASME catalogue | PARTIAL | Pinned CAD tables plus canonical mm design diameter/pitch; actual ASME 1/4-20 mapping verified. No certified editions/GB crosswalk or universal tolerance coverage |
 | STD-02 | Internal/external limits and tolerance classes | TODO | Nominal/limit models; radial clearance is not a 6g/6H model |
 | STD-03 | Validate cross-standard mappings | TODO | Similar ISO/DIN data must not automatically be relabelled GB/EN |
 | FAM-01 | Rod/stud, partial/full thread, hands/fine pitch | PARTIAL | Profile hand/phase tests done; complete family/request coverage pending |
@@ -94,7 +98,7 @@ threshold was relaxed; native host runtime budget is a separate option.
 | CLEAN-01 | Keep exports on F, runtimes on D, clean duplicates | ONGOING | Do not delete active LSPP models; logs/licences/large models excluded from Git |
 | DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
 | DEV-02 | Representative complete-feature development | DONE, BOUNDED | `socket_dev` defaults to feature profile, 72 circumferential segments and 16 axial intervals/pitch. Measured pitch, tooth crest and recess dimensions; strict CAD-volume test fails and is explicitly labelled, not waived |
-| DEV-03 | Preflight counts and volume before 3D allocation | DONE, BOUNDED | `socket_plan` CLI: exact socket topology counts and independent swept-boundary volume, source hash checks, element budget rejection. 818,112 predicted equals generated. Preflight explicitly does not certify SJ, face matching or solver convergence |
+| DEV-03 | Preflight counts and volume before 3D allocation | DONE, BOUNDED | `socket_plan` CLI plus mandatory production socket volume preflight/cache reuse. Excessive/nonfinite errors reject before `_sweep`; fixed 1e-4 gate not relaxed. Counts/budgets and final whole-body QA remain separate |
 
 ## Next execution sequence
 
