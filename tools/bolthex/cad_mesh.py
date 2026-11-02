@@ -2,7 +2,8 @@
 
 The STEP is generated independently. Radial intersections of that saved BRep,
 not the legacy thread formulas, define the external and internal boundaries.
-Socket and blind-cap topologies are intentionally not supported here.
+Socket bolts use a separate floor-aware block mapper. Blind-cap topologies
+remain unsupported.
 """
 from __future__ import annotations
 
@@ -85,6 +86,7 @@ class RadialCad:
 
     def radii(self, theta, z, _retry=True):
         z = min(self.zmax, max(self.zmin, z))
+        expected_hole=bool(self.hole(z)) if callable(self.hole) else self.hole
         key = (round(theta % 360, 10), round(z, 11))
         if key in self.cache:
             return self.cache[key]
@@ -115,8 +117,8 @@ class RadialCad:
             point = self.intersector.Pnt(i)
             self.max_hit_residual = max(self.max_hit_residual, abs(point.X()-t*math.cos(a)), abs(point.Y()-t*math.sin(a)))
         hits.sort()
-        if len(hits) == (2 if self.hole else 1):
-            result = tuple(hits) if self.hole else (0.0,hits[0])
+        if len(hits) == (2 if expected_hole else 1):
+            result = tuple(hits) if expected_hole else (0.0,hits[0])
             self.cache[key]=result
             self.queries+=1
             return result
@@ -143,7 +145,7 @@ class RadialCad:
                 stations=np.linspace(0,self.limit,65)
                 occupied=[inside(r) for r in stations]
                 indices=[i for i,v in enumerate(occupied) if v]
-                if not indices or indices[-1]==64 or indices!=list(range(indices[0],indices[-1]+1)) or (indices[0]==0)==self.hole:
+                if not indices or indices[-1]==64 or indices!=list(range(indices[0],indices[-1]+1)) or (indices[0]==0)==expected_hole:
                     raise ValueError('Classifier cannot bracket one valid radial material interval')
                 def bisect(lo,hi,state):
                     for _ in range(40):
@@ -153,7 +155,7 @@ class RadialCad:
                         else:
                             hi=mid
                     return (lo+hi)/2
-                result=(0.0 if not self.hole else bisect(stations[indices[0]-1],stations[indices[0]],False),
+                result=(0.0 if not expected_hole else bisect(stations[indices[0]-1],stations[indices[0]],False),
                         bisect(stations[indices[-1]],stations[indices[-1]+1],True))
                 for r in result:
                     if r==0:
@@ -216,6 +218,9 @@ def _z_layers(start, end, spacing, features=()):
 
 def estimate_mesh_volume(sampler, request, seeds):
     """Exact swept-linear boundary volume before allocating interior H8 cells."""
+    if request['family']=='socket_bolt':
+        from .cad_socket import estimate_socket_volume
+        return estimate_socket_volume(sampler,request,seeds)
     pitch=float(request['size'].split('-')[1])
     flats=2*max(abs(sampler.bounds.min.Y),abs(sampler.bounds.max.Y))
     bevel=(flats/math.cos(math.pi/6)-flats)*math.tan(math.pi/12)/2
@@ -294,12 +299,17 @@ def map_saved_cad(step, certificate, seeds=MeshSeeds()):
         raise ValueError('STEP certificate/hash mismatch')
     request = certificate['request']
     family = request['family']
-    if family not in ('hex_bolt', 'hex_nut') or not request['size'].startswith('M'):
-        raise ValueError('Only metric external-hex bolts and open hex nuts have mapped topology')
+    if family not in ('hex_bolt', 'hex_nut','socket_bolt') or not request['size'].startswith('M'):
+        raise ValueError('Only metric hex bolts, open hex nuts and socket bolts have mapped topology')
     from build123d import import_step
     shape = import_step(step)
     if not shape.is_valid or len(shape.solids()) != 1:
         raise ValueError('CAD must be one valid solid')
+    if family=='socket_bolt':
+        if seeds.boundary_mapping!='radial' or seeds.core_mapping!='uniform' or seeds.z_features:
+            raise ValueError('Socket mapping currently requires radial/uniform seeds without additional feature overrides')
+        from .cad_socket import map_socket_bolt
+        return map_socket_bolt(shape,request,seeds)
     sampler = RadialCad(shape, hole=family=='hex_nut')
     if seeds.core_mapping=='graded_2to1' and family!='hex_bolt':
         raise ValueError('Graded solid-core mapping is currently exposed for external-hex bolts only')

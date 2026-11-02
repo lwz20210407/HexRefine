@@ -24,7 +24,8 @@ def validate(directory):
     actual,boundary=audit_h8(nodes,elements,source['boundaryEuler'])
     if actual['nodes']!=source['nodes'] or actual['elements']!=source['elements'] or abs(actual['volume']-source['volume'])/source['volume']>1e-10:
         raise ValueError('Independent K counts/volume audit disagrees with generated mesh')
-    actual.update(kSHA256=source['kSHA256'],reader='ansys-dyna-core',matchedGenerationCertificate=True)
+    actual.update(kSHA256=source['kSHA256'],reader='ansys-dyna-core',matchedGenerationCertificate=True,
+                  sourcePurpose=source.get('purpose','full-model-acceptance'),notFullModelAcceptance=source.get('notFullModelAcceptance',False))
     (directory/'independent-k-audit.json').write_text(json.dumps(actual,indent=2))
     return actual
 

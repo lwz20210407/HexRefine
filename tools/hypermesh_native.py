@@ -33,6 +33,26 @@ def _cached_boundary_count(report, validated):
     return count
 
 
+def _check_development_profile(report,cad_report,mesh_bytes):
+    if report.get('notFullModelAcceptance') is not True or cad_report.get('developmentOnly') is not True:
+        raise ValueError('Development HM requires explicitly labelled development certificates')
+    profile=report.get('developmentProfile','smoke')
+    profiles={'smoke':(10000,20000,2*1024*1024),'feature':(200000,300000,32*1024*1024)}
+    if profile not in profiles or cad_report.get('developmentProfile','smoke')!=profile:
+        raise ValueError('Unknown or inconsistent development profile')
+    maximum_h8,maximum_nodes,maximum_bytes=profiles[profile]
+    if report['elements']>maximum_h8 or report['nodes']>maximum_nodes or mesh_bytes>maximum_bytes:
+        raise ValueError('Development HM exceeds its small-mesh budget')
+    if cad_report.get('developmentKSHA256')!=report['kSHA256'] or cad_report.get('stepSHA256')!=report.get('sourceStepSHA256'):
+        raise ValueError('Development CAD/K bindings do not match')
+    if not cad_report.get('acceptedAsIndependentCad'):
+        raise ValueError('Development CAD must still be valid independently generated geometry')
+    for field,limit in [('minimumCornerScaledJacobian',.15),('minimumGaussJacobian',0)]:
+        value=report.get(field,float('nan'))
+        if not math.isfinite(value) or value<limit or (field=='minimumGaussJacobian' and value==0):
+            raise ValueError('Development mode does not waive H8 validity/quality')
+
+
 def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,)):
     source = Path(__file__).with_suffix('.tcl').read_text(encoding='utf-8')
     values = dict(MESH=str(mesh).encode().hex(), CAD=('' if cad is None else str(cad)).encode().hex(),
@@ -51,7 +71,7 @@ def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, to
 
 
 def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None,
-              associate=False, tolerance=1e-7, debug_discrete_cad=False,native_k_export=False,host_timeout=300):
+              associate=False, tolerance=1e-7, debug_discrete_cad=False,native_k_export=False,host_timeout=300,development_only=False):
     if type(host_timeout) is not int or not 1<=host_timeout<=3600:
         raise ValueError('Host timeout must be an integer in [1,3600] seconds')
     mesh, source_report, executable, output = [Path(p).resolve() for p in [mesh, source_report, executable, output]]
@@ -68,6 +88,8 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         raise ValueError('Source mesh certificate must have positive finite volume')
     if not math.isfinite(tolerance) or not 0 < tolerance <= 1e-5:
         raise ValueError('Association tolerance must be positive and no more than 1e-5; snapping is disabled')
+    if development_only and (cad is None or associate or debug_discrete_cad):
+        raise ValueError('Development HM requires independent CAD without association or discrete-CAD override')
     solids = 0
     if cad is not None:
         cad = Path(cad).resolve()
@@ -78,9 +100,12 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
             raise ValueError('Independent design CAD is required; FE-station geometry is diagnostic only')
         if _sha(cad) != cr['stepSHA256'] or type(cr['solids']) is not int or cr['solids'] < 1:
             raise ValueError('CAD certificate does not match STEP')
-        if not debug_discrete_cad and (not cr.get('matchedMeshVerified') or cr.get('matchedKSHA256') != report['kSHA256']):
+        if development_only:
+            _check_development_profile(report,cr,mesh.stat().st_size)
+        elif not debug_discrete_cad and (not cr.get('matchedMeshVerified') or cr.get('matchedKSHA256') != report['kSHA256']):
             raise ValueError('CAD boundary matching must be certified for this exact K file')
-        if cr['relativeMeshVolumeError'] is None or cr['relativeMeshVolumeError'] > 1e-4:
+        error=cr.get('relativeMeshVolumeError')
+        if error is None or not math.isfinite(error) or error<0 or (not development_only and error>1e-4):
             raise ValueError('CAD has not been checked against this discrete mesh volume')
         if abs(cr['meshVolume'] - report['volume']) / report['volume'] > 1e-10:
             raise ValueError('CAD certificate refers to a different mesh volume')
@@ -148,13 +173,23 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
     if _sha(mesh) != report['kSHA256']:
         raise RuntimeError('Source K changed during native export')
     cad_bounds = None
+    bounds_verified=False
+    bounds_error=None
     if cad is not None and not debug_discrete_cad:
         cad_bounds=[float(value) for value in stats.get('cadBounds','').split()]
         expected=cr['bbox']['min']+cr['bbox']['max']
-        if len(cad_bounds)!=6 or max(abs(a-b) for a,b in zip(cad_bounds,expected))>1e-5:
+        if len(cad_bounds)!=6 or not all(math.isfinite(value) for value in cad_bounds):
+            raise RuntimeError('Native HM geometry bounds are invalid')
+        bounds_error=max(abs(a-b) for a,b in zip(cad_bounds,expected))
+        bounds_verified=bounds_error<=1e-5
+        if not bounds_verified and not development_only:
             raise RuntimeError('Native HM geometry bounds differ from the independent CAD')
+        if development_only:
+            scale=max(expected[i+3]-expected[i] for i in range(3))
+            if not math.isfinite(scale) or scale<=0 or bounds_error>scale*.01:
+                raise RuntimeError('Development CAD appears grossly shifted or scaled')
     database = output / 'model.hm'
-    result = dict(schemaVersion=1, mode='cad-and-mesh' if cad else 'mesh-only',
+    result = dict(schemaVersion=1, mode='development-cad-and-mesh' if development_only else 'cad-and-mesh' if cad else 'mesh-only',
         host=str(executable), nativeHm=True, hmSHA256=_sha(database), sourceKSHA256=_sha(mesh),
         sourceStepSHA256=None if cad is None else _sha(cad), hostExitCode=process.returncode,
         **{key:int(stats[key]) for key in ['nodes', 'elements', 'surfaces', 'solids', 'boundaryNodes']},
@@ -163,11 +198,14 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         reusedExactIndependentKAudit=reused_audit,
         nativeKeywordRoundtrip=native_k_export,
         sourcePartIds=source_pids,geometryComponentStart=max(source_pids)+1000,
-        sourcePartIdsVerified=True,diagnosticOnly=bool(debug_discrete_cad),
+        sourcePartIdsVerified=True,diagnosticOnly=bool(debug_discrete_cad or development_only),
+        notFullModelAcceptance=development_only,
+        strictCadMeshMatchingVerified=cad is not None and not debug_discrete_cad and not development_only,
+        measuredCadMeshVolumeError=None if cad is None else cr.get('relativeMeshVolumeError'),
         independentCadVerified=cad is not None and not debug_discrete_cad,
         hostTimeoutSeconds=host_timeout,
         savedAndReopened=True, meshDataUnchanged=True, nodeSnapping=False,
-        cadBounds=cad_bounds,cadBoundsVerified=cad_bounds is not None,
+        cadBounds=cad_bounds,cadBoundsVerified=bounds_verified,maximumCadBoundsDifference=bounds_error,
         associationTolerance=tolerance if associate else None,
         limitations=['Native HM requires installed HyperMesh; K/INP do not.',
           'CAD mode retains the supplied STEP representation; it does not manufacture missing CAD.',
@@ -184,5 +222,6 @@ if __name__ == '__main__':
     p.add_argument('--debug-discrete-cad', action='store_true')
     p.add_argument('--native-k-export', action='store_true')
     p.add_argument('--host-timeout',type=int,default=300)
+    p.add_argument('--development-only',action='store_true')
     a = p.parse_args()
-    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad,a.native_k_export,a.host_timeout), indent=2))
+    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad,a.native_k_export,a.host_timeout,a.development_only), indent=2))

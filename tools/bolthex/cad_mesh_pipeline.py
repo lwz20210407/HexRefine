@@ -36,27 +36,34 @@ def _write_inp(mesh, path):
         stream.write('*END PART\n')
 
 
-def _face_worker_init(step,request):
-    global _FACE_SAMPLER,_FACE_REQUEST
+def _face_worker_init(step,request,features=None):
+    global _FACE_SAMPLER,_FACE_REQUEST,_FACE_FEATURES
     from build123d import import_step
     from .cad_mesh import RadialCad
-    _FACE_SAMPLER=RadialCad(import_step(step),request['family']=='hex_nut')
+    features=features or {}
+    hole=(lambda z:z>features['socketFloor']+1e-9) if request['family']=='socket_bolt' else request['family']=='hex_nut'
+    _FACE_SAMPLER=RadialCad(import_step(step),hole)
     _FACE_REQUEST=request
+    _FACE_FEATURES=features
 
 
 def _face_worker(block):
     sampler,request=_FACE_SAMPLER,_FACE_REQUEST
+    features=globals().get('_FACE_FEATURES',{})
     maximum=radial_maximum=0.0
     exact=planes=radials=0
     for x,y,z,planar in block:
         theta=math.degrees(math.atan2(y,x))%360
         radius=math.hypot(x,y)
         if planar:
-            allowed=[sampler.zmin,sampler.zmax]+([0] if request['family']=='hex_bolt' else [])
+            allowed=[sampler.zmin,sampler.zmax]+([0] if request['family'].endswith('_bolt') else [])+list(features.values())
             plane_error=min(abs(z-p) for p in allowed)
             if plane_error>1e-8:
                 raise ValueError('Unexpected interior free planar face')
-            if request['family']=='hex_bolt' and abs(z)<1e-10:
+            if request['family']=='socket_bolt' and abs(z-features['socketFloor'])<1e-8:
+                inner=0.0
+                outer=sampler.radii(theta,features['socketFloor']+1e-6)[0]
+            elif request['family'].endswith('_bolt') and abs(z)<1e-10:
                 inner=sampler.radii(theta,-1e-8)[1]
                 outer=sampler.radii(theta,1e-8)[1]
             else:
@@ -109,7 +116,7 @@ def _cad_boundary_check(mesh, boundary, shape, sampler, request, step):
     del faces
     jobs=[blocks[i:i+4096] for i in range(0,len(blocks),4096)]
     critical_jobs=[critical_blocks[i:i+4096] for i in range(0,len(critical_blocks),4096)]
-    with ProcessPoolExecutor(max_workers=2,initializer=_face_worker_init,initargs=(str(step),request)) as pool:
+    with ProcessPoolExecutor(max_workers=2,initializer=_face_worker_init,initargs=(str(step),request,mesh.dims.get('featurePlanes',{}))) as pool:
         results=list(pool.map(_face_worker,jobs))
         critical_results=list(pool.map(_face_worker,critical_jobs))
     all_results=results+critical_results
@@ -177,12 +184,13 @@ def generate(cad_directory, output, node, seeds=MeshSeeds()):
             raise ValueError('Independent INP read-back changed mesh geometry or H8 connectivity')
         report.update(schemaVersion=1,generator='independent-STEP-mapped-H8',request=request,seeds=asdict(seeds),
                       coreGrading=mesh.dims.get('coreGrading'),
+                      socket=mesh.dims.get('socket'),
                       matchedMeshVerified=True,matching=matching,relativeCadVolumeError=relative,
                       volumeLimit=1e-4,minimumAllowedCornerSJ=.15,inpReadbackCoordinateError=error,
                       kSHA256=exported['kSHA256'],inpSHA256=_sha(stage/'model.inp'),partId=1,
-                      limitations=['Bounded metric external-hex bolt/open-nut topology only',
+                      limitations=['Bounded metric bolt/open-nut/socket topology only',
                                    'H8 approximates CAD curved faces; finite interpolation error is measured',
-                                   'No socket/cap mesh or GB/tolerance-class certification'])
+                                   'No general cap mesh or GB/tolerance-class certification'])
         certificate.update(meshVolume=report['volume'],relativeMeshVolumeError=relative,matchedMeshVerified=True,
                            matchedKSHA256=report['kSHA256'],matchedINPSHA256=report['inpSHA256'],matching=matching,
                            sourceCadCertificateSHA256=_sha(source_certificate))

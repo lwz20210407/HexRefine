@@ -17,6 +17,7 @@ function write(text){fs.writeSync(fd,text);hash.update(text);}
 try{
   write('*KEYWORD\n$ Mesh-only mapped from independent design STEP; units mm.\n*NODE\n');
   if(meta.inspectionOnly===true)write('$ INSPECTION SUBSET ONLY -- not a complete analysis model.\n');
+  if(meta.developmentOnly===true)write('$ DEVELOPMENT TEST ONLY -- not production acceptance.\n');
   let lines=[];
   for(let i=0;i<meta.nodes;i++){
     lines.push(fixedInteger(i+1,8,'node')+[0,1,2].map(a=>fixedFloat(nodes.readDoubleLE(i*24+a*8),16,12,'compact')).join(''));

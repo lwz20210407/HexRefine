@@ -4,11 +4,39 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from tools.hypermesh_native import make_tcl, export_hm, _cached_boundary_count
+from tools.hypermesh_native import make_tcl, export_hm, _cached_boundary_count, _check_development_profile
 from tools.bolthex.export_step import export_sections
 
 
 class NativeExportGuards(unittest.TestCase):
+    def test_feature_profile_keeps_medium_complete_mesh_but_rejects_mismatched_profiles(self):
+        report=dict(nodes=169939,elements=160704,kSHA256='mesh',sourceStepSHA256='cad',
+                    notFullModelAcceptance=True,developmentProfile='feature',
+                    minimumCornerScaledJacobian=.2884,minimumGaussJacobian=.00004)
+        cad=dict(developmentOnly=True,developmentProfile='feature',developmentKSHA256='mesh',
+                 stepSHA256='cad',acceptedAsIndependentCad=True)
+        _check_development_profile(report,cad,22703695)
+        for field,value in [('elements',200001),('nodes',300001),
+                            ('minimumCornerScaledJacobian',float('nan')),
+                            ('minimumGaussJacobian',float('inf'))]:
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                _check_development_profile(dict(report,**{field:value}),cad,22703695)
+        with self.assertRaisesRegex(ValueError,'inconsistent'):
+            _check_development_profile(report,dict(cad,developmentProfile='smoke'),22703695)
+        with self.assertRaisesRegex(ValueError,'budget'):
+            _check_development_profile(report,cad,32*1024*1024+1)
+
+    def test_small_development_profile_is_explicit_and_cannot_disable_h8_quality(self):
+        report=dict(nodes=100,elements=80,kSHA256='mesh',sourceStepSHA256='cad',notFullModelAcceptance=True,
+                    minimumCornerScaledJacobian=.3,minimumGaussJacobian=.01)
+        cad=dict(developmentOnly=True,developmentKSHA256='mesh',stepSHA256='cad',acceptedAsIndependentCad=True)
+        _check_development_profile(report,cad,1000)
+        for field,value in [('notFullModelAcceptance',False),('elements',10001),('minimumCornerScaledJacobian',.149),('minimumGaussJacobian',0)]:
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                _check_development_profile(dict(report,**{field:value}),cad,1000)
+        with self.assertRaisesRegex(ValueError,'budget'):
+            _check_development_profile(report,cad,2*1024*1024+1)
+
     def test_native_layout_reserves_geometry_ids_and_keeps_duplicate_k_optional(self):
         text=make_tcl(Path('F:/in.k'),Path('F:/in.step'),Path('F:/out'),Path('F:/template'),8,1,1,False,1e-7,[1,2,3,4,5,6,7,8])
         self.assertIn('*renumber components 1 1001 1 0 0',text)
