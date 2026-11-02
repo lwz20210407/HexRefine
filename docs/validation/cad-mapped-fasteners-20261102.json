@@ -1,0 +1,167 @@
+{
+  "date": "2026-11-02",
+  "timezone": "Asia/Shanghai",
+  "scope": "Two distinct component fixtures; not a fitted/contact assembly",
+  "policy": {
+    "cadExchangeRelativeVolume": 1e-07,
+    "explicitlyApprovedByUser": true,
+    "meshCadRelativeVolume": 0.0001,
+    "minimumCornerSJ": 0.15,
+    "nodeDistanceMm": 2e-06,
+    "faceCentreDistanceMm": 0.02,
+    "meshThresholdsUnchanged": true
+  },
+  "runtime": {
+    "cad": "build123d0.11.1 + bd_warehouse0.3.0",
+    "inpReader": "meshio5.3.5",
+    "kReader": "ansys-dyna-core",
+    "nativeHost": "HyperMesh2022.3"
+  },
+  "validation": {
+    "pythonPassed": 41,
+    "pythonOptionalSkippedThenRerun": 3,
+    "cadCases": 8,
+    "savedStepMappingTests": 2,
+    "nodeCliTests": 4,
+    "typecheck": "passed",
+    "fullTypeScriptSuiteThisIncrement": "not rerun; previous baseline 1204 pass/2 optional skips"
+  },
+  "cases": [
+    {
+      "name": "M6 full-thread external-hex bolt",
+      "design": {
+        "family": "hex_bolt",
+        "standard": "iso4017",
+        "size": "M6-1",
+        "hand": "right",
+        "length": 12
+      },
+      "seeds": {
+        "sector": 32,
+        "core_rings": 2,
+        "radial": 5,
+        "per_pitch": 64,
+        "head": 24
+      },
+      "nodes": 3663012,
+      "h8": 3579648,
+      "minimumCornerSJ": 0.22414391823119267,
+      "minimumGaussJacobian": 1.6189413037282756e-06,
+      "volume": 640.4703570991392,
+      "relativeCadVolumeError": 9.130859084913013e-05,
+      "matching": {
+        "allBoundaryFacesChecked": true,
+        "boundaryNodes": 164930,
+        "nearestShellProbeNodes": 256,
+        "maximumProbedNodeDistance": 1.408540359351245e-12,
+        "maximumFaceCentreDistanceBound": 0.019965649028121035,
+        "maximumFaceCentreRadialError": 0.019965649028121035,
+        "exactFaceDistanceQueries": 0,
+        "radialFaces": 154176,
+        "planarFaces": 10752,
+        "rayIntersections": 154556,
+        "maximumIntersectionLineResidual": 8.881784197001252e-16,
+        "seamFallbacks": 4,
+        "maximumSeamFallbackDistance": 8.691742178654509e-07,
+        "nodeDistanceLimit": 2e-06,
+        "faceCentreDistanceLimit": 0.02,
+        "scope": "All face centres; CAD ray witnesses for side nodes; 256 independent nearest-shell node probes"
+      },
+      "kSHA256": "e75d9dba297e81b828ae0a8c5acfbbd808708ad9b8a499b6c97ad09eae8fe08a",
+      "inpSHA256": "49149a9fa31b577bbf49c94f64c62b8cae1723e1660c4f165231fffe2fd46702",
+      "stepSHA256": "d6de3cf315cd2b398d1c9054614eb9d8ab1399d16b809c527b65a3d356655049",
+      "nativeHm": {
+        "sha256": "5fdbab0b2fd1ffed99f9146a6d576edaee329fcba8497b95b2b1e8aa2078dcb0",
+        "solids": 1,
+        "surfaces": 173,
+        "nodes": 3663012,
+        "h8": 3579648,
+        "savedAndReopened": true,
+        "meshDataUnchanged": true,
+        "sourcePartIdsPreserved": true,
+        "sourcePartIds": [
+          1
+        ],
+        "cadBoundsVerified": true,
+        "associationRequested": false,
+        "associationNotVerified": true
+      }
+    },
+    {
+      "name": "M6 square-ended through-thread hex nut",
+      "design": {
+        "family": "hex_nut",
+        "standard": "iso4032",
+        "size": "M6-1",
+        "hand": "right",
+        "length": null,
+        "thread_ends": "square"
+      },
+      "seeds": {
+        "sector": 32,
+        "core_rings": 2,
+        "radial": 6,
+        "per_pitch": 64,
+        "head": 24,
+        "z_features": []
+      },
+      "nodes": 451584,
+      "h8": 385920,
+      "minimumCornerSJ": 0.22493784052009494,
+      "minimumGaussJacobian": 6.194234068265658e-05,
+      "volume": 329.96389748899753,
+      "relativeCadVolumeError": 1.982537372589082e-05,
+      "matching": {
+        "allBoundaryFacesChecked": true,
+        "boundaryNodes": 130944,
+        "nearestShellProbeNodes": 256,
+        "maximumProbedNodeDistance": 1.3978468924801562e-12,
+        "maximumFaceCentreDistanceBound": 0.018188901689386583,
+        "maximumFaceCentreRadialError": 0.018188901689386583,
+        "exactFaceDistanceQueries": 0,
+        "radialFaces": 128640,
+        "planarFaces": 2304,
+        "rayIntersections": 64512,
+        "maximumIntersectionLineResidual": 8.881784197001252e-16,
+        "seamFallbacks": 0,
+        "maximumSeamFallbackDistance": 0.0,
+        "nodeDistanceLimit": 2e-06,
+        "faceCentreDistanceLimit": 0.02,
+        "scope": "All face centres; CAD ray witnesses for side nodes; 256 independent nearest-shell node probes"
+      },
+      "kSHA256": "7a6e9f121c8e9dcc27b237703122c257b1b610bc7eee58519f36da1c6adb2b03",
+      "inpSHA256": "7305cf84f618d69075e1602f7bce7aa992194f44c4782dc0234b3dacf3f8c957",
+      "stepSHA256": "fd74c115dbb6c691dfe7ad2325f74afc8b8edfda4c1a7082043392486ed16ec5",
+      "nativeHm": {
+        "sha256": "c9c5aedcecb54d2803357acc9670140bf5ebca575eaf9fe9aa7130ab95900f33",
+        "solids": 1,
+        "surfaces": 117,
+        "nodes": 451584,
+        "h8": 385920,
+        "savedAndReopened": true,
+        "meshDataUnchanged": true,
+        "sourcePartIdsPreserved": true,
+        "sourcePartIds": [
+          1
+        ],
+        "cadBoundsVerified": true,
+        "associationRequested": false,
+        "associationNotVerified": true
+      }
+    }
+  ],
+  "negativeControl": {
+    "case": "Original library-faded M8 nut",
+    "accepted": false,
+    "reason": "Runout face distance still exceeds .02 mm despite positive SJ and acceptable global volume",
+    "notSilentlyReplacedByThroughNut": true
+  },
+  "notCompleted": [
+    "Generic runout topology",
+    "Socket/cap/drill/washer H8 partitions",
+    "Near-thread 2:1/3:1 count reduction",
+    "Full GB/ISO/DIN/ASME limits and fit classes",
+    "Complete upstream example ports",
+    "GUI integration and no-motion association"
+  ]
+}
