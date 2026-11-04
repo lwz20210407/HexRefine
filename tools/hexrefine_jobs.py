@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import threading
+import time
 
 
 class NativeMeshJob:
@@ -54,7 +55,17 @@ class NativeMeshJob:
     def _persist(self):
         temporary = self.directory / "status.json.partial"
         temporary.write_text(json.dumps(self._state, ensure_ascii=True, indent=2), encoding="utf-8")
-        temporary.replace(self.directory / "status.json")
+        # Windows readers/virus scanners can briefly deny atomic replacement.
+        # Retry only transient Windows lock/access errors; never delete the old
+        # state or hide a persistent permissions failure.
+        for attempt in range(8):
+            try:
+                temporary.replace(self.directory / "status.json")
+                break
+            except PermissionError as exc:
+                if getattr(exc,"winerror",None) not in (5,32,33) or attempt==7:
+                    raise
+                time.sleep(min(.005*2**attempt,.05))
 
     def snapshot(self):
         with self._lock:
