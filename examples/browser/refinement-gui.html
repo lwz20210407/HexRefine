@@ -737,6 +737,7 @@
           </div>
         </div>
         <section id="gui61-controls"></section>
+        <section id="native-joint-controls"></section>
         <section id="transition-band-controls"></section>
         <section>
           <h2>Grid</h2>
@@ -1230,6 +1231,7 @@
 
     <script src="./runtime-config.js"></script>
     <script type="module">
+      import {mountNativeJointWorkbench} from "../../dist/native-joint-workbench.js";
       import {
         generateGui61,
         generateGui61Repair,
@@ -8578,6 +8580,12 @@
             return response.result;
           } finally {setBusy(false);}
         }
+      });
+      mountNativeJointWorkbench(document.querySelector("#native-joint-controls"), {
+        available: window.HEXREFINE_RUNTIME?.nativeJointAvailable === true,
+        isBusy: () => busy,
+        setBusy,
+        show: result => {gui61Controller.invalidate();gui61ViewMode="solid";installGui61Result(result);}
       });
       syncKindControls();
       syncExportKindOptions();
