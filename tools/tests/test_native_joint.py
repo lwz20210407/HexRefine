@@ -22,7 +22,7 @@ class NativeJointTests(unittest.TestCase):
         self.assertGreaterEqual(result['report']['quality']['minimumCornerScaledJacobian'],.15)
 
     def test_budgets_and_incompatible_geometry_reject(self):
-        for values in (dict(element_limit=1),dict(sector=5),dict(across_flats=12),dict(plate_x=20),dict(handedness='unknown')):
+        for values in (dict(element_limit=1),dict(sector=5),dict(across_flats=12),dict(plate_x=20),dict(handedness='unknown'),dict(connection_mode='auto')):
             with self.subTest(values=values),self.assertRaises(ValueError):build_native_joint(replace(NativeJointSpec(),**values))
 
     def test_unknown_parameters_do_not_silently_disappear(self):
@@ -44,3 +44,20 @@ class NativeJointTests(unittest.TestCase):
         stack=build_native_joint(NativeJointSpec(axial=JointAxialSpec(shank_length=16,plate_count=4)))
         self.assertEqual(len(stack['parts']),6)
         self.assertEqual(set(stack['partIds']),set(range(1,7)))
+
+    def test_separate_nodes_preserve_geometry_without_bonding(self):
+        shared=build_native_joint()
+        separate=build_native_joint(NativeJointSpec(connection_mode='separate'))
+        report=separate['report']
+        self.assertEqual(report['connection'],'separate-nodes-no-coupling')
+        self.assertEqual(report['sharedNodes'],0)
+        self.assertTrue(report['nodeOwnership']['componentNodeSetsDisjoint'])
+        self.assertEqual(report['nodeOwnership']['sharedNodePairs'],[])
+        self.assertEqual(len(separate['nodes']),sum(len(p.nodes) for p in separate['parts']))
+        self.assertGreater(len(separate['nodes']),len(shared['nodes']))
+        self.assertTrue(shared['report']['nodeOwnership']['sharedNodePairs'])
+        np.testing.assert_allclose(shared['nodes'][shared['elements']],separate['nodes'][separate['elements']],rtol=0,atol=1e-9)
+        self.assertAlmostEqual(report['quality']['volume'],shared['report']['quality']['volume'],places=9)
+        inventories=[set(separate['elements'][separate['partIds']==pid].ravel()) for pid in range(1,5)]
+        for i,a in enumerate(inventories):
+            for b in inventories[i+1:]:self.assertFalse(a&b)

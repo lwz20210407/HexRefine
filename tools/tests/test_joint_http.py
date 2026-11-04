@@ -53,6 +53,29 @@ class JointHttpTests(unittest.TestCase):
             self.assertEqual(caught.exception.code,code)
         self.assertEqual(len(self.jobs.jobs),0)
 
+    def test_separate_mode_reaches_actual_k_and_inp(self):
+        request=dict(schemaVersion=1,parameters={'connection_mode':'separate'})
+        job=json.loads(self.call('/api/native-joint/jobs','POST',request)[1])
+        done=self.terminal(job['id']);self.assertEqual(done['state'],'succeeded',done)
+        self.assertEqual(done['report']['connectionMode'],'separate')
+        self.assertTrue(done['report']['nodeOwnership']['componentNodeSetsDisjoint'])
+        from tools.bolthex.native_joint import NativeJointSpec,build_native_joint
+        reference=build_native_joint(NativeJointSpec(connection_mode='separate'))
+        self.assertEqual(done['report']['quality']['nodes'],len(reference['nodes']))
+        text=self.call(done['files']['model.k'])[1].decode();records=[];solid=False
+        for line in text.splitlines():
+            if line.startswith('*'):solid=line.strip()=='*ELEMENT_SOLID'
+            elif solid and line.strip() and not line.startswith('$'):
+                values=[int(line[i:i+8]) for i in range(0,80,8)]
+                records.append(values)
+        owners={}
+        for _,pid,*nodes in records:
+            for node in nodes:owners.setdefault(node,set()).add(pid)
+        self.assertTrue(all(len(pids)==1 for pids in owners.values()))
+        self.assertEqual(len(records),10440)
+        inp=self.call(done['files']['merged.inp'])[1].decode()
+        self.assertIn('*ELSET, ELSET=E_PLATE_2',inp)
+
     def test_cancel_and_failure_do_not_publish_downloads(self):
         request=dict(schemaVersion=1,parameters={})
         job=json.loads(self.call('/api/native-joint/jobs','POST',request)[1])

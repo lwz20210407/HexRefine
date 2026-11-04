@@ -31,6 +31,7 @@ class NativeJointSpec:
     head_layers:int=5
     taper_length:float|None=None
     handedness:str='right'
+    connection_mode:str='shared'
     element_limit:int=200000
 
     @classmethod
@@ -63,6 +64,24 @@ def _merge_boundaries(parts,boundaries):
             mapping.append(existing)
         cells.extend(np.asarray(mapping)[part.elems]);pids.extend([pid]*len(part.elems))
     return np.asarray(nodes),np.asarray(cells,dtype=np.int64),np.asarray(pids,dtype=np.int32),shared
+
+
+def _separate_parts(parts):
+    offset=0;nodes=[];cells=[];pids=[]
+    for pid,part in enumerate(parts,1):
+        nodes.append(part.nodes);cells.append(part.elems+offset)
+        pids.extend([pid]*len(part.elems));offset+=len(part.nodes)
+    return np.concatenate(nodes),np.concatenate(cells),np.asarray(pids,dtype=np.int32),0
+
+
+def _node_ownership(cells,pids,names):
+    inventories=[np.unique(cells[pids==pid]) for pid in range(1,len(names)+1)]
+    pairs=[]
+    for i,a in enumerate(inventories):
+        for j in range(i+1,len(inventories)):
+            common=np.intersect1d(a,inventories[j],assume_unique=True)
+            if len(common):pairs.append(dict(parts=[names[i],names[j]],nodes=len(common)))
+    return dict(componentNodeSetsDisjoint=not pairs,sharedNodePairs=pairs)
 
 
 def _readback_part_blocks(path,parts):
@@ -102,6 +121,7 @@ def build_native_joint(spec=NativeJointSpec()):
         if type(value) is not int or not lo<=value<=hi:raise ValueError(f'Invalid {name}')
     if spec.sector%4:raise ValueError('sector must be divisible by four to retain exact rectangle corners')
     if spec.handedness not in ('right','left'):raise ValueError('Unknown thread handedness')
+    if spec.connection_mode not in ('shared','separate'):raise ValueError('Unknown joint connection mode')
     n=6*spec.sector;r=spec.diameter/2;p=spec.axial.pitch
     if spec.across_flats<=spec.diameter:raise ValueError('Head/nut flats must exceed shaft diameter')
     if r-.541266*p<=.6*r:raise ValueError('Thread root intersects the fixed core support')
@@ -148,8 +168,12 @@ def build_native_joint(spec=NativeJointSpec()):
         part.regions=[part.name]*len(part.elems);part.region_names=[part.name]
         quality,boundary=audit_h8(part.nodes,part.elems,2 if part.name=='BOLT' else 0)
         boundaries.append(boundary);part_reports.append(dict(name=part.name,**quality))
-    nodes,cells,pids,shared=_merge_boundaries(parts,boundaries)
-    quality,boundary=audit_h8(nodes,cells,2)
+    nodes,cells,pids,shared=(_merge_boundaries(parts,boundaries) if spec.connection_mode=='shared' else _separate_parts(parts))
+    expected_euler=2 if spec.connection_mode=='shared' else sum(p['boundaryEuler'] for p in part_reports)
+    quality,boundary=audit_h8(nodes,cells,expected_euler)
+    ownership=_node_ownership(cells,pids,[part.name for part in parts])
+    if spec.connection_mode=='separate' and (shared or not ownership['componentNodeSetsDisjoint']):
+        raise ValueError('Separate components unexpectedly share node IDs')
     if len(cells)!=count:raise ValueError('Native joint allocation count mismatch')
     relative=abs(sum(row['volume'] for row in part_reports)-quality['volume'])/quality['volume']
     if relative>1e-10:raise ValueError('Assembly changed summed component volume')
@@ -157,7 +181,8 @@ def build_native_joint(spec=NativeJointSpec()):
                 quality=quality,parts=part_reports,sharedNodes=shared,estimatedElements=count,
                 relativeAssemblyVolumeError=relative,physicalEnvelope=envelope.knots,
                 geometryReference='analytical-thread-field',independentCadVerified=False,solverVerified=False,
-                connection='shared-nodes-bonded',externalApplicationRequired=False,
+                connectionMode=spec.connection_mode,nodeOwnership=ownership,
+                connection='shared-nodes-bonded' if spec.connection_mode=='shared' else 'separate-nodes-no-coupling',externalApplicationRequired=False,
                 limitations=['Bounded axis-aligned hex bolt/open hex nut/rectangle stack only',
                              'Not independent CAD or standards/tolerance certification',
                              'No friction/contact/preload model or count-transition templates'])
@@ -197,7 +222,7 @@ def generate(spec,output,node):
                 raise ValueError('Merged INP element set changed')
         report['inpReadbackCoordinateError']=error
         report['partsInpReadback']=_readback_part_blocks(stage/'parts.inp',result['parts'])
-        report['inpSemantics']=dict(merged='shared-node single part with component ELSETs',
+        report['inpSemantics']=dict(merged=('shared-node' if spec.connection_mode=='shared' else 'disjoint-node')+' single part with component ELSETs',
                                     parts='separate Part/Instance records; no inter-part coupling defined')
         from .cad_mesh_pipeline import _sha
         report['inpSHA256']={name:_sha(stage/name) for name in ('merged.inp','parts.inp')}
