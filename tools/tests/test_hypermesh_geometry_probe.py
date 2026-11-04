@@ -1,5 +1,5 @@
 import unittest
-from tools.hypermesh_geometry_probe import evaluate,make_tcl,validate_reference
+from tools.hypermesh_geometry_probe import evaluate,evaluate_crosscheck,make_tcl,validate_reference
 
 
 class NativeGeometryProbeTests(unittest.TestCase):
@@ -33,6 +33,32 @@ class NativeGeometryProbeTests(unittest.TestCase):
         tcl=make_tcl('F:/case}; error injected; #.hm','F:/output.txt',self.reference)
         self.assertNotIn('error injected',tcl)
         self.assertIn('hm_findclosestpointonsurface',tcl)
+
+    def test_query_crosscheck_cannot_choose_the_favorable_result(self):
+        raw='volume 1\n0 .00003 1\ndistance 0 0 1\n1 .5 2\ndistance 1 .5 2\ncomplete 2 failedQueries 0\n'
+        report=evaluate_crosscheck(self.reference,raw)
+        self.assertTrue(report['distanceQuery']['sampledWitnessesPassed'])
+        self.assertFalse(report['closestPointQuery']['sampledWitnessesPassed'])
+        self.assertFalse(report['sampledWitnessesPassed']);self.assertFalse(report['queryAgreementPassed'])
+        raw='volume 1\n0 0 1\ndistance 0 0 1\n1 .5 2\ndistance 1 0 2\ncomplete 2 failedQueries 0\n'
+        report=evaluate_crosscheck(self.reference,raw)
+        self.assertEqual(report['distanceQuery']['failedControls'],1)
+        self.assertFalse(report['sampledWitnessesPassed'])
+
+    def test_crosscheck_requires_complete_unique_records_from_both_methods(self):
+        raw='volume 1\n0 0 1\ndistance 0 0 1\n1 .5 2\ncomplete 2 failedQueries 0\n'
+        with self.assertRaises(ValueError):evaluate_crosscheck(self.reference,raw)
+        with self.assertRaises(ValueError):evaluate_crosscheck(self.reference,raw.replace('distance 0 0 1','distance 0 0 1\ndistance 0 0 1'))
+        good=raw.replace('1 .5 2\n','1 .5 2\ndistance 1 .5 2\n')
+        self.assertTrue(evaluate_crosscheck(self.reference,good)['sampledWitnessesPassed'])
+        tcl=make_tcl('F:/input.hm','F:/output.txt',self.reference,cross_check=True)
+        self.assertIn('hm_getdistancefromnearestsurface',tcl)
+        self.assertNotIn('@CROSSCHECK@',tcl)
+
+    def test_missing_role_and_nonobject_rows_are_rejected(self):
+        for reference in ([],dict(points=[None,self.reference['points'][1]]),
+                          dict(points=[dict(point=[1,0,0],sourceDistance=0),self.reference['points'][1]])):
+            with self.subTest(reference=reference),self.assertRaises(ValueError):validate_reference(reference)
 
 
 if __name__=='__main__':unittest.main()
