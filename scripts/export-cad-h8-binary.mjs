@@ -6,6 +6,8 @@ import {fixedInteger,fixedFloat} from '../dist/lsdyna-format-internal.js';
 const root=path.resolve(process.argv[2]??'');
 const meta=JSON.parse(fs.readFileSync(path.join(root,'mesh-binary.json'),'utf8'));
 if(meta.schemaVersion!==1||!Number.isSafeInteger(meta.nodes)||!Number.isSafeInteger(meta.elements)||meta.nodes<8||meta.elements<1)throw new Error('Invalid H8 binary manifest');
+const reference=meta.geometryReference??'independent-step';
+if(!['independent-step','analytic-thread-field'].includes(reference))throw new Error('Unsupported geometry reference');
 const nodes=fs.readFileSync(path.join(root,'nodes.f64')),elements=fs.readFileSync(path.join(root,'elements.i32'));
 if(nodes.length!==meta.nodes*24||elements.length!==meta.elements*32)throw new Error('Binary mesh length mismatch');
 const target=path.join(root,'model.k');
@@ -15,7 +17,10 @@ let fd=fs.openSync(partial,'wx');
 const hash=createHash('sha256');
 function write(text){fs.writeSync(fd,text);hash.update(text);}
 try{
-  write('*KEYWORD\n$ Mesh-only mapped from independent design STEP; units mm.\n*NODE\n');
+  const provenance=reference==='analytic-thread-field'
+    ?'$ Mesh-only helical thread band; continuous radius field, not independent CAD; units mm.'
+    :'$ Mesh-only mapped from independent design STEP; units mm.';
+  write('*KEYWORD\n'+provenance+'\n*NODE\n');
   if(meta.inspectionOnly===true)write('$ INSPECTION SUBSET ONLY -- not a complete analysis model.\n');
   if(meta.developmentOnly===true)write('$ DEVELOPMENT TEST ONLY -- not production acceptance.\n');
   let lines=[];

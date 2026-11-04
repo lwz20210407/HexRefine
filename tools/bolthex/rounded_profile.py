@@ -14,6 +14,10 @@ class RoundedResearchThreadProfile:
     pitch: float
     handedness: str = 'right'
     starts: int = 1
+    external_rounding_ratio: float = math.sqrt(3)/12
+    internal_rounding_ratio: float = math.sqrt(3)/24
+    crest_height_fraction: float = .125
+    female_flat_fraction: float = 5/16
 
     def __post_init__(self):
         if any(not isinstance(x, (int, float)) or isinstance(x, bool) or not math.isfinite(x) or not 0 < x <= 1e6
@@ -21,6 +25,12 @@ class RoundedResearchThreadProfile:
             raise ValueError('diameter and pitch must be positive, finite and bounded')
         if self.handedness not in ('left', 'right') or type(self.starts) is not int or not 1 <= self.starts <= 8:
             raise ValueError('invalid handedness or starts')
+        values=(self.external_rounding_ratio,self.internal_rounding_ratio,self.crest_height_fraction,self.female_flat_fraction)
+        if any(type(x) not in (int,float) or not math.isfinite(x) or not 0<x<1 for x in values):
+            raise ValueError('rounding and profile fractions must be finite and between zero and one')
+        if (math.sqrt(3)*self.external_rounding_ratio>=1-self.crest_height_fraction
+                or self.female_flat_fraction>=1-math.sqrt(3)*self.internal_rounding_ratio):
+            raise ValueError('rounded profile transitions leave no compatible straight flank')
         if self.root_radius <= 0 or self.root_radius <= .6 * self.major_radius:
             raise ValueError('rounded root must stay outside this bounded O-grid core')
 
@@ -34,7 +44,7 @@ class RoundedResearchThreadProfile:
 
     @property
     def root_radius(self):
-        return self.major_radius - .875 * self.height + math.sqrt(3) / 12 * self.pitch
+        return self.major_radius - (1-self.crest_height_fraction)*self.height+self.external_rounding_ratio*self.pitch
 
     @property
     def minor_diameter(self):
@@ -42,7 +52,7 @@ class RoundedResearchThreadProfile:
 
     @property
     def female_min_radius(self):
-        return self.major_radius - (1 - .125 - 5 / 16) * self.height
+        return self.major_radius-(1-self.crest_height_fraction-self.female_flat_fraction)*self.height
 
     @property
     def lead(self):
@@ -57,22 +67,22 @@ class RoundedResearchThreadProfile:
 
     def radius(self, z, theta_degrees):
         phi = self._angle(z, theta_degrees)
-        rho = math.sqrt(3) / 12 * self.pitch
+        rho = self.external_rounding_ratio*self.pitch
         join = math.sqrt(3) * math.pi * rho / self.pitch
-        baseline = self.major_radius - .875 * self.height
+        baseline = self.major_radius-(1-self.crest_height_fraction)*self.height
         if phi <= join:
             distance = self.pitch * phi / (2 * math.pi)
             return baseline + 2 * rho - math.sqrt(max(0, rho * rho - distance * distance))
-        if phi <= .875 * math.pi:
+        if phi <= (1-self.crest_height_fraction)*math.pi:
             return baseline + self.height * phi / math.pi
         return self.major_radius
 
     def internal_radius(self, z, theta_degrees):
         phi = self._angle(z, theta_degrees)
-        rho = math.sqrt(3) / 24 * self.pitch
-        if phi <= 5 / 16 * math.pi:
+        rho = self.internal_rounding_ratio*self.pitch
+        if phi <= self.female_flat_fraction*math.pi:
             return self.female_min_radius
         if phi <= math.pi * (1 - math.sqrt(3) * rho / self.pitch):
-            return self.major_radius - .875 * self.height + self.height * phi / math.pi
+            return self.major_radius-(1-self.crest_height_fraction)*self.height+self.height*phi/math.pi
         distance = self.pitch * (math.pi - phi) / (2 * math.pi)
-        return self.major_radius + .125 * self.height - 2 * rho + math.sqrt(max(0, rho * rho - distance * distance))
+        return self.major_radius+self.crest_height_fraction*self.height-2*rho+math.sqrt(max(0,rho*rho-distance*distance))

@@ -63,7 +63,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | UP-01 | femssc four-point tooth construction | DONE, BOUNDED | MIT preserved; independent host-free profile, generic full-body K/INP |
 | UP-02 | Complete femssc upstream self-drilling case | TODO | Drill tip, washer, Abaqus partitions, original Tie model not reproduced |
 | UP-03 | sunwhale rounded external/internal scalar profiles | DONE, BOUNDED | Independent maths; original 64+64 samples match ~3.6e-15 |
-| UP-04 | Complete sunwhale mesh workflows | PARTIAL, UNCOMMITTED | Existing local work contains seven-script/ten-case band replay evidence, including multiple pitches/layers and cyclic-label repairs. Full fasteners and final review/commit remain pending; not newly implemented or staged by the BoltPro task |
+| UP-04 | Complete sunwhale mesh workflows | PARTIAL, BAND IMPLEMENTATION REVIEWED | Seven-script/ten-case band replay work has been reviewed; current ten-case counts/quality/discrete volume rechecked before submission. Historical exact-source comparisons include explicit cyclic-label repairs. Complete fasteners/CAD/GUI remain pending; see HELICAL_BAND_REPLAY.md |
 | UP-05 | TrueGrid Screw source/example | TODO | Real TG run, element-type/Jacobian audit, remove/reject axis degeneracy |
 | UP-06 | Coreform helical/endpoint partition methods | TODO | Reproduce referenced journals or document/validate open-kernel equivalent |
 | MESH-01 | Recovered solid bolt/nut/plate H8 generation | DONE, BOUNDED | Original demo and fixed catalogue; eight distinct-node checks in export |
