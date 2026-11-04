@@ -1,5 +1,15 @@
 # HexRefine
 
+> **Fork development branch / Fork 开发分支**: the added fastener backends and
+> experimental refinement work are on
+> [`codex/bolt-thread-native`](https://github.com/lwz20210407/HexRefine/tree/codex/bolt-thread-native),
+> not yet merged into this fork's default `main`.
+> See [development TODO](docs/FASTENER_DEVELOPMENT_TODO.md) and
+> [native joint backend](docs/NATIVE_JOINT_BACKEND.md) and
+> [local joint GUI](docs/NATIVE_JOINT_GUI.md).
+> The upstream online workbench below does not deploy these fork-only features.
+> Original authorship and notices are retained.
+
 HexRefine is a standalone TypeScript project for conforming Q1/Hex local
 refinement. It provides a small mesh kernel, local refinement templates,
 automatic transition layers, no-hanging-node validation, hierarchical refinement

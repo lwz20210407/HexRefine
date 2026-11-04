@@ -72,7 +72,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | MESH-04 | CAD-driven automatic multi-block planning | PARTIAL | Saved-STEP radial intersections and shared shaft/head H8 mapping for bounded external-hex/open-nut cases; arbitrary CAD, terminating features and non-star runouts pending |
 | MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 external-hex case retained. New socket case uses compact 6-quad paired patches and 48->96->192->384 circumferential grading, preserving fine ring in tests. Axial/isotropic 3D and 3:1 thread grading remain pending |
 | MESH-06 | General corners, weak balance and multiple fronts | TODO | Existing broader mesh-project gaps are not resolved by profile mapping |
-| MESH-07 | Native joint generation, axial planning and physical taper | PARTIAL, BOUNDED BACKEND VERIFIED | Repository-native six-sector generator now builds complete hex-bolt/open-nut/rectangle stacks without private restored code. K/merged INP/Part-Instance INP and audits pass. GUI, selection/offset variants, CAD pairing and count-transition support remain pending; see NATIVE_JOINT_BACKEND.md |
+| MESH-07 | Native joint generation, axial planning and physical taper | PARTIAL, BOUNDED BACKEND VERIFIED | Repository-native six-sector generator builds complete hex-bolt/open-nut/rectangle stacks without private restored code. K/merged INP/Part-Instance INP and local browser dispatch pass. Selection/offset variants, CAD pairing and count-transition support remain pending; see NATIVE_JOINT_BACKEND.md and NATIVE_JOINT_GUI.md |
 | CAD-01 | Independent unmeshed design geometry | PARTIAL | Design-only `standard_cad.py`: eight real cases pass without FE input under approved CAD exchange policy; broader family cases remain |
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
@@ -95,7 +95,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |
 | VAL-04 | Extreme/odd seeds, tolerance/clearance, invalid inputs | PARTIAL | Limited guards; complete product-family validation matrix pending |
 | VAL-05 | Regression coverage after current changes | PARTIAL, STATED SCOPE | Socket floor/void and discrete volume tests run against saved CAD; development budget/quality guards added. Full slow eight-case CAD construction and full TS suite not rerun in this iteration; exact current test totals recorded in socket development notes |
-| UI-01 | Unified request/schema and GUI integration | TODO | Clearly distinguish Node, recovered Python and optional CAD/host backends |
+| UI-01 | Unified request/schema and GUI integration | PARTIAL, NATIVE JOINT FLOW VERIFIED | Existing workbench now dispatches the repository-native analytical joint through a loopback Python host: parameter entry, audited read-only preview, K/merged INP/Part-Instance INP downloads, explicit failure/cancel and capability-off states. This is not the packaged desktop app or integration of recovered/CAD backends; batching/restart recovery and all original options remain pending |
 | DOC-01 | Screenshots/HTML track honest acceptance | PARTIAL | Latest CAD/H8 review shows both complete M6 models, independent CAD and actual LSPP screenshots, K/INP/STEP/HM links, and original M8 runout rejection; broader cases pending |
 | CLEAN-01 | Keep exports on F, runtimes on D, clean duplicates | ONGOING | Do not delete active LSPP models; logs/licences/large models excluded from Git |
 | DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
@@ -109,7 +109,17 @@ backend independent of the private restoration experiment below. Default and
 preserved-dimension cases pass, including 53,592 H8/SJ0.40948 and independent
 K/INP audits. It uses repository six-sector templates and its own analytical
 field, not BoltPro node parity or independent CAD. Current regression114 tests,
-103 pass/11 skips. GUI and deployment are not completed by this CLI milestone.
+103 pass/11 skips at that CLI milestone. The subsequent bounded browser GUI is
+now verified; unified desktop deployment is still not complete. See
+NATIVE_JOINT_GUI.md for exact scope and repeatable GUI acceptance.
+
+GUI acceptance on 2026-11-04 generated the preserved-dimension 53,592-H8 case
+from the actual form, checked K/INP SHA-256 downloads, read-only model counts,
+70,095 rendered blue model pixels, invalid rectangle rejection, cancellation
+before the POST response returns, no modal overflow at 390px, and zero native
+API requests when the backend capability is absent. No console/page errors.
+This closes a bounded integration path, not the other family/CAD/3D/standards
+rows above. Evidence: temp/20261104-native-joint-gui/acceptance-v2.
 
 - Source restoration is distinct from product integration. Core parity: 15/15;
   full reference joint INP also byte-identical under ordinary Python 3.11.

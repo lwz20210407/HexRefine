@@ -1,7 +1,8 @@
 # Repository-native analytical joint backend
 
 Date: 2026-11-04. This is a bounded source-tree backend, not completion of the
-whole fastener project, GUI or desktop distribution.
+whole fastener project or desktop distribution. The bounded browser integration
+is documented separately in [NATIVE_JOINT_GUI.md](NATIVE_JOINT_GUI.md).
 
 ## Runtime and scope
 
@@ -46,8 +47,9 @@ python -B -m tools.bolthex.native_joint request.json NEW_OUTPUT --node NODE_EXEC
 The CLI requires a fresh output directory and a compiled repository `dist/`
 for the existing Node keyword formatter. Python needs NumPy; INP read-back
 also needs meshio. CAD kernels, MATLAB, TrueGrid and proprietary applications
-are not runtime dependencies. GUI dispatch/progress/cancellation and desktop
-packaging of this new backend remain pending.
+are not runtime dependencies. The local browser host now supports dispatch,
+indeterminate progress, cancellation and audited preview/download. Desktop
+packaging and integration with the other fastener backends remain pending.
 
 ## Contracts
 
@@ -92,17 +94,18 @@ none of bolthex_core/mesh_job/app/viewer appears in sys.modules. The native
 source-tree path is thus independent of the private restoration experiment.
 
 Local evidence: F:/PythonWoking/temp/20261104-native-joint-backend, including
-verified-parts, reference, independent-k.log, isolated-import.log, native-joint.png
+verified-parts, reference-final, independent-k.log, isolated-import.log, native-joint.png
 and REVIEW.html. Cases are modest development models (~7.6 MB K), not repeated
 hundreds-of-MB fixtures. Recovered private sources are neither needed nor shipped.
 
 Full current-worktree Python regression:114 tests,103 passed/11 optional skips.
-It includes pre-existing uncommitted helical-band tests, not staged by this
-increment. Full TS and slow eight-CAD reconstruction suites were not rerun.
+This run included then-uncommitted helical-band tests. That work was subsequently
+reviewed and submitted separately; see HELICAL_BAND_REPLAY.md. Full TS and slow
+eight-CAD reconstruction suites were not rerun.
 
 ## Remaining work
 
-GUI/runtime dispatch and packaging; part selection/offsets and all original
+Unified GUI/runtime dispatch and desktop packaging; part selection/offsets and all original
 export options; more head/nut/washer families; independent CAD pairing;
 standards and tolerances; axial/3D/3:1 count grading; wider failure/performance
 coverage. The existing CAD-first mapper remains a separate backend and is not
