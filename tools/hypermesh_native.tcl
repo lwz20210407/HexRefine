@@ -128,6 +128,16 @@ namespace eval ::hexrefine_native {
                 same_bounds $cadBounds $reopenedBounds
             }
             if {@ASSOCIATE@ && [associated $boundary] != $associations} { error "HM reopen changed geometry association count" }
+            if {@NATIVECADEXCHANGE@} {
+                set volumeBefore 0
+                foreach id [hm_entitylist solids id] {set volumeBefore [expr {$volumeBefore+[hm_getvolumeofsolid solids $id]}]}
+                puts $log "nativeCadVolumeBefore $volumeBefore"
+                *geomexport "iges_altair" [decode {@NATIVEIGES@}] "SourceUnits=MMKS (mm kg N s)" "TargetUnits=Millimeters" "OptimizeForCAD=off" "OuterLoop=Mandatory"
+                set volumeAfter 0
+                foreach id [hm_entitylist solids id] {set volumeAfter [expr {$volumeAfter+[hm_getvolumeofsolid solids $id]}]}
+                puts $log "nativeCadVolumeAfter $volumeAfter"
+                same_snapshot $original [snapshot] $log "Read-only native CAD export"
+            }
             if {@NATIVEKEXPORT@} {
                 *feoutputmergeincludefiles 0
                 *feoutputwithdata $template $roundtrip 0 0 1 1 0

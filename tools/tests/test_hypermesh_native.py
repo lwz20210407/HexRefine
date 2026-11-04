@@ -9,6 +9,28 @@ from tools.bolthex.export_step import export_sections
 
 
 class NativeExportGuards(unittest.TestCase):
+    def test_iges_exchange_is_opt_in_unoptimized_and_snapshot_guarded(self):
+        args=(Path('F:/in.k'),Path('F:/in.step'),Path('F:/out'),
+              Path('F:/template'),8,1,1,False,1e-7,[])
+        default=make_tcl(*args)
+        enabled=make_tcl(*args,native_cad_exchange=True)
+        self.assertIn('if {0} {\n                set volumeBefore',default)
+        self.assertIn('if {1} {\n                set volumeBefore',enabled)
+        self.assertNotRegex(enabled,r'@[A-Z]+@')
+        start=enabled.index('set original [snapshot]')
+        reopen=enabled.index('same_snapshot $original [snapshot] $log "HM reopen"')
+        export=enabled.index('*geomexport "iges_altair"')
+        guard=enabled.index('same_snapshot $original [snapshot] $log "Read-only native CAD export"')
+        complete=enabled.index('puts $log "meshUnchanged 1"')
+        self.assertLess(start,reopen)
+        self.assertLess(reopen,export)
+        self.assertLess(export,guard)
+        self.assertLess(guard,complete)
+        self.assertIn('"OptimizeForCAD=off"',enabled[export:guard])
+        self.assertNotIn('OptimizeForCAD=on',enabled)
+        self.assertLess(enabled.index('puts $log "nativeCadVolumeBefore'),export)
+        self.assertIn('puts $log "nativeCadVolumeAfter',enabled[export:guard])
+
     def test_feature_profile_keeps_medium_complete_mesh_but_rejects_mismatched_profiles(self):
         report=dict(nodes=169939,elements=160704,kSHA256='mesh',sourceStepSHA256='cad',
                     notFullModelAcceptance=True,developmentProfile='feature',
