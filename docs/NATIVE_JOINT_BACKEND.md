@@ -13,8 +13,11 @@ The old repository template source/provenance is retained; this is not a claim
 that the entire low-level template library was newly authored here.
 
 Supported: coaxial hex head, open hex nut and zero or multiple rectangular
-plates; right/left analytical thread field; bounded shared-node assembly.
-Merged K/INP are bonded meshes. Separate INP has Part/Instance records but no
+plates; right/left analytical thread field; bounded shared-node or separate-node assembly.
+`connection_mode="shared"` preserves the previous bonded-node default.
+`connection_mode="separate"` retains disjoint node IDs across every component
+in both K and the assembly INP. Node-ownership intersections are audited and
+reported, not inferred from equal coordinates. Separate INP has Part/Instance records but no
 cross-part coupling, material, preload, contact or friction model.
 
 This is NOT an independent STEP/BRep matching workflow or standards/tolerance
@@ -67,6 +70,9 @@ packaging and integration with the other fastener backends remain pending.
   for canonical coordinate merging; interior nodes are not globally welded.
 - Assembly/component volume difference must be <=1e-10. Four/six PID cases
   are tested. Mesh validity does not establish physical contact equivalence.
+- Separate mode concatenates component nodes without coordinate welding and
+  rejects any cross-component node-ID intersection. Shared mode reports every
+  node-sharing pair. Neither mode defines engineering contact or preload.
 - K is mesh-only and read back with the native parser. Merged INP connectivity
   and component ELSETs are verified. Separate INP part blocks are individually
   read back with meshio, and identity Instances are written explicitly.

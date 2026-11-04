@@ -37,8 +37,13 @@ offline-export API of the existing Node/desktop hosts.
   before installing a read-only snapshot. Native PIDs remain in the model.
 - Download `model.k`, `merged.inp`, `parts.inp` and `report.json` only after
   successful publication. Editing input invalidates old download links.
-- Merged K/INP use bonded shared nodes. Separate INP has separate Part/Instance
-  records and does not define contact, coupling, preload or material behavior.
+- `部件连接` selects shared bonded nodes or separate disjoint node IDs for K
+  and assembly INP. The report shows actual ownership intersections. The
+  `parts.inp` download always has separate Part/Instance records. No file
+  defines contact, coupling, preload or material behavior.
+- A successful job can be reopened from `任务记录` after page refresh or host
+  restart without regenerating it. Original parameters, including API fields
+  not exposed as controls, survive reopening/resubmission; reset clears them.
 - Invalid dimensions, budget overflow and quality failure are reported as
   failures, never published as accepted output. Analytical geometry is labelled
   explicitly: this is not independent STEP/BRep matching or standard certification.
@@ -56,10 +61,17 @@ UUID directories under the explicit output root. A job executes only the fixed
 repository module using the server's Python and the configured Node path.
 Cancellation targets that child process tree, not unrelated applications.
 
-Completed artifacts persist on disk and are not auto-deleted. Job lookup is
-in memory: restart recovery, durable batch queues and output retention policies
-remain TODO. Do not delete active artifact directories while clients use their
-download links. CAD/HyperMesh/solver tasks are not dispatched by this service.
+Completed artifacts persist on disk and are not auto-deleted. Atomic `job.json`
+records recover completed jobs after restart only if all four artifact hashes
+still match. Each download checks its file hash again. An OS-held directory
+lease rejects a second host using the same output root. Running records become
+`interrupted` on restart, with no downloads and no automatic regeneration.
+Recovery never adopts/kills a process from a stored PID. A hard-killed host may
+leave a child requiring manual inspection; the interrupted record is never
+promoted merely because that child's files later appear. Batch queues,
+interrupted-job continuation and retention policies remain TODO.
+Do not delete active artifact directories while clients use their links.
+CAD/HyperMesh/solver tasks are not dispatched by this service.
 
 ## Repeatable verification
 
@@ -69,6 +81,7 @@ $env:HEXREFINE_NODE='NODE_EXECUTABLE'
 $env:BOLTHEX_TEST_ROOT='EXISTING_TASK_DIRECTORY'
 python -B -m unittest tools.tests.test_joint_http -v
 python -B -m tools.verify_joint_workbench --url http://127.0.0.1:8797/examples/browser/refinement-gui.html --output NEW_QA_DIRECTORY --browser EXISTING_CHROMIUM_EXECUTABLE
+python -B -m tools.verify_joint_history --url http://127.0.0.1:8797/examples/browser/refinement-gui.html --output NEW_HISTORY_QA_DIRECTORY --browser EXISTING_CHROMIUM_EXECUTABLE --job COMPLETED_JOB_ID
 ```
 
 The browser verifier requires existing Playwright, Pillow and NumPy. It uses an
@@ -93,3 +106,24 @@ PyDYNA re-read the GUI K with relative volume error 1.46e-15; meshio re-read the
 merged INP at 5.56e-15, retaining all four component sets. Four separate INP
 part blocks had already been read back before publication. Full TS and slow
 eight-CAD suites were not rerun in this increment.
+
+## Modes and recovery increment
+
+The same preserved-dimension case now has 56,704 nodes in shared mode and
+61,120 in separate mode, both 53,592 H8/minSJ0.409479482. Independent PyDYNA
+and meshio re-read both modes and reproduced node ownership: five sharing
+pairs in shared mode, zero in separate mode. Geometry, element ordering and
+volume remain unchanged. The INP reader also checked all four separate parts.
+
+The actual host was restarted against the same output directory. GUI reopened
+the separate result twice, with zero generation POSTs, zero console/page errors
+and no 390px modal overflow. API/GUI history is limited to this native backend;
+old folders without owned `job.json` records are not silently imported.
+
+Regression:128 Python tests,117 passed/11 optional skips, with native HTTP and
+recovery enabled;22 targeted Node tests passed; source/public type checks pass.
+Failure tests cover corrupted artifacts on restart/download, stale running
+records, duplicate host ownership, spawn failure, initial/terminal persistence
+failure and bounded Windows atomic-replace retries. Local evidence:
+`F:/PythonWoking/temp/20261104-joint-modes-recovery`. This remains a bounded
+assembly/GUI feature, not completion of CAD/families/standards/3D grading.
