@@ -72,7 +72,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | MESH-04 | CAD-driven automatic multi-block planning | PARTIAL | Saved-STEP radial intersections and shared shaft/head H8 mapping for bounded external-hex/open-nut cases; arbitrary CAD, terminating features and non-star runouts pending |
 | MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 external-hex case retained. New socket case uses compact 6-quad paired patches and 48->96->192->384 circumferential grading, preserving fine ring in tests. Axial/isotropic 3D and 3:1 thread grading remain pending |
 | MESH-06 | General corners, weak balance and multiple fronts | TODO | Existing broader mesh-project gaps are not resolved by profile mapping |
-| MESH-07 | Joint axial seed planning and physical taper field | PARTIAL | Independently implemented public JointAxialSpec/plan_joint_axial/AxialEnvelope primitives, bounded seed compensation and explicit dimension snapping. Local full-joint proof still uses privately recovered core; not a completed integrated assembly backend or count-transition template |
+| MESH-07 | Native joint generation, axial planning and physical taper | PARTIAL, BOUNDED BACKEND VERIFIED | Repository-native six-sector generator now builds complete hex-bolt/open-nut/rectangle stacks without private restored code. K/merged INP/Part-Instance INP and audits pass. GUI, selection/offset variants, CAD pairing and count-transition support remain pending; see NATIVE_JOINT_BACKEND.md |
 | CAD-01 | Independent unmeshed design geometry | PARTIAL | Design-only `standard_cad.py`: eight real cases pass without FE input under approved CAD exchange policy; broader family cases remain |
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
@@ -103,6 +103,13 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | DEV-03 | Preflight counts and volume before 3D allocation | DONE, BOUNDED | `socket_plan` CLI plus mandatory production socket volume preflight/cache reuse. Excessive/nonfinite errors reject before `_sweep`; fixed 1e-4 gate not relaxed. Counts/budgets and final whole-body QA remain separate |
 
 ## BoltPro increment, not whole-product completion
+
+Subsequent native increment: the repository now has a bounded complete assembly
+backend independent of the private restoration experiment below. Default and
+preserved-dimension cases pass, including 53,592 H8/SJ0.40948 and independent
+K/INP audits. It uses repository six-sector templates and its own analytical
+field, not BoltPro node parity or independent CAD. Current regression114 tests,
+103 pass/11 skips. GUI and deployment are not completed by this CLI milestone.
 
 - Source restoration is distinct from product integration. Core parity: 15/15;
   full reference joint INP also byte-identical under ordinary Python 3.11.

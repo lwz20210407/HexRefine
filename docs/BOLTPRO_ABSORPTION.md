@@ -2,6 +2,11 @@
 
 Date: 2026-11-04. Branch: codex/bolt-thread-native.
 
+Later on the same day, a separate repository-native assembly backend was
+implemented and verified. It no longer needs the private recovered core used
+in the historical experiment below. See NATIVE_JOINT_BACKEND.md for its bounded
+scope, actual K/INP results and remaining GUI/CAD/family gaps.
+
 ## Proven recovery versus integration
 
 The private recovered bolthex_core module now compiles and runs as ordinary
