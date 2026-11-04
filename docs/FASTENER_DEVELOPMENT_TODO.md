@@ -1,6 +1,6 @@
 # Fastener development TODO
 
-Updated: 2026-11-03, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-04, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
@@ -57,12 +57,13 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | REC-03 | Catalogue replay across original shapes/sizes | DONE, BOUNDED | 224 fixed-seed cases, 14 sizes; not arbitrary parameters or 224 GUI runs |
 | REC-04 | Same-parameter actual original GUI export | PARTIAL | One M16 bolt GUI INP byte-identical; all GUI combinations not replayed |
 | REC-05 | Recover and integrate original complete GUI | TODO | Raw GUI decompilation is not certified runnable |
+| REC-06 | BoltPro portable application recovery | PARTIAL | Private bolthex_core source compiles and passes 15 bytecode-oracle cases including byte-identical INP. app/viewer/mesh_job source recovery and complete product integration remain pending |
 | RES-01 | Research scripts, repositories, issues and PRs | DONE, BOUNDED | Three reports; platforms/access/version limits recorded |
 | RES-02 | Research CAD/standards libraries | PARTIAL | bd_warehouse pinned adapter implemented; cq_warehouse and FreeCAD Fasteners are identified, not integrated |
 | UP-01 | femssc four-point tooth construction | DONE, BOUNDED | MIT preserved; independent host-free profile, generic full-body K/INP |
 | UP-02 | Complete femssc upstream self-drilling case | TODO | Drill tip, washer, Abaqus partitions, original Tie model not reproduced |
 | UP-03 | sunwhale rounded external/internal scalar profiles | DONE, BOUNDED | Independent maths; original 64+64 samples match ~3.6e-15 |
-| UP-04 | Complete sunwhale mesh workflows | TODO | Replay full legacy mesh, multi-pitch/boundary-layer cases; not just scalar loops |
+| UP-04 | Complete sunwhale mesh workflows | PARTIAL, UNCOMMITTED | Existing local work contains seven-script/ten-case band replay evidence, including multiple pitches/layers and cyclic-label repairs. Full fasteners and final review/commit remain pending; not newly implemented or staged by the BoltPro task |
 | UP-05 | TrueGrid Screw source/example | TODO | Real TG run, element-type/Jacobian audit, remove/reject axis degeneracy |
 | UP-06 | Coreform helical/endpoint partition methods | TODO | Reproduce referenced journals or document/validate open-kernel equivalent |
 | MESH-01 | Recovered solid bolt/nut/plate H8 generation | DONE, BOUNDED | Original demo and fixed catalogue; eight distinct-node checks in export |
@@ -71,6 +72,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | MESH-04 | CAD-driven automatic multi-block planning | PARTIAL | Saved-STEP radial intersections and shared shaft/head H8 mapping for bounded external-hex/open-nut cases; arbitrary CAD, terminating features and non-star runouts pending |
 | MESH-05 | Near-thread 2:1 / 3:1 count reduction | PARTIAL | M6 external-hex case retained. New socket case uses compact 6-quad paired patches and 48->96->192->384 circumferential grading, preserving fine ring in tests. Axial/isotropic 3D and 3:1 thread grading remain pending |
 | MESH-06 | General corners, weak balance and multiple fronts | TODO | Existing broader mesh-project gaps are not resolved by profile mapping |
+| MESH-07 | Joint axial seed planning and physical taper field | PARTIAL | Independently implemented public JointAxialSpec/plan_joint_axial/AxialEnvelope primitives, bounded seed compensation and explicit dimension snapping. Local full-joint proof still uses privately recovered core; not a completed integrated assembly backend or count-transition template |
 | CAD-01 | Independent unmeshed design geometry | PARTIAL | Design-only `standard_cad.py`: eight real cases pass without FE input under approved CAD exchange policy; broader family cases remain |
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
@@ -99,6 +101,20 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
 | DEV-02 | Representative complete-feature development | DONE, BOUNDED | `socket_dev` defaults to feature profile, 72 circumferential segments and 16 axial intervals/pitch. Measured pitch, tooth crest and recess dimensions; strict CAD-volume test fails and is explicitly labelled, not waived |
 | DEV-03 | Preflight counts and volume before 3D allocation | DONE, BOUNDED | `socket_plan` CLI plus mandatory production socket volume preflight/cache reuse. Excessive/nonfinite errors reject before `_sweep`; fixed 1e-4 gate not relaxed. Counts/budgets and final whole-body QA remain separate |
+
+## BoltPro increment, not whole-product completion
+
+- Source restoration is distinct from product integration. Core parity: 15/15;
+  full reference joint INP also byte-identical under ordinary Python 3.11.
+- A resampled joint initially failed SJ=0.1198. A grid-independent physical
+  taper field resolves that stated case at SJ=0.37165, 45,660 H8, preserving
+  axial dimensions16.1/13.1/8.2 and explicitly reporting the 0.2 head/plate gap.
+- Actual K/INP and LSPP image are retained locally. This is a sampled-profile
+  design, not independent CAD fidelity or solver validation.
+- Native job status persistence now retries bounded transient Windows errors;
+  persistent permissions failures are not waived. See BOLTPRO_ABSORPTION.md.
+- Full Python regression:106 tests,95 passed/11 optional skips, including
+  pre-existing uncommitted band tests. Those unrelated changes remain untouched.
 
 ## Next execution sequence
 
