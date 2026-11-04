@@ -109,7 +109,13 @@ def _readback_part_blocks(path,parts):
     return checks
 
 
-def build_native_joint(spec=NativeJointSpec()):
+def _rectangle_radius(spec,theta):
+    a=math.radians(theta);c,s=abs(math.cos(a)),abs(math.sin(a))
+    return min(spec.plate_x/(2*c) if c>1e-12 else float('inf'),spec.plate_y/(2*s) if s>1e-12 else float('inf'))
+
+
+def plan_native_joint(spec=NativeJointSpec()):
+    """Validate dimensions/counts without constructing any 2D/3D mesh."""
     if not isinstance(spec,NativeJointSpec):raise ValueError('Expected NativeJointSpec')
     plan=plan_joint_axial(spec.axial)
     for name in ('diameter','across_flats','head_height','plate_x','plate_y'):
@@ -125,27 +131,34 @@ def build_native_joint(spec=NativeJointSpec()):
     n=6*spec.sector;r=spec.diameter/2;p=spec.axial.pitch
     if spec.across_flats<=spec.diameter:raise ValueError('Head/nut flats must exceed shaft diameter')
     if r-.541266*p<=.6*r:raise ValueError('Thread root intersects the fixed core support')
-    def hex_radius(theta,z):return hexagon_R(theta,spec.across_flats)
-    def rectangle(theta,z):
-        a=math.radians(theta);c,s=abs(math.cos(a)),abs(math.sin(a))
-        return min(spec.plate_x/(2*c) if c>1e-12 else float('inf'),spec.plate_y/(2*s) if s>1e-12 else float('inf'))
-    if spec.axial.plate_count and any(rectangle(i*360/n,0)<=hex_radius(i*360/n,0)+1e-8 for i in range(n)):
+    if spec.axial.plate_count and any(_rectangle_radius(spec,i*360/n)<=hexagon_R(i*360/n,spec.across_flats)+1e-8 for i in range(n)):
         raise ValueError('Rectangle does not cover the nut/head footprint')
     b=spec.axial.thread_length;m=spec.axial.nut_height;l=spec.axial.shank_length
     taper=p if spec.taper_length is None else spec.taper_length
     if type(taper) not in (int,float) or not math.isfinite(taper) or not 0<taper<b:
         raise ValueError('Physical taper length must be positive and shorter than thread length')
-    envelope=AxialEnvelope(((0.,1.),(b-taper,1.),(b,0.)))
+    q=3*spec.sector**2+n*(spec.core_rings+spec.radial)
+    parts=[dict(name='BOLT',elements=q*(plan['counts']['thread']+plan['counts']['shank']+spec.head_layers)+n*spec.nut_radial*spec.head_layers)]
+    parts.extend(dict(name=f'PLATE_{i+1}',elements=n*(spec.nut_radial+spec.plate_outer_radial)*plan['counts']['plate']) for i in range(spec.axial.plate_count))
+    parts.append(dict(name='NUT',elements=n*spec.nut_radial*plan['counts']['nut']))
+    count=sum(part['elements'] for part in parts)
+    if count>spec.element_limit:raise ValueError(f'Native joint requires {count} H8, exceeding element budget')
+    return dict(schemaVersion=1,parameters=asdict(spec),axial=plan,estimatedElements=count,parts=parts,
+                connectionMode=spec.connection_mode,taperLength=taper,fullMeshVerified=False,qualityVerified=False)
+
+
+def build_native_joint(spec=NativeJointSpec()):
+    preflight=plan_native_joint(spec);plan=preflight['axial'];count=preflight['estimatedElements']
+    n=6*spec.sector;r=spec.diameter/2;p=spec.axial.pitch
+    b=spec.axial.thread_length;m=spec.axial.nut_height;l=spec.axial.shank_length
+    envelope=AxialEnvelope(((0.,1.),(b-preflight['taperLength'],1.),(b,0.)))
+    def hex_radius(theta,z):return hexagon_R(theta,spec.across_flats)
+    def rectangle(theta,z):return _rectangle_radius(spec,theta)
     def radius(theta,z):
         if z>=b:return r
         sign=1 if spec.handedness=='right' else -1
         target=thread_R(z,sign*theta,p,r,r-.541266*p)
         return r+envelope.value(float(z))*(target-r)
-    q=3*spec.sector**2+n*(spec.core_rings+spec.radial)
-    count=q*(plan['counts']['thread']+plan['counts']['shank']+spec.head_layers)
-    count+=n*spec.nut_radial*(spec.head_layers+plan['counts']['nut'])
-    count+=spec.axial.plate_count*n*(spec.nut_radial+spec.plate_outer_radial)*plan['counts']['plate']
-    if count>spec.element_limit:raise ValueError(f'Native joint requires {count} H8, exceeding element budget')
     head_z=np.linspace(b+l,b+l+spec.head_height,spec.head_layers+1)
     body_z=np.concatenate((np.linspace(0,b,plan['counts']['thread']+1),
                            np.linspace(b,b+l,plan['counts']['shank']+1)[1:],head_z[1:]))
@@ -177,7 +190,7 @@ def build_native_joint(spec=NativeJointSpec()):
     if len(cells)!=count:raise ValueError('Native joint allocation count mismatch')
     relative=abs(sum(row['volume'] for row in part_reports)-quality['volume'])/quality['volume']
     if relative>1e-10:raise ValueError('Assembly changed summed component volume')
-    report=dict(schemaVersion=1,kernel='repository-six-sector-analytical-joint',parameters=asdict(spec),plan=plan,
+    report=dict(schemaVersion=1,kernel='repository-six-sector-analytical-joint',parameters=asdict(spec),plan=plan,preflight=preflight,
                 quality=quality,parts=part_reports,sharedNodes=shared,estimatedElements=count,
                 relativeAssemblyVolumeError=relative,physicalEnvelope=envelope.knots,
                 geometryReference='analytical-thread-field',independentCadVerified=False,solverVerified=False,
@@ -233,10 +246,17 @@ def generate(spec,output,node):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('request',type=Path)
-    parser.add_argument('output',type=Path);parser.add_argument('--node',type=Path,required=True)
+    parser.add_argument('output',type=Path,nargs='?');parser.add_argument('--node',type=Path)
+    parser.add_argument('--plan-only',action='store_true')
     args=parser.parse_args()
     if args.request.stat().st_size>65536:parser.error('Native joint request exceeds 64 KiB')
     request=json.loads(args.request.read_text())
     if not isinstance(request,dict) or set(request)!={'schemaVersion','parameters'} or type(request['schemaVersion']) is not int or request['schemaVersion']!=1:
         parser.error('Require a version-1 native joint request')
-    print(json.dumps(generate(NativeJointSpec.parse(request['parameters']),args.output,args.node),indent=2))
+    spec=NativeJointSpec.parse(request['parameters'])
+    if args.plan_only:
+        if args.output is not None:parser.error('--plan-only writes JSON to stdout, not an output directory')
+        print(json.dumps(plan_native_joint(spec),indent=2))
+    else:
+        if args.output is None or args.node is None:parser.error('Generation requires output directory and --node')
+        print(json.dumps(generate(spec,args.output,args.node),indent=2))

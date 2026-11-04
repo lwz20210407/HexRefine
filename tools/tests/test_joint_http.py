@@ -82,5 +82,15 @@ class JointHttpTests(unittest.TestCase):
         self.call('/api/native-joint/jobs/'+job['id'],'DELETE')
         done=self.terminal(job['id']);self.assertEqual(done['state'],'cancelled');self.assertNotIn('files',done)
         self.assertIsNotNone(self.jobs.jobs[job['id']]['process'].poll())
-        bad=json.loads(self.call('/api/native-joint/jobs','POST',dict(schemaVersion=1,parameters={'plate_x':20}))[1])
-        failed=self.terminal(bad['id']);self.assertEqual(failed['state'],'failed');self.assertNotIn('files',failed)
+        with self.assertRaises(HTTPError) as caught:
+            self.call('/api/native-joint/jobs','POST',dict(schemaVersion=1,parameters={'plate_x':20}))
+        self.assertEqual(caught.exception.code,400)
+        self.assertEqual(len(self.jobs.jobs),1)
+
+    def test_preflight_has_no_child_or_job_directory(self):
+        status,body=self.call('/api/native-joint/plan','POST',dict(schemaVersion=1,parameters={}))
+        plan=json.loads(body);self.assertEqual(status,200)
+        self.assertEqual(plan['estimatedElements'],10440)
+        self.assertFalse(plan['fullMeshVerified']);self.assertFalse(plan['qualityVerified'])
+        self.assertEqual(self.jobs.jobs,{})
+        self.assertFalse(any(p.is_dir() for p in Path(self.tmp.name).iterdir()))

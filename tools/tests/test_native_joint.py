@@ -14,6 +14,8 @@ class NativeJointTests(unittest.TestCase):
         self.assertGreaterEqual(report['quality']['minimumCornerScaledJacobian'],.15)
         self.assertLess(report['relativeAssemblyVolumeError'],1e-10)
         self.assertEqual(report['quality']['elements'],report['estimatedElements'])
+        self.assertEqual(report['preflight']['estimatedElements'],report['quality']['elements'])
+        self.assertEqual([p['elements'] for p in report['preflight']['parts']],[p['elements'] for p in report['parts']])
 
     def test_dimensions_preserved_with_compensated_layers(self):
         result=build_native_joint(NativeJointSpec(axial=JointAxialSpec(thread_length=16.1,nut_height=13.1,shank_length=8.2)))

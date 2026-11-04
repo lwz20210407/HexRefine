@@ -45,6 +45,7 @@ CLI request:
 
 ```powershell
 python -B -m tools.bolthex.native_joint request.json NEW_OUTPUT --node NODE_EXECUTABLE
+python -B -m tools.bolthex.native_joint request.json --plan-only
 ```
 
 The CLI requires a fresh output directory and a compiled repository `dist/`
@@ -53,6 +54,13 @@ also needs meshio. CAD kernels, MATLAB, TrueGrid and proprietary applications
 are not runtime dependencies. The local browser host now supports dispatch,
 indeterminate progress, cancellation and audited preview/download. Desktop
 packaging and integration with the other fastener backends remain pending.
+
+`plan_native_joint(spec)` and `--plan-only` validate dimensions, seed
+compensation and per-component H8 counts without constructing 2D/3D meshes or
+requiring Node/CAD applications. Planning writes JSON to stdout, not a model
+directory. The generator reuses this exact plan and checks its final counts.
+`qualityVerified`/`fullMeshVerified` remain false in a plan: a count estimate
+does not certify the eventual SJ, interfaces or geometry.
 
 ## Contracts
 

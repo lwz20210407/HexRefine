@@ -30,6 +30,10 @@ offline-export API of the existing Node/desktop hosts.
   plate stacks; right/left thread field, seed controls and explicit H8 budget.
 - Effective compensated axial seeds, unchanged dimensions and head/plate gap
   are shown, not concealed behind requested input counts.
+- `预检` returns element estimates, effective seeds and gap without launching a
+  child or creating a mesh job. Generation repeats this validation and still
+  performs the full mesh audit. Incompatible input/budget returns HTTP400
+  before spawning; this expected input rejection is not a renderer failure.
 - Generate and audit asynchronously; progress is indeterminate, not an invented
   percentage. Closing the modal does not cancel the job. Cancel is explicit,
   including a click made before the POST response supplies a job ID.
@@ -127,3 +131,20 @@ records, duplicate host ownership, spawn failure, initial/terminal persistence
 failure and bounded Windows atomic-replace retries. Local evidence:
 `F:/PythonWoking/temp/20261104-joint-modes-recovery`. This remains a bounded
 assembly/GUI feature, not completion of CAD/families/standards/3D grading.
+
+## Allocation-free preflight increment
+
+`POST /api/native-joint/plan` accepts the same version-1 request as generation.
+It has no output directory or Node requirement in the library/plan-only CLI;
+the complete HTTP host still uses its configured generation environment.
+The GUI capability-gates preflight on older hosts and automatically checks
+parameters again before job creation. A plan cannot claim mesh/quality approval.
+
+Current regression:132 Python tests,121 passed/11 optional skips;22 targeted
+Node tests and source/public type checks passed. Actual GUI preflight predicted
+53,592 H8 without creating a job; generated per-component counts matched.
+The latest six K/INP artifacts are byte-identical to the independently re-read
+shared/separate cases, recorded in `latest-output-parity.json`. GUI QA has zero
+unexpected console/page errors and explicitly records the expected HTTP400
+from an intentionally incompatible plate width. Evidence and updated HTML:
+`F:/PythonWoking/temp/20261104-joint-modes-recovery/REVIEW.html`.

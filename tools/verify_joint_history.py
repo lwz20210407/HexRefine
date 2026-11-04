@@ -39,6 +39,7 @@ def verify(url,output,browser_path,identity):
             evidence['restored']=next(j['restored'] for j in inventory if j['id']==identity)
             evidence['repeatedOpenCount']=2
             assert not evidence['postRequests'] and not evidence['consoleErrors'] and not evidence['pageErrors']
+            evidence['recoveryPostRequests']=list(evidence['postRequests'])
             expected=page.request.get(origin+'/api/native-joint/jobs/'+identity).json()['report']['parameters']
             page.set_viewport_size(dict(width=390,height=844));page.get_by_role('button',name='装配参数',exact=True).click()
             assert not page.evaluate('document.querySelector("#native-joint-dialog").scrollWidth>document.querySelector("#native-joint-dialog").clientWidth')

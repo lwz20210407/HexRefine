@@ -95,7 +95,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |
 | VAL-04 | Extreme/odd seeds, tolerance/clearance, invalid inputs | PARTIAL | Limited guards; complete product-family validation matrix pending |
 | VAL-05 | Regression coverage after current changes | PARTIAL, STATED SCOPE | Socket floor/void and discrete volume tests run against saved CAD; development budget/quality guards added. Full slow eight-case CAD construction and full TS suite not rerun in this iteration; exact current test totals recorded in socket development notes |
-| UI-01 | Unified request/schema and GUI integration | PARTIAL, NATIVE JOINT FLOW VERIFIED | Existing workbench dispatches the repository-native analytical joint through a loopback Python host: parameters, shared/separate K+INP modes, audited preview/download, explicit failure/cancel, hash-bound completed-job recovery after page/host restart. Not the packaged desktop app or integration of recovered/CAD backends; batch queues, interrupted-job continuation and all original options remain pending |
+| UI-01 | Unified request/schema and GUI integration | PARTIAL, NATIVE JOINT FLOW VERIFIED | Existing workbench dispatches the repository-native analytical joint through a loopback Python host: allocation-free count/parameter preflight, shared/separate K+INP modes, audited preview/download, explicit failure/cancel, hash-bound completed-job recovery after page/host restart. Not the packaged desktop app or integration of recovered/CAD backends; batch queues, interrupted-job continuation and all original options remain pending |
 | DOC-01 | Screenshots/HTML track honest acceptance | PARTIAL | Latest CAD/H8 review shows both complete M6 models, independent CAD and actual LSPP screenshots, K/INP/STEP/HM links, and original M8 runout rejection; broader cases pending |
 | CLEAN-01 | Keep exports on F, runtimes on D, clean duplicates | ONGOING | Do not delete active LSPP models; logs/licences/large models excluded from Git |
 | DEV-01 | Small default development regressions | DONE, BOUNDED | Two original-CAD runout patches, 105 H8 each; each K about 19 KiB, combined artifacts about 70 KiB. Hard caps 256 H8/patch and 1 MiB; slow CAD requires explicit opt-in. Not full-model acceptance |
@@ -140,6 +140,9 @@ recovery are now verified. Actual K/INP ownership checks distinguish 56,704
 shared nodes from 61,120 separate nodes at the same 53,592 H8/SJ0.40948.
 128 Python tests:117 passed/11 optional skips;22 targeted Node tests passed.
 See NATIVE_JOINT_GUI.md. This does not close CAD/standards/3D/family TODOs.
+The allocation-free preflight follow-up exposes the same count planner to CLI,
+HTTP and GUI and rejects invalid input before spawning a mesh job. Current
+regression132 tests:121 passed/11 optional skips, plus22 targeted Node tests.
 
 1. DONE: publish this TODO and reject the earlier grid-derived CAD acceptance.
 2. DONE, BOUNDED: independent stock CAD via a pinned optional backend; eight

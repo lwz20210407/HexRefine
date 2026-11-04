@@ -10,7 +10,8 @@ def main(URL,ROOT,executable):
     origin=parsed.scheme+'://'+parsed.netloc
     ROOT=Path(ROOT).resolve();ROOT.mkdir(exist_ok=False)
     os.environ['TEMP']=str(ROOT);os.environ['TMP']=str(ROOT)
-    result=dict(url=URL,browserPath='Existing Playwright: Browser plugin not available',consoleErrors=[],pageErrors=[])
+    result=dict(url=URL,browserPath='Existing Playwright: Browser plugin not available',consoleErrors=[],pageErrors=[],expectedRejections=[])
+    phase={'invalid':False}
     with sync_playwright() as p:
         browser=p.chromium.launch(executable_path=str(executable),headless=True,
                                   args=['--enable-unsafe-swiftshader'])
@@ -18,7 +19,11 @@ def main(URL,ROOT,executable):
         page=context.new_page()
         post_requests=[]
         page.on('request',lambda request:post_requests.append(request.url) if request.method=='POST' and request.url.endswith('/api/native-joint/jobs') else None)
-        page.on('console',lambda msg:result['consoleErrors'].append(msg.text) if msg.type=='error' else None)
+        def console(msg):
+            if msg.type!='error':return
+            expected=phase['invalid'] and '400' in msg.text and msg.location.get('url','').endswith(('/api/native-joint/plan','/api/native-joint/jobs'))
+            (result['expectedRejections'] if expected else result['consoleErrors']).append(msg.text)
+        page.on('console',console)
         page.on('pageerror',lambda exc:result['pageErrors'].append(str(exc)))
         page.goto(URL,wait_until='networkidle');page.get_by_role('button',name='装配参数',exact=True).wait_for()
         page.get_by_role('button',name='装配参数',exact=True).click()
@@ -26,6 +31,11 @@ def main(URL,ROOT,executable):
         result['title']=page.title();page.screenshot(path=str(ROOT/'gui-parameters.png'))
         for name,value in dict(thread_length='16.1',nut_height='13.1',shank_length='8.2').items():
             dialog.locator(f'input[name="{name}"]').fill(value)
+        dialog.get_by_role('button',name='预检',exact=True).click()
+        dialog.locator('.nj-preflight').filter(has_text='53592').wait_for()
+        assert not post_requests
+        result['preflightAllocatedNoJob']=True
+        page.screenshot(path=str(ROOT/'gui-preflight.png'))
         dialog.get_by_role('button',name='生成',exact=True).click()
         dialog.get_by_role('link',name='下载 K',exact=True).wait_for(timeout=120000)
         href=dialog.get_by_role('link',name='下载 K',exact=True).get_attribute('href')
@@ -74,8 +84,10 @@ def main(URL,ROOT,executable):
         assert len(post_requests)==before_posts
         result['refreshReopenedWithoutGeneration']=True
         page.screenshot(path=str(ROOT/'gui-recovered.png'))
+        phase['invalid']=True
         dialog.locator('input[name="plate_x"]').fill('20');dialog.get_by_role('button',name='生成',exact=True).click()
         dialog.locator('.nj-message').filter(has_text='Rectangle').wait_for(timeout=60000)
+        phase['invalid']=False
         result['invalidInputError']=dialog.locator('.nj-message').inner_text()
         assert dialog.get_by_role('link',name='下载 K',exact=True).count()==0
         page.screenshot(path=str(ROOT/'gui-invalid.png'))
@@ -84,7 +96,9 @@ def main(URL,ROOT,executable):
             await new Promise(resolve=>setTimeout(resolve,1500));return response;};}''')
         result['cancelTestResponseDelayMs']=1500
         dialog.locator('input[name="plate_x"]').fill('40');dialog.locator('input[name="sector"]').fill('4')
-        dialog.locator('input[name="axial_per_pitch"]').fill('20');dialog.get_by_role('button',name='生成',exact=True).click()
+        dialog.locator('input[name="axial_per_pitch"]').fill('20')
+        with page.expect_request(lambda r:r.method=='POST' and r.url.endswith('/api/native-joint/jobs')):
+            dialog.get_by_role('button',name='生成',exact=True).click()
         dialog.get_by_role('button',name='取消任务',exact=True).click()
         page.locator('.nj-status').filter(has_text='已取消').wait_for(timeout=60000)
         result['cancelled']=True;assert dialog.get_by_role('link',name='下载 K',exact=True).count()==0

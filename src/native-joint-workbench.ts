@@ -9,6 +9,7 @@ interface JointReport {
   plan:{seeds:{axialPerPitch:number;axialPerPlate:number};headToPlateAxialGap:number|null;axialDimensionsChanged:boolean};
 }
 interface JointJob {id:string;state:"running"|"succeeded"|"failed"|"cancelled"|"interrupted";error:string|null;files?:Record<string,string>;report?:JointReport;}
+interface JointPreflight {estimatedElements:number;axial:JointReport["plan"];qualityVerified:boolean;fullMeshVerified:boolean;}
 export interface NativeJointSnapshot {
   mesh:Mesh;model:LsdynaMixedMesh;request:{kind:string;parameters:Record<string,unknown>};
   plan:Record<string,unknown>;quality:JointQuality;
@@ -51,8 +52,12 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const cancel=dialog.querySelector<HTMLButtonElement>('[data-nj="cancel"]')!;
   const reset=dialog.querySelector<HTMLButtonElement>('[data-nj="reset"]')!;
   const progress=dialog.querySelector<HTMLProgressElement>("progress")!;
+  const planButton=document.createElement("button");planButton.type="button";planButton.dataset.nj="plan";planButton.textContent="预检";
+  generate.before(planButton);
+  const planText=document.createElement("div");planText.className="nj-preflight nj-status";planText.style.padding="8px 16px";
+  form.insertBefore(planText,quality);
   const inputs=new Map<string,HTMLInputElement>();let pending=false;let activeJob:string|null=null;let cancelRequested=false;
-  let historyAvailable=false;
+  let historyAvailable=false;let planAvailable=false;
   let parameterBase:Record<string,unknown>={};
   for(const [title,fields] of groups){
     const fieldset=document.createElement("fieldset");const legend=document.createElement("legend");legend.textContent=title;
@@ -78,13 +83,33 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   function busy(value:boolean){pending=value;options.setBusy(value);generate.disabled=value;reset.disabled=value;cancel.disabled=!value;progress.hidden=!value;
     for(const input of inputs.values())input.disabled=value;hand.disabled=value;connection.disabled=value;
     history.disabled=value||!historyAvailable;historyRefresh.disabled=value||!historyAvailable;historyOpen.disabled=value||!history.value;
+    planButton.disabled=value||!planAvailable;
   }
-  function invalidate(){downloads.replaceChildren();quality.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
+  function invalidate(){downloads.replaceChildren();quality.textContent="";planText.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
   fieldRoot.addEventListener("input",invalidate);
   open.addEventListener("click",()=>dialog.showModal());
   dialog.querySelector('[data-nj="close"]')!.addEventListener("click",()=>dialog.close());
   reset.addEventListener("click",()=>{for(const [key,input] of inputs)input.value=String(defaults[key]);hand.value="right";connection.value="shared";parameterBase={};invalidate();});
   async function json(url:string,init?:RequestInit){const response=await fetch(url,init);const data=await response.json();if(!response.ok)throw new Error(data.error??`HTTP ${response.status}`);return data;}
+  function parametersFromForm(){
+    const parameters:Record<string,unknown>={...parameterBase,handedness:hand.value,connection_mode:connection.value};
+    const axis:Record<string,number>={...(parameterBase.axial as Record<string,number>|undefined)};
+    for(const [key,input] of inputs){const value=input.valueAsNumber;if(!Number.isFinite(value))throw new Error('参数必须为有限数值');(axial.has(key)?axis:parameters)[key]=value;}
+    parameters.axial=axis;return parameters;
+  }
+  async function preflight(parameters:Record<string,unknown>){
+    const plan=await json('/api/native-joint/plan',{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({schemaVersion:1,parameters})}) as JointPreflight;
+    if(plan.fullMeshVerified||plan.qualityVerified)throw new Error('预检不能冒充网格验收');
+    planText.textContent=`预计六面体：${plan.estimatedElements}\n有效轴向分段（每螺距 / 单板）：${plan.axial.seeds.axialPerPitch} / ${plan.axial.seeds.axialPerPlate}\n头板间隙：${plan.axial.headToPlateAxialGap??"—"} mm\n预检状态：尚未生成网格、未验收质量`;
+  }
+  planButton.disabled=true;
+  planButton.addEventListener("click",async()=>{
+    if(pending||options.isBusy()||!form.reportValidity())return;
+    busy(true);cancel.disabled=true;message.textContent="";status.textContent="参数预检中";
+    try{await preflight(parametersFromForm());status.textContent="预检完成";}
+    catch(error){message.textContent=String(error);planText.textContent="";status.textContent="预检失败";}
+    finally{busy(false);}
+  });
   async function refreshHistory(){
     if(!historyAvailable)return;
     const data=await json('/api/native-joint/jobs') as {jobs:Array<{id:string;state:string;created:number}>};
@@ -137,11 +162,11 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   });
   form.addEventListener("submit",async event=>{
     event.preventDefault();if(pending||options.isBusy()||!form.reportValidity())return;
-    const parameters:Record<string,unknown>={...parameterBase,handedness:hand.value,connection_mode:connection.value};
-    const axis:Record<string,number>={...(parameterBase.axial as Record<string,number>|undefined)};
-    for(const [key,input] of inputs){const value=input.valueAsNumber;if(!Number.isFinite(value))return;(axial.has(key)?axis:parameters)[key]=value;}
-    parameters.axial=axis;invalidate();cancelRequested=false;busy(true);status.textContent="生成与审计中";
+    invalidate();cancelRequested=false;busy(true);status.textContent="生成与审计中";
     try{
+      const parameters=parametersFromForm();
+      if(planAvailable)await preflight(parameters);
+      if(cancelRequested){status.textContent="已取消";return;}
       let job=await json('/api/native-joint/jobs',{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({schemaVersion:1,parameters})}) as JointJob;
       activeJob=job.id;
       if(cancelRequested)await json(`/api/native-joint/jobs/${activeJob}`,{method:"DELETE"});
@@ -158,6 +183,7 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   if(!options.available){status.textContent="本机装配后端未启用";return;}
   void json('/api/native-joint/capabilities').then(async data=>{
     open.disabled=false;status.textContent="本机后端可用";historyAvailable=data.historyAvailable===true;
+    planAvailable=data.planAvailable===true;planButton.disabled=!planAvailable;
     history.disabled=!historyAvailable;historyRefresh.disabled=!historyAvailable;
     try{await refreshHistory();}catch(error){message.textContent=`任务记录读取失败：${String(error)}`;}
   }).catch(()=>{status.textContent="本机装配后端不可用";});

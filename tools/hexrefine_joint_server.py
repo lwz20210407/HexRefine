@@ -74,12 +74,16 @@ class JointJobs:
             return [dict(id=j['id'],state=j['state'],created=j['created'],restored=j.get('restored',False))
                     for j in sorted(self.jobs.values(),key=lambda j:j['created'],reverse=True)]
 
-    def start(self,request):
-        from tools.bolthex.native_joint import NativeJointSpec
+    def plan(self,request):
+        from tools.bolthex.native_joint import NativeJointSpec,plan_native_joint
         if not isinstance(request,dict) or set(request)!={'schemaVersion','parameters'} or type(request['schemaVersion']) is not int or request['schemaVersion']!=1:
             raise ValueError('Require version-1 native joint request')
         spec=NativeJointSpec.parse(request['parameters'])
         if type(spec.element_limit) is not int or not 1<=spec.element_limit<=200000:raise ValueError('GUI element budget is limited to 200000 H8')
+        return plan_native_joint(spec)
+
+    def start(self,request):
+        self.plan(request)
         with self.lock:
             if self.closed:raise RuntimeError('Joint service is closed')
             if any(j['state']=='running' for j in self.jobs.values()):raise RuntimeError('Another joint job is running')
@@ -186,7 +190,7 @@ def handler_for(jobs):
             path=urlsplit(self.path).path
             try:
                 if method=='GET' and path=='/api/native-joint/capabilities':
-                    self._json(200,dict(available=True,schemaVersion=1,elementLimit=200000,historyAvailable=True));return
+                    self._json(200,dict(available=True,schemaVersion=1,elementLimit=200000,historyAvailable=True,planAvailable=True));return
                 if method=='GET' and path=='/api/native-joint/jobs':
                     self._json(200,dict(jobs=jobs.inventory()));return
                 if method=='GET' and path=='/favicon.ico':
@@ -195,13 +199,15 @@ def handler_for(jobs):
                     body=b'window.HEXREFINE_RUNTIME={appMode:"internal",guiElementLimit:null,nativeJointAvailable:true};window.COMFORMHEX_RUNTIME=window.HEXREFINE_RUNTIME;'
                     self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8')
                     self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
-                if method=='POST' and path=='/api/native-joint/jobs':
+                if method=='POST' and path in ('/api/native-joint/jobs','/api/native-joint/plan'):
                     if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('JSON request required')
                     length=int(self.headers.get('Content-Length','0'))
                     if not 0<length<=65536:raise ValueError('Request length must be 1..65536 bytes')
                     def reject_constant(value):raise ValueError('Nonfinite JSON number')
                     request=json.loads(self.rfile.read(length),parse_constant=reject_constant)
-                    self._json(202,jobs.start(request));return
+                    if path.endswith('/plan'):self._json(200,jobs.plan(request))
+                    else:self._json(202,jobs.start(request))
+                    return
                 tokens=path.strip('/').split('/')
                 if len(tokens)>=4 and tokens[:3]==['api','native-joint','jobs']:
                     identity=tokens[3]
