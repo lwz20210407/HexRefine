@@ -1,7 +1,9 @@
 """Abaqus INP 文件导出 (mm-t-N-s 单位制)"""
 from .version import APP_NAME, APP_VERSION
 
-def write_inp(meshes, path, elem_type='C3D8R', with_material=True):
+def write_inp(meshes, path, elem_type='C3D8R', with_material=True,coordinate_precision=6):
+    if type(coordinate_precision) is not int or not 3<=coordinate_precision<=15:
+        raise ValueError('INP coordinate precision must be an integer in [3,15]')
     lines = []
     lines.append('*HEADING')
     lines.append(f'** {APP_NAME!s} v{APP_VERSION!s} (all-hexahedral bolt connection mesh)')
@@ -18,7 +20,7 @@ def write_inp(meshes, path, elem_type='C3D8R', with_material=True):
         lines.append('*PART, NAME=%s' % mesh.name)
         lines.append('*NODE')
         for i, (x, y, z) in enumerate(mesh.nodes, start=1):
-            lines.append('%d, %.6f, %.6f, %.6f' % (i, x, y, z))
+            lines.append(str(i)+', '+', '.join(format(float(v),f'.{coordinate_precision}f') for v in (x,y,z)))
         None
         lines.append('*ELEMENT, TYPE=%s, ELSET=EALL' % elem_type)
         for i, e in enumerate(mesh.elems, start=1):
