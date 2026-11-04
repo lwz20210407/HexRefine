@@ -16,6 +16,8 @@ def main(URL,ROOT,executable):
                                   args=['--enable-unsafe-swiftshader'])
         context=browser.new_context(viewport=dict(width=1440,height=1000),accept_downloads=True)
         page=context.new_page()
+        post_requests=[]
+        page.on('request',lambda request:post_requests.append(request.url) if request.method=='POST' and request.url.endswith('/api/native-joint/jobs') else None)
         page.on('console',lambda msg:result['consoleErrors'].append(msg.text) if msg.type=='error' else None)
         page.on('pageerror',lambda exc:result['pageErrors'].append(str(exc)))
         page.goto(URL,wait_until='networkidle');page.get_by_role('button',name='装配参数',exact=True).wait_for()
@@ -37,7 +39,7 @@ def main(URL,ROOT,executable):
         event.value.save_as(ROOT/'gui-generated.k')
         result['downloadKSHA256']=hashlib.sha256((ROOT/'gui-generated.k').read_bytes()).hexdigest()
         assert result['downloadKSHA256']==job['report']['kReadback']['sha256']
-        with page.expect_download() as event:dialog.get_by_role('link',name='共节点 INP',exact=True).click()
+        with page.expect_download() as event:dialog.get_by_role('link',name='装配 INP',exact=True).click()
         event.value.save_as(ROOT/'gui-generated.inp')
         assert hashlib.sha256((ROOT/'gui-generated.inp').read_bytes()).hexdigest()==job['report']['inpSHA256']['merged.inp']
         page.screenshot(path=str(ROOT/'gui-result-dialog.png'))
@@ -50,6 +52,28 @@ def main(URL,ROOT,executable):
         result['modelBluePixels']=int(blue.sum());assert result['modelBluePixels']>2000
         result['reportText']=page.locator('#report').inner_text();assert '53592' in result['reportText'] and '56704' in result['reportText']
         page.get_by_role('button',name='装配参数',exact=True).click()
+        dialog.locator('select[name="connection_mode"]').select_option('separate')
+        assert dialog.get_by_role('link',name='下载 K',exact=True).count()==0
+        dialog.get_by_role('button',name='生成',exact=True).click()
+        dialog.get_by_role('link',name='下载 K',exact=True).wait_for(timeout=120000)
+        separate_id=dialog.get_by_role('link',name='下载 K',exact=True).get_attribute('href').split('/')[4]
+        separate=page.request.get(origin+f'/api/native-joint/jobs/{separate_id}').json()
+        assert separate['report']['connectionMode']=='separate' and separate['report']['nodeOwnership']['componentNodeSetsDisjoint']
+        assert separate['report']['quality']['elements']==53592 and separate['report']['quality']['nodes']>56704
+        result['separateJobId']=separate_id;result['separateQuality']=separate['report']['quality']
+        assert '分件（无耦合）' in dialog.locator('.nj-quality').inner_text()
+        page.screenshot(path=str(ROOT/'gui-separate.png'))
+        before_posts=len(post_requests)
+        page.reload(wait_until='networkidle');page.get_by_role('button',name='装配参数',exact=True).click()
+        dialog.locator('select[name="joint_history"]').select_option(separate_id)
+        dialog.get_by_role('button',name='打开结果',exact=True).click()
+        dialog.get_by_role('link',name='下载 K',exact=True).wait_for(timeout=120000)
+        assert dialog.get_by_role('link',name='下载 K',exact=True).get_attribute('href').split('/')[4]==separate_id
+        assert dialog.locator('select[name="connection_mode"]').input_value()=='separate'
+        assert dialog.locator('input[name="thread_length"]').input_value()=='16.1'
+        assert len(post_requests)==before_posts
+        result['refreshReopenedWithoutGeneration']=True
+        page.screenshot(path=str(ROOT/'gui-recovered.png'))
         dialog.locator('input[name="plate_x"]').fill('20');dialog.get_by_role('button',name='生成',exact=True).click()
         dialog.locator('.nj-message').filter(has_text='Rectangle').wait_for(timeout=60000)
         result['invalidInputError']=dialog.locator('.nj-message').inner_text()

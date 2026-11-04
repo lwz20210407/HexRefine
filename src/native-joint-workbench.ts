@@ -4,9 +4,11 @@ import type {Mesh} from "./types.js";
 interface JointQuality {nodes:number;elements:number;minimumCornerScaledJacobian:number;minimumGaussJacobian:number;}
 interface JointReport {
   quality:JointQuality;parts:Array<JointQuality&{name:string}>;limitations:string[];kReadback:{sha256:string};
+  connectionMode:"shared"|"separate";nodeOwnership:{componentNodeSetsDisjoint:boolean};
+  parameters:Record<string,unknown>&{axial:Record<string,number>;handedness:string;connection_mode:string};
   plan:{seeds:{axialPerPitch:number;axialPerPlate:number};headToPlateAxialGap:number|null;axialDimensionsChanged:boolean};
 }
-interface JointJob {id:string;state:"running"|"succeeded"|"failed"|"cancelled";error:string|null;files?:Record<string,string>;report?:JointReport;}
+interface JointJob {id:string;state:"running"|"succeeded"|"failed"|"cancelled"|"interrupted";error:string|null;files?:Record<string,string>;report?:JointReport;}
 export interface NativeJointSnapshot {
   mesh:Mesh;model:LsdynaMixedMesh;request:{kind:string;parameters:Record<string,unknown>};
   plan:Record<string,unknown>;quality:JointQuality;
@@ -50,6 +52,8 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const reset=dialog.querySelector<HTMLButtonElement>('[data-nj="reset"]')!;
   const progress=dialog.querySelector<HTMLProgressElement>("progress")!;
   const inputs=new Map<string,HTMLInputElement>();let pending=false;let activeJob:string|null=null;let cancelRequested=false;
+  let historyAvailable=false;
+  let parameterBase:Record<string,unknown>={};
   for(const [title,fields] of groups){
     const fieldset=document.createElement("fieldset");const legend=document.createElement("legend");legend.textContent=title;
     const grid=document.createElement("div");grid.className="nj-fields";fieldset.append(legend,grid);fieldRoot.append(fieldset);
@@ -61,22 +65,80 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   }
   const hand=document.createElement("select");hand.name="handedness";hand.innerHTML='<option value="right">右旋</option><option value="left">左旋</option>';
   const handLabel=document.createElement("label");handLabel.textContent="旋向";handLabel.append(hand);fieldRoot.querySelector(".nj-fields")!.append(handLabel);
+  const connection=document.createElement("select");connection.name="connection_mode";
+  connection.innerHTML='<option value="shared">共节点（粘结）</option><option value="separate">分件（无耦合）</option>';
+  const connectionLabel=document.createElement("label");connectionLabel.textContent="部件连接";connectionLabel.append(connection);
+  fieldRoot.querySelector(".nj-fields")!.append(connectionLabel);
+  const historyGroup=document.createElement("fieldset");
+  historyGroup.innerHTML='<legend>任务记录</legend><div class="nj-fields"><label>已验收结果<select name="joint_history"></select></label><button type="button" data-nj="history-open" disabled>打开结果</button><button type="button" data-nj="history-refresh" disabled>刷新记录</button></div>';
+  form.insertBefore(historyGroup,message);
+  const history=historyGroup.querySelector<HTMLSelectElement>('select')!;
+  const historyOpen=historyGroup.querySelector<HTMLButtonElement>('[data-nj="history-open"]')!;
+  const historyRefresh=historyGroup.querySelector<HTMLButtonElement>('[data-nj="history-refresh"]')!;
   function busy(value:boolean){pending=value;options.setBusy(value);generate.disabled=value;reset.disabled=value;cancel.disabled=!value;progress.hidden=!value;
-    for(const input of inputs.values())input.disabled=value;hand.disabled=value;
+    for(const input of inputs.values())input.disabled=value;hand.disabled=value;connection.disabled=value;
+    history.disabled=value||!historyAvailable;historyRefresh.disabled=value||!historyAvailable;historyOpen.disabled=value||!history.value;
   }
   function invalidate(){downloads.replaceChildren();quality.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
   fieldRoot.addEventListener("input",invalidate);
   open.addEventListener("click",()=>dialog.showModal());
   dialog.querySelector('[data-nj="close"]')!.addEventListener("click",()=>dialog.close());
-  reset.addEventListener("click",()=>{for(const [key,input] of inputs)input.value=String(defaults[key]);hand.value="right";invalidate();});
+  reset.addEventListener("click",()=>{for(const [key,input] of inputs)input.value=String(defaults[key]);hand.value="right";connection.value="shared";parameterBase={};invalidate();});
   async function json(url:string,init?:RequestInit){const response=await fetch(url,init);const data=await response.json();if(!response.ok)throw new Error(data.error??`HTTP ${response.status}`);return data;}
+  async function refreshHistory(){
+    if(!historyAvailable)return;
+    const data=await json('/api/native-joint/jobs') as {jobs:Array<{id:string;state:string;created:number}>};
+    const selected=history.value;history.replaceChildren();
+    for(const job of data.jobs.filter(j=>j.state==="succeeded")){
+      const item=document.createElement("option");item.value=job.id;
+      item.textContent=`${new Date(job.created*1000).toLocaleString()} · ${job.id.slice(0,8)}`;history.append(item);
+    }
+    if([...history.options].some(o=>o.value===selected))history.value=selected;
+    historyOpen.disabled=pending||!history.value;
+  }
+  historyRefresh.addEventListener("click",()=>{void refreshHistory().catch(error=>{message.textContent=String(error);});});
+  history.addEventListener("change",()=>{historyOpen.disabled=pending||!history.value;});
+  async function installJob(job:JointJob,parameters:Record<string,unknown>){
+    if(job.state!=="succeeded"||!job.files||!job.report)throw new Error(job.error??'生成失败');
+    const response=await fetch(job.files['model.k']!);if(!response.ok)throw new Error('无法读取已生成的 K');
+    const bytes=await response.arrayBuffer();const digest=await crypto.subtle.digest('SHA-256',bytes);
+    const hash=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
+    if(hash!==job.report.kReadback.sha256)throw new Error('生成 K 的哈希与审计不一致');
+    const text=new TextDecoder().decode(bytes);const model=parseNativeLsdynaMixedKeyword(text);const report=job.report;
+    if(model.nodes.length!==report.quality.nodes||model.solids.length!==report.quality.elements)throw new Error('预览数量与审计不一致');
+    if(report.connectionMode!==parameters.connection_mode)throw new Error('输出连接模式与请求不一致');
+    const mesh:Mesh={kind:"H1",nodes:model.nodes.map(p=>[...p]),elements:model.solids.map(s=>[...s.nodes])};
+    options.show({mesh,model,request:{kind:"native-joint",parameters},plan:{},quality:report.quality,
+      summary:{nodes:model.nodes.length,solids:model.solids.length,quads:0,beams:0,warnings:report.limitations}});
+    quality.textContent=`节点 ${report.quality.nodes} · 六面体 ${report.quality.elements}\n最小 SJ ${report.quality.minimumCornerScaledJacobian.toFixed(5)}\n有效轴向分段（每螺距 / 单板）：${report.plan.seeds.axialPerPitch} / ${report.plan.seeds.axialPerPlate}\n轴向尺寸变化：${report.plan.axialDimensionsChanged?"有":"无"}\n头板间隙：${report.plan.headToPlateAxialGap??"—"} mm\n几何来源：解析参数（非独立 CAD）\n`+report.parts.map((p,i)=>`PID ${i+1} · ${p.name} · ${p.elements}`).join("\n");
+    quality.textContent+=`\n连接模式：${report.connectionMode==="shared"?"共节点（粘结）":"分件（无耦合）"}\n跨部件节点：${report.nodeOwnership.componentNodeSetsDisjoint?"独立":"共享"}`;
+    for(const [name,label] of [['model.k','下载 K'],['merged.inp','装配 INP'],['parts.inp','分件 INP'],['report.json','审计报告']] as const){
+      const link=document.createElement("a");link.href=job.files[name]!;link.download=name;link.textContent=label;downloads.append(link);
+    }
+    status.textContent=`已生成 ${report.quality.elements} H8`;
+  }
+  historyOpen.addEventListener("click",async()=>{
+    if(pending||options.isBusy()||!history.value)return;
+    invalidate();busy(true);status.textContent="读取已验收结果";
+    try{
+      const job=await json(`/api/native-joint/jobs/${history.value}`) as JointJob;
+      if(!job.report)throw new Error(job.error??'任务没有已验收结果');
+      const parameters=job.report.parameters;
+      await installJob(job,parameters);
+      parameterBase=structuredClone(parameters);
+      for(const [key,input] of inputs)input.value=String(axial.has(key)?parameters.axial[key]:parameters[key]);
+      hand.value=parameters.handedness;connection.value=parameters.connection_mode;
+    }catch(error){message.textContent=String(error);status.textContent="读取结果失败";}
+    finally{busy(false);}
+  });
   cancel.addEventListener("click",async()=>{
     cancelRequested=true;cancel.disabled=true;status.textContent="正在取消";if(!activeJob)return;
     try{await json(`/api/native-joint/jobs/${activeJob}`,{method:"DELETE"});}catch(error){message.textContent=String(error);cancel.disabled=false;cancelRequested=false;}
   });
   form.addEventListener("submit",async event=>{
     event.preventDefault();if(pending||options.isBusy()||!form.reportValidity())return;
-    const parameters:Record<string,unknown>={handedness:hand.value};const axis:Record<string,number>={};
+    const parameters:Record<string,unknown>={...parameterBase,handedness:hand.value,connection_mode:connection.value};
+    const axis:Record<string,number>={...(parameterBase.axial as Record<string,number>|undefined)};
     for(const [key,input] of inputs){const value=input.valueAsNumber;if(!Number.isFinite(value))return;(axial.has(key)?axis:parameters)[key]=value;}
     parameters.axial=axis;invalidate();cancelRequested=false;busy(true);status.textContent="生成与审计中";
     try{
@@ -87,25 +149,16 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
         await new Promise(resolve=>setTimeout(resolve,350));job=await json(`/api/native-joint/jobs/${job.id}`) as JointJob;
       }
       if(job.state==="cancelled"){status.textContent="已取消";return;}
-      if(job.state!=="succeeded"||!job.files||!job.report)throw new Error(job.error??'生成失败');
-      const response=await fetch(job.files['model.k']!);if(!response.ok)throw new Error('无法读取已生成的 K');
-      const bytes=await response.arrayBuffer();const digest=await crypto.subtle.digest('SHA-256',bytes);
-      const hash=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
-      if(hash!==job.report.kReadback.sha256)throw new Error('生成 K 的哈希与审计不一致');
-      const text=new TextDecoder().decode(bytes);const model=parseNativeLsdynaMixedKeyword(text);const report=job.report;
-      if(model.nodes.length!==report.quality.nodes||model.solids.length!==report.quality.elements)throw new Error('预览数量与审计不一致');
-      const mesh:Mesh={kind:"H1",nodes:model.nodes.map(p=>[...p]),elements:model.solids.map(s=>[...s.nodes])};
-      options.show({mesh,model,request:{kind:"native-joint",parameters},plan:{},quality:report.quality,
-        summary:{nodes:model.nodes.length,solids:model.solids.length,quads:0,beams:0,warnings:report.limitations}});
-      quality.textContent=`节点 ${report.quality.nodes} · 六面体 ${report.quality.elements}\n最小 SJ ${report.quality.minimumCornerScaledJacobian.toFixed(5)}\n有效轴向分段（每螺距 / 单板）：${report.plan.seeds.axialPerPitch} / ${report.plan.seeds.axialPerPlate}\n轴向尺寸变化：${report.plan.axialDimensionsChanged?"有":"无"}\n头板间隙：${report.plan.headToPlateAxialGap??"—"} mm\n几何来源：解析参数（非独立 CAD）\n`+report.parts.map((p,i)=>`PID ${i+1} · ${p.name} · ${p.elements}`).join("\n");
-      for(const [name,label] of [['model.k','下载 K'],['merged.inp','共节点 INP'],['parts.inp','分件 INP'],['report.json','审计报告']] as const){
-        const link=document.createElement("a");link.href=job.files[name]!;link.download=name;link.textContent=label;downloads.append(link);
-      }
-      status.textContent=`已生成 ${report.quality.elements} H8`;
+      await installJob(job,parameters);
+      try{await refreshHistory();history.value=job.id;}catch(error){message.textContent=`任务记录刷新失败：${String(error)}`;}
     }catch(error){message.textContent=error instanceof Error?error.message:String(error);status.textContent="任务失败";}
     finally{activeJob=null;cancelRequested=false;busy(false);}
   });
   open.disabled=true;status.textContent="检查本机后端";
   if(!options.available){status.textContent="本机装配后端未启用";return;}
-  void json('/api/native-joint/capabilities').then(()=>{open.disabled=false;status.textContent="本机后端可用";}).catch(()=>{status.textContent="本机装配后端不可用";});
+  void json('/api/native-joint/capabilities').then(async data=>{
+    open.disabled=false;status.textContent="本机后端可用";historyAvailable=data.historyAvailable===true;
+    history.disabled=!historyAvailable;historyRefresh.disabled=!historyAvailable;
+    try{await refreshHistory();}catch(error){message.textContent=`任务记录读取失败：${String(error)}`;}
+  }).catch(()=>{status.textContent="本机装配后端不可用";});
 }
