@@ -34,6 +34,7 @@ def join_interfaces(first,second,a,b):
     for part,item,ids,remap in ((first,a,x,None),(second,b,y,mapping)):
         faces=np.asarray(item['faces'])
         if faces.ndim!=2 or faces.shape[1]!=4 or not np.issubdtype(faces.dtype,np.integer) or not np.isin(faces,ids).all():raise ValueError('Invalid interface face partition')
+        if not np.array_equal(np.unique(faces),np.sort(ids)):raise ValueError('Interface rings must contain exactly the declared face vertices')
         declared={tuple(sorted(map(int,f))):_cycle(f) for f in faces}
         actual=part.elems[:,FACES].reshape(-1,4)
         actual=actual[np.isin(actual,ids).all(axis=1)]

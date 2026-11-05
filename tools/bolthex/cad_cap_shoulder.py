@@ -96,6 +96,9 @@ def shoulder_equatorial_interface(mesh):
 
 
 def _interface_audit(mesh, interfaces, expected_regions):
+    def cycle(face):
+        values=tuple(map(int,face))
+        return min(values[i:]+values[:i] for i in range(4))
     seen=set()
     for name,faces in interfaces.items():
         keys=[tuple(sorted(map(int,face))) for face in faces]
@@ -106,14 +109,18 @@ def _interface_audit(mesh, interfaces, expected_regions):
         for face in element[FACES]:
             key = tuple(sorted(face))
             if key in targets:
-                targets[key].append(eid)
+                targets[key].append((eid,cycle(face)))
     result, owners = {}, {}
     for name, faces in interfaces.items():
         pairs = []
         for face in faces:
-            adjacent = targets[tuple(sorted(face))]
+            records = targets[tuple(sorted(face))]
+            adjacent = [eid for eid,_ in records]
             if len(adjacent) != 2 or {mesh.regions[e] for e in adjacent} != expected_regions[name]:
                 raise ValueError(f'Nonconformal shoulder interface: {name}')
+            declared=cycle(face)
+            if declared not in {oriented for _,oriented in records} or records[0][1]!=cycle(records[1][1][::-1]):
+                raise ValueError(f'Invalid shoulder interface face cycle: {name}')
             pairs.append(adjacent)
         owners[name] = np.array(pairs, dtype=np.int64)
         result[name] = dict(sharedFaces=len(faces), sharedNodes=len(np.unique(faces)),
