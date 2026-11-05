@@ -7,6 +7,10 @@
 > See [development TODO](docs/FASTENER_DEVELOPMENT_TODO.md) and
 > [native joint backend](docs/NATIVE_JOINT_BACKEND.md) and
 > [local joint GUI](docs/NATIVE_JOINT_GUI.md).
+> The [saved M6 whole cap-nut CAD/H8/K/INP case](docs/CAP_DOME_AND_UPPER.md)
+> is verified on this branch; wider families, native-HM and solver acceptance
+> remain separate. The [original Screw audit](docs/TRUEGRID_SCREW_REPLAY.md)
+> deliberately rejects the unresolved collapsed-axis model.
 > The upstream online workbench below does not deploy these fork-only features.
 > Original authorship and notices are retained.
 

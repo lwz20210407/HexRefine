@@ -22,7 +22,7 @@ vertex set exactly. No extra off-interface nodes may be welded.
 
 Actual whole result:333,824 H8,456,194 nodes, minimum SJ0.21572946, positive
 Gauss determinants, boundary Euler2, no nonmanifold faces/edges. Source CAD
-volume426.91720778mm3 versus integrated FE426.89249779mm3 gives about5.79e-5
+volume426.91720762mm3 versus integrated FE426.89249779mm3 gives about5.79e-5
 relative error; component FE/CAD sums and zero free join faces are separately
 verified. Dome coordinates/connectivity are retained as the original prefix.
 
@@ -39,6 +39,18 @@ reported as `unchanged-source-STEP-byte-copy-and-independent-reimport`, NOT a
 successful BRep writer round-trip: both tested BRep STEP writer settings failed
 on this whole source. Crop exports remain independently written geometries.
 No FE-to-STEP approximation or lowered gate was substituted.
+
+Follow-up diagnosis found an exchange-wrapper defect: the imported single
+solid retains an external assembly parent, leaving zero XDE free shapes when
+passed directly to the writer. `cad_step_export.export_step_detached` now
+exports a deep isolated selected-solid copy, excluding parent/sibling geometry.
+Nonidentity ancestor transforms explicitly reject rather than guessing world
+placement. It checks original geometry/assembly preservation and reopened
+topology/bounds/volume before exclusive publication. Real regenerated M6 STEP
+geometry passes about8.16e-14 volume error. The earlier whole delivery retains
+its truthful original-byte-copy method; separate regenerated-design evidence
+does not retroactively relabel that file. Cap crop publication now uses this
+guarded exporter, with a tiny actual STEP/K/INP pipeline regression.
 
 Final integration:66 targeted cap/body/outer/interface tests with actual saved
 CAD and ports passed, no skips;20 whole-cache/assembly/independent-K tests also

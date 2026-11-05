@@ -134,7 +134,7 @@ def build_cad_dome(shape,divisions=128,radial_layers=1,element_limit=100000):
 def _publish_partition(step,output,node,mesh,local,report,source_hash,validation_python=None,*,preserve_source_step=False):
     from .cad_mesh_pipeline import _write_inp,_sha
     from .standard_cad import _mass,CAD_ROUNDTRIP_VOLUME_LIMIT
-    from build123d import import_step,export_step
+    from build123d import import_step
     step,output,node=map(lambda p:Path(p).resolve(),(step,output,node))
     if output.exists() or not output.parent.is_dir() or not node.is_file():raise ValueError('Require fresh output and explicit Node executable')
     if not 0<step.stat().st_size<=16777216:raise ValueError('Dome source STEP budget is 16 MiB')
@@ -170,8 +170,11 @@ def _publish_partition(step,output,node,mesh,local,report,source_hash,validation
             if _sha(stage/'model.step')!=source_hash:raise ValueError('Preserved source STEP copy differs')
             report['cadExchangeMethod']='unchanged-source-STEP-byte-copy-and-independent-reimport'
         else:
-            export_step(local,stage/'model.step')
-            report['cadExchangeMethod']='BRep-STEP-export-and-independent-reimport'
+            from .cad_step_export import export_step_detached
+            geometry_exchange=export_step_detached(local,stage/'model.step',source_step=step)
+            geometry_exchange['outputStep']=str(output/'model.step')
+            report['cadGeometryExchange']=geometry_exchange
+            report['cadExchangeMethod']=geometry_exchange['method']
         roundtrip=_mass(import_step(stage/'model.step'))
         cad_exchange=abs(roundtrip-report['sourceCadPartitionVolume'])/report['sourceCadPartitionVolume']
         if cad_exchange>CAD_ROUNDTRIP_VOLUME_LIMIT:raise ValueError('Dome independent CAD exchange volume rejected')
