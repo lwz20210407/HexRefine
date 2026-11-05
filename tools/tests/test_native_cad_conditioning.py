@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.bolthex.native_cad_conditioning import LIMITS, audit_step_carrier, step_carrier_acceptance
+from tools.bolthex import native_cad_conditioning as conditioning
+from tools.bolthex.geometry_accuracy_policy import CadAccuracyPolicy
 
 
 def measured_fixture():
@@ -27,6 +29,29 @@ def measured_fixture():
 
 
 class StepCarrierGateTests(unittest.TestCase):
+    def test_policy_subclass_cannot_relax_candidate_source_or_volume_limits(self):
+        class Unbounded(CadAccuracyPolicy):
+            def carrier_limits(self,**kwargs):return {key:1. for key in super().carrier_limits(**kwargs)}
+        policy=Unbounded.engineering(.1)
+        for kind in ('edge','source-reference','volume'):
+            report=measured_fixture()
+            if kind=='edge':
+                report['edgeReverse'][0]['sourceDistance']=.01;report['maximumReverseEdgeDistance']=.01
+            elif kind=='source-reference':
+                report['forward'][0]['referenceDistance']=.01;report['maximumSourceReferenceError']=.01
+            else:report.update(sourceVolume=10000.,stepBrepVolume=10002.,relativeStepBrepVolumeError=.0002)
+            with self.subTest(kind=kind):self.assertFalse(step_carrier_acceptance(report,policy))
+
+    def test_policy_fields_are_revalidated_before_acceptance_or_source_paths(self):
+        class Unchecked(CadAccuracyPolicy):
+            def __post_init__(self):pass
+        for policy in (Unchecked.engineering(True),Unchecked.engineering(float('nan')),
+                       Unchecked.engineering(.1,units='in')):
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):step_carrier_acceptance(measured_fixture(),policy)
+                with patch.object(conditioning,'Path',side_effect=AssertionError('path before policy')):
+                    with self.assertRaises(ValueError):audit_step_carrier('missing','missing','missing',accuracy_policy=policy)
+
     def test_complete_consistent_measurements_pass_but_boolean_claims_are_not_enough(self):
         self.assertTrue(step_carrier_acceptance(measured_fixture()))
         self.assertFalse(step_carrier_acceptance(dict(strictStepCarrierVerified=True)))
@@ -112,6 +137,19 @@ class TinyActualStepCarrierTests(unittest.TestCase):
         self.assertEqual(r,json.loads(out.read_text()))
         for p,h in before.items():self.assertEqual(sha(p),h)
         with self.assertRaisesRegex(ValueError,'fresh audit output'):audit_step_carrier(self.source,self.carrier,self.ref,out)
+
+    def test_actual_audit_uses_base_limits_and_manifest_not_subclass_overrides(self):
+        from build123d import Box,Location,export_step
+        class Untrusted(CadAccuracyPolicy):
+            def carrier_limits(self,**kwargs):raise AssertionError('subclass limits executed')
+            def manifest(self,**kwargs):raise AssertionError('subclass manifest executed')
+        export_step(Box(2,2,2).moved(Location((2e-5,0.,0.))),self.carrier)
+        report=audit_step_carrier(self.source,self.carrier,self.ref,accuracy_policy=Untrusted.engineering(.001))
+        self.assertEqual(report['geometryAccuracyPolicy'],CadAccuracyPolicy.engineering(.001).manifest())
+        self.assertFalse(report['selectedGeometryPolicyVerified'])
+        self.assertFalse(report['engineeringStepCarrierVerified'])
+        self.assertFalse(report['strictStepCarrierVerified'])
+        self.assertFalse(report['nativeHmVerified']);self.assertFalse(report['fullModelAcceptance'])
 
     def test_stale_reference_or_missing_calibrated_controls_rejects_before_cad(self):
         r=json.loads(self.ref.read_text());r['sourceStepSHA256']='0'*64;self.ref.write_text(json.dumps(r))

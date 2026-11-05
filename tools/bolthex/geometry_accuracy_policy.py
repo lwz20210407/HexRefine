@@ -5,7 +5,7 @@ engineering defaults below are this project's choices, not vendor standards.
 Source-math integrity, topology, detJ and discrete-volume preservation are
 outside this policy and must not be relaxed by selecting a CAD profile.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import math
 
 
@@ -101,3 +101,17 @@ class CadAccuracyPolicy:
             sourceMathAndMeshValidityGatesUnchanged=True,
             matingContactOrManufacturingConformityCertified=False,
             primaryDocumentation=list(REFERENCES))
+
+
+def validated_policy(value=None):
+    """Revalidate base fields without executing subclass budget/manifest methods."""
+    if value is None:
+        return CadAccuracyPolicy()
+    if not isinstance(value, CadAccuracyPolicy):
+        raise ValueError('Require a validated CAD accuracy policy')
+    policy = CadAccuracyPolicy(**{field.name: getattr(value, field.name)
+                                  for field in fields(CadAccuracyPolicy)})
+    budget = policy.distance_budget_mm(critical=True)
+    if not math.isfinite(budget) or budget <= 0:
+        raise ValueError('Critical geometry budget must be finite, positive and representable')
+    return policy

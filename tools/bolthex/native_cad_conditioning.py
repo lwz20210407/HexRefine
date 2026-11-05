@@ -13,7 +13,7 @@ from tools.hypermesh_geometry_probe import sha, validate_reference
 from tools.hypermesh_probe_reference import TrimmedFaceDistances
 from .native_cad_audit import _bounds, _interior_point
 from .standard_cad import _mass
-from .geometry_accuracy_policy import CadAccuracyPolicy
+from .geometry_accuracy_policy import CadAccuracyPolicy,validated_policy
 
 
 LIMITS = dict(maximumSurfaceDistance=2e-6, maximumBoundaryNodeControlDistance=2e-6,
@@ -34,10 +34,7 @@ def step_carrier_acceptance(report, policy=None, *, all_surfaces_critical=True):
     jobs supply the declared target size; reports retain the strict result too.
     This function never certifies mesh topology, native-HM content or contacts.
     """
-    if policy is None:
-        policy=CadAccuracyPolicy()
-    if not isinstance(policy,CadAccuracyPolicy):
-        raise ValueError('Require a validated CAD accuracy policy')
+    policy=validated_policy(policy)
     limits=policy.carrier_limits(all_surfaces_critical=all_surfaces_critical)
     if (report.get('completeWitnessCoverage') is not True or report.get('sourceValid') is not True
             or report.get('candidateValid') is not True or report.get('inputsUnchanged') is not True
@@ -125,9 +122,7 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
     Missing strict-IN face witnesses are recorded and reject the carrier, but
     do not prevent collecting the remaining physical-edge negative evidence.
     """
-    policy=CadAccuracyPolicy() if accuracy_policy is None else accuracy_policy
-    if not isinstance(policy,CadAccuracyPolicy):
-        raise ValueError('Require a validated CAD accuracy policy')
+    policy=validated_policy(accuracy_policy)
     source_step, carrier_step, reference_file = map(lambda p: Path(p).resolve(),
                                                    (source_step, carrier_step, reference_file))
     if output is not None:

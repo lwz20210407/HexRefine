@@ -8,7 +8,7 @@ from pathlib import Path
 from tools.hypermesh_geometry_probe import sha,validate_reference
 from tools.hypermesh_probe_reference import TrimmedFaceDistances
 from .standard_cad import CAD_ROUNDTRIP_VOLUME_LIMIT,_mass
-from .geometry_accuracy_policy import CadAccuracyPolicy
+from .geometry_accuracy_policy import CadAccuracyPolicy,validated_policy
 
 
 SURFACE_METRICS=('maximumSurfaceDistance','maximumSourceFaceDistance','maximumControlDistanceError',
@@ -17,9 +17,7 @@ SURFACE_METRICS=('maximumSurfaceDistance','maximumSourceFaceDistance','maximumCo
 
 
 def _policy(accuracy_policy):
-    if accuracy_policy is None:return CadAccuracyPolicy()
-    if not isinstance(accuracy_policy,CadAccuracyPolicy):raise ValueError('Require a validated CAD accuracy policy')
-    return accuracy_policy
+    return validated_policy(accuracy_policy)
 
 
 def surface_acceptance(metrics,accuracy_policy=None):

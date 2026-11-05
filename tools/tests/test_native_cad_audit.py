@@ -25,6 +25,28 @@ class IndependentNativeCadTests(unittest.TestCase):
 class NativeCadSurfacePolicyTests(unittest.TestCase):
     good=dict(IndependentNativeCadTests.good,maximumSourceReferenceError=0.)
 
+    def test_policy_subclass_cannot_relax_surface_or_source_evidence_limits(self):
+        class Unbounded(CadAccuracyPolicy):
+            def carrier_limits(self,**kwargs):return {key:1. for key in super().carrier_limits(**kwargs)}
+            def manifest(self,**kwargs):return {'forged':True}
+        policy=Unbounded.engineering(.1)
+        for key in ('maximumReverseEdgeDistance','maximumSourceReferenceError'):
+            with self.subTest(key=key):
+                self.assertFalse(audit.surface_acceptance(dict(self.good,**{key:.01}),policy))
+        normalized=audit._policy(policy)
+        self.assertIs(type(normalized),CadAccuracyPolicy)
+        self.assertEqual(normalized.manifest(),CadAccuracyPolicy.engineering(.1).manifest())
+
+    def test_policy_fields_are_revalidated_before_native_surface_measurements(self):
+        class Unchecked(CadAccuracyPolicy):
+            def __post_init__(self):pass
+        for policy in (Unchecked.engineering(True),Unchecked.engineering(float('nan')),
+                       Unchecked.engineering(.1,units='in')):
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):audit.surface_acceptance(self.good,policy)
+                with patch.object(audit,'Path',side_effect=AssertionError('path before policy')):
+                    with self.assertRaises(ValueError):audit.audit_exchange('missing','missing','missing','missing',accuracy_policy=policy)
+
     def test_selected_surface_policy_does_not_change_legacy_acceptance(self):
         changed=dict(self.good,maximumReverseEdgeDistance=2e-5,maximumCadBoundsDifference=2e-5)
         self.assertFalse(acceptance(changed))
@@ -136,6 +158,17 @@ class TinyRealIgesSurfacePolicyTests(unittest.TestCase):
         self.assertGreater(result['relativeNativeVolumeError'],.009)
         self.assertIn('host',result['nativeVolumeMethod'])
         self.assertFalse(result['independentNativeBrepVolumeVerified'])
+
+    def test_actual_iges_audit_uses_base_policy_limits_and_manifest(self):
+        class Untrusted(CadAccuracyPolicy):
+            def carrier_limits(self,**kwargs):raise AssertionError('subclass limits executed')
+            def manifest(self,**kwargs):raise AssertionError('subclass manifest executed')
+        result=audit.audit_exchange(self.manifest,self.step,self.reference,self.output,
+            accuracy_policy=Untrusted.engineering(.001))
+        self.assertEqual(result['geometryAccuracyPolicy'],CadAccuracyPolicy.engineering(.001).manifest())
+        self.assertFalse(result['selectedGeometryPolicyVerified'])
+        self.assertFalse(result['engineeringCadGeometryVerified'])
+        self.assertFalse(result['fullModelAcceptance']);self.assertFalse(result['exactNativeCadCertified'])
 
     def test_engineering_cannot_relax_source_reference_recheck(self):
         reference=json.loads(self.reference.read_text());reference['points'][1]['sourceDistance']+=.0001
