@@ -1,5 +1,5 @@
 """Whole saved M6 cap-nut CAD/H8 assembly, not all-family or solver acceptance."""
-import argparse,json,math
+import argparse,hashlib,json,math
 from pathlib import Path
 import numpy as np
 from .mesh_core import Mesh3D
@@ -14,6 +14,93 @@ def _finite(value):
     return type(value) in (int,float) and math.isfinite(value)
 
 
+def _connectivity_exact(audit):
+    flags=[audit[name] for name in ('connectivityExact','exactConnectivity') if name in audit]
+    return audit.get('reader')=='ansys-dyna-core' and bool(flags) and all(v is True for v in flags)
+
+
+def _body_boundary_coverage(body,physical):
+    """Verify actual unchanged/fresh partitions, not a sum of claimed counts.
+
+    Accepted local source witnesses are inherited only across bitwise identical
+    coordinates and identical connectivity, bound to the original source cache.
+    This remains a reproducibility cache, not a third-party attestation format.
+    """
+    report=body.dims;ids=np.unique(physical)
+    if 'inheritedWitnessEvidence' not in report:
+        if report.get('sourceBoundaryNodesChecked')!=len(ids) or report.get('sourceBoundaryFacesChecked')!=len(physical):
+            raise ValueError('Body evidence does not cover its entire physical boundary')
+        return dict(method='all physical boundary witnesses checked',nodes=len(ids),faces=len(physical))
+    inherited=report['inheritedWitnessEvidence']
+    if (report.get('purpose')!='opt-in-complete-body-exterior-corner-reanchor'
+            or report.get('exteriorFeatureAccepted') is not True or report.get('fixedRadiusMm')!=4.75):
+        raise ValueError('Unsupported inherited body boundary evidence')
+    directory=Path(inherited['sourceCache']).resolve();expected=inherited['sourceEvidenceSHA256']
+    names={'report.json':'acceptedReport','cache-manifest.json':'cacheManifest',
+           'nodes.f64':'nodes.f64','elements.i32':'elements.i32','dome-interface.npz':'dome-interface.npz',
+           'independent-k-audit.json':'independentSourceKReport','model.k':'sourceK'}
+    hashes={}
+    for name,key in names.items():
+        path=directory/name
+        if not path.is_file() or path.is_symlink() or path.stat().st_size>67108864:
+            raise ValueError('Invalid inherited source cache file')
+        hashes[name]=_sha(path)
+        if hashes[name]!=expected.get(key):raise ValueError('Inherited source cache hash differs')
+    source=json.loads((directory/'report.json').read_text())
+    manifest=json.loads((directory/'cache-manifest.json').read_text())
+    audit=json.loads((directory/'independent-k-audit.json').read_text())
+    if (source.get('bodyAccepted') is not True or source.get('fullBody') is not True
+            or source.get('sourceStepSHA256')!=report.get('sourceStepSHA256')
+            or source.get('sourceBoundaryNodesChecked')!=len(ids) or source.get('sourceBoundaryFacesChecked')!=len(physical)
+            or not _connectivity_exact(audit) or audit.get('kSHA256')!=hashes['model.k']
+            or source.get('kSHA256')!=hashes['model.k']):
+        raise ValueError('Inherited source cache is not complete accepted body evidence')
+    for name in ('nodes.f64','elements.i32','dome-interface.npz'):
+        if manifest.get('hashes',{}).get(name)!=hashes[name]:raise ValueError('Inherited source manifest differs')
+    if ((directory/'nodes.f64').stat().st_size!=len(body.nodes)*24
+            or (directory/'elements.i32').stat().st_size!=len(body.elems)*32):
+        raise ValueError('Inherited source mesh length differs')
+    old=np.fromfile(directory/'nodes.f64',dtype='<f8').reshape(-1,3)
+    old_cells=np.fromfile(directory/'elements.i32',dtype='<i4').reshape(-1,8)
+    if not np.isfinite(old).all() or not np.array_equal(old_cells,body.elems):
+        raise ValueError('Inherited source connectivity or coordinates differ')
+    with np.load(directory/'dome-interface.npz',allow_pickle=False) as port:
+        current=body_equatorial_interface(body)
+        if (not np.array_equal(port['nodeRings'],current['nodeRings']) or not np.array_equal(port['faces'],current['faces'])
+                or not np.array_equal(port['coordinates'],current['coordinates'])):
+            raise ValueError('Inherited source interface differs')
+    changed=np.any(old.view(np.uint64)!=np.asarray(body.nodes,dtype='<f8').view(np.uint64),axis=1)
+    touched=changed[physical].any(axis=1);fresh_ids=np.unique(physical[touched])
+    fresh=report['freshBoundaryWitnesses']
+    counts={'sourceBoundaryNodesChecked':len(fresh_ids),'sourceBoundaryFacesChecked':int(touched.sum()),
+            'sourceBoundaryNodesInherited':len(ids)-len(fresh_ids),'sourceBoundaryFacesInherited':int((~touched).sum()),
+            'sourceBoundaryNodesCovered':len(ids),'sourceBoundaryFacesCovered':len(physical)}
+    if (any(type(report.get(key)) is not int or report[key]!=value for key,value in counts.items())
+            or fresh.get('nodes')!=len(fresh_ids) or fresh.get('faces')!=int(touched.sum())
+            or inherited.get('inheritedPhysicalBoundaryNodes')!=counts['sourceBoundaryNodesInherited']
+            or inherited.get('inheritedPhysicalBoundaryFaces')!=counts['sourceBoundaryFacesInherited']):
+        raise ValueError('Fresh/inherited boundary counts differ from actual node changes')
+    for old_key,inherited_key,fresh_key,limit in (
+            ('maximumBoundaryNodeDistanceMm','maximumInheritedNodeDistanceBoundMm','maximumNodeDistanceMm',2e-6),
+            ('maximumBoundaryFaceCenterDistanceMm','maximumInheritedFaceCenterDistanceBoundMm','maximumFaceCenterDistanceMm',.02)):
+        values=[source.get(old_key),inherited.get(inherited_key),fresh.get(fresh_key),report.get(old_key)]
+        if (any(not _finite(v) or not 0<=v<=limit for v in values)
+                or values[0]!=values[1] or values[3]!=max(values[0],values[2])):
+            raise ValueError('Invalid inherited/fresh boundary distance bounds')
+    frozen=np.linalg.norm(old[:,:2],axis=1)<=4.75+1e-10
+    old_hash=hashlib.sha256(old[frozen].tobytes()).hexdigest()
+    new_hash=hashlib.sha256(body.nodes[frozen].tobytes()).hexdigest()
+    if (changed[frozen].any() or report.get('frozenNodeCount')!=int(frozen.sum())
+            or report.get('frozenSourceSHA256')!=old_hash or report.get('frozenResultSHA256')!=new_hash):
+        raise ValueError('Inherited body core/fixed cylinder changed')
+    if any(_sha(directory/name)!=digest for name,digest in hashes.items()):
+        raise ValueError('Inherited source cache changed during validation')
+    return dict(method='hash-bound coordinate/connectivity identity plus fresh changed-boundary witnesses',
+                nodes=len(ids),faces=len(physical),freshNodes=len(fresh_ids),freshFaces=int(touched.sum()),
+                inheritedNodes=counts['sourceBoundaryNodesInherited'],inheritedFaces=counts['sourceBoundaryFacesInherited'],
+                sourceReportSHA256=hashes['report.json'],coreCoordinatesUnchanged=True)
+
+
 def load_body_delivery(directory,mesh_file,step):
     """Reuse own builder evidence, bound to exact mesh/K/source hashes.
 
@@ -22,12 +109,10 @@ def load_body_delivery(directory,mesh_file,step):
     """
     directory,mesh_file,step=map(lambda p:Path(p).resolve(),(directory,mesh_file,step))
     report=json.loads((directory/'report.json').read_text());independent=json.loads((directory/'independent-k-audit.json').read_text())
-    connectivity_flags=[independent[name] for name in ('connectivityExact','exactConnectivity') if name in independent]
     if (report.get('sourceStepSHA256')!=_sha(step) or report.get('bodyMeshFileSHA256')!=_sha(mesh_file)
             or report.get('interfaceFileSHA256')!=_sha(directory/'dome-interface.npz')
             or report.get('kSHA256')!=_sha(directory/'model.k') or report.get('kSHA256')!=independent.get('kSHA256')
-            or independent.get('reader')!='ansys-dyna-core' or not connectivity_flags
-            or any(value is not True for value in connectivity_flags)):
+            or not _connectivity_exact(independent)):
         raise ValueError('Body cache does not bind source/mesh/interface/independent K')
     if report.get('bodyAccepted') is not True or report.get('fullBody') is not True:raise ValueError('Body cache is not an accepted complete body')
     with np.load(mesh_file,allow_pickle=False) as data:
@@ -56,8 +141,7 @@ def assemble_whole(shape,dome,body):
     body_quality,body_boundary=audit_h8(body.nodes,body.elems,0)
     keys={tuple(sorted(map(int,f))) for f in port['faces']}
     physical=np.array([f for f in body_boundary if tuple(sorted(map(int,f))) not in keys])
-    if (b.get('sourceBoundaryNodesChecked')!=len(np.unique(physical)) or b.get('sourceBoundaryFacesChecked')!=len(physical)):
-        raise ValueError('Body evidence does not cover its entire physical boundary')
+    coverage=_body_boundary_coverage(body,physical)
     nodes,cells,mapping,interface=join_interfaces(dome,body,eq,port)
     if len(cells)>400000:raise ValueError('Whole cap exceeds its 400000 H8 budget')
     if len(np.unique(nodes,axis=0))!=len(nodes):raise ValueError('Unpaired coincident nodes remain in whole cap')
@@ -79,7 +163,7 @@ def assemble_whole(shape,dome,body):
     mesh=Mesh3D('CAD_CAP_NUT');mesh.nodes=nodes;mesh.elems=cells;mesh.regions=['DOME']*len(dome.elems)+['BODY']*len(body.elems);mesh.region_names=['DOME','BODY']
     report=dict(schemaVersion=1,purpose='whole-saved-M6-cap-nut-CAD-H8',fullCapNut=True,fullCadMeshAccepted=True,
                 fullWorkflowAcceptance=False,solverVerified=False,nativeHmVerified=False,standardsEditionVerified=False,developmentOnly=True,
-                quality=quality,interface=interface,componentDomainsDisjoint=True,artificialInterfaces=[],
+                quality=quality,interface=interface,componentDomainsDisjoint=True,artificialInterfaces=[],bodyBoundaryCoverage=coverage,
                 sourceCadPartitionVolume=source_volume,relativeCadH8VolumeError=cad_error,relativeComponentCadPartitionError=partition_error,
                 relativeAssemblyVolumeError=sum_error,independentGlobalBoundaryNodeProbes=len(sample),maximumGlobalBoundaryNodeDistance=worst,
                 materialCentroidProbes=len(centers),allSampledCentroidsInSourceMaterial=True,dome=d,body=b,

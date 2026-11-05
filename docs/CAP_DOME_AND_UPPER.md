@@ -159,3 +159,54 @@ above, not by promoting the earlier upper crop. Still open: whole-cap native
 HM, solver behavior, general families/standards, generalized CAD-crease
 partitioning and the original Screw-axis replacement. No new2:1/3:1 thread
 count-grading capability is claimed by this CAD-driven cap construction.
+
+## Opt-in Whole-Body Exterior Feature Alignment
+
+`cad_cap_body_features.reanchor_cached_body(ACCEPTED_BODY_CACHE)` recognizes six
+actual source-CAD straight hex corner edges. It reuses the monotone angular
+anchor map from the local outer-band module, re-queries original CAD radii and
+changes only the outermost indexed ring. Axial stations, connectivity, inner
+bore, all nodes at R<=4.75mm and the actual dome port remain unchanged. This is
+an optional Python kernel path on the stated immutable saved-M6 cache, not a
+new BodySpec, arbitrary-CAD planner or GUI mode. An already aligned exterior
+returns an inspection/no-new-mesh result instead of creating duplicates.
+
+Actual full body:284672 H8,358400 nodes; SJ0.21572946 unchanged, CAD-volume error
+4.4418043e-5 (previously5.1852254e-5). Four old corner columns were about
+0.00387106mm from their real source edges; all six now lie within1.66e-12mm.
+286720 inner nodes and every element index are retained bitwise/exactly.
+The fresh audit covers72704 boundary nodes and72192 physical face centers.
+The remaining73728 nodes/73728 faces inherit accepted source witnesses ONLY
+after source hashes, actual coordinate identity and connectivity are verified.
+No unchanged bore surface query is falsely counted as freshly rerun.
+
+The whole-cap assembler independently reconstructs this changed/unchanged
+partition from the previous F64/I32 cache. It verifies port identity, source
+report/manifest/independent-K hashes, numerical distance bounds and actual
+frozen-node hashes. Plausible count sums alone, hidden extra changed nodes,
+core motion, NaN/boolean bounds, altered connectivity or wrong face cycles
+cannot substitute for that proof. Old all-fresh cases remain supported. Legacy
+and current independent-readback connectivity field names must both be strict
+and consistent whenever present; they do not waive the mesh audit.
+
+Actual reassembled `whole-cap-M6-features`:333824 H8,456194 nodes; SJ0.21572946,
+positive Gauss determinants, Euler2, CAD-volume error5.24308614e-5. The shared
+512 faces/1024 nodes remain exact and closed. Independent actual-INP comparison
+to `whole-cap-M6` preserves ALL connectivity, all Z coordinates and384514 inner
+nodes;71120 exterior nodes change by at most0.00387106mm. Source STEP is byte-
+identical. Actual K/INP readback passes. Both variants remain available; the
+accepted earlier model was not overwritten.
+
+Twenty-nine targeted lineage/whole/cache/feature tests passed with the real
+feature delivery selected, no skips, after the earlier390-test snapshot. The
+new node/face identity sidecars use explicit zero-based array indices, not
+original one-based solver IDs. They are hash-bound local evidence, not signed
+third-party attestations. CAD cone/plane intersection curves remain NOT fully
+crease-conforming; this increment aligns the real straight hex corner lines,
+not every CAD crease, native-HM precision or general standards family.
+
+Actual LS-PrePost full/cut screenshots are under `lspp-whole-features`.
+`body-hex-corner-comparison.png` is a measured micrometer-scale NPZ/CAD-edge
+comparison, explicitly not an LS-PrePost screenshot. The JSON records actual
+section coordinates; `whole-feature-preservation.json` records both INP hashes
+and the independent full-model comparison. The dated REVIEW links all artifacts.

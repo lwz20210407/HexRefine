@@ -18,6 +18,11 @@ unchanged;512 shared faces/1024 nodes are paired without welding. Exact source
 STEP copy/reimport is distinguished from the failing whole BRep STEP writer.
 Native cap HM/solver/wider families remain open. Screw interface and native socket CAD/HM remain open; corrected
 analytic node/face gates do not certify an independent CAD or the original TG.
+The optional complete-body exterior alignment also passes: all six actual hex
+corner lines are anchored,286720 inner nodes retained, then the whole333824-H8
+cap reassembles with384514 unchanged inner nodes and identical connectivity.
+Its CAD-volume error is5.24309e-5; actual K/INP and29 targeted tests pass. This
+does not close general CAD-crease,3D thread grading, native-HM or Screw repair.
 
 ## User-request checklist
 
