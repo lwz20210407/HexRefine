@@ -183,6 +183,27 @@ regression132 tests:121 passed/11 optional skips, plus22 targeted Node tests.
 
 ## Current concrete blockers
 
+- 2026-11-05 accepted bounded milestone: the complete saved M6 hemisphere-cap
+  nut now has verified94-face/one-solid native HM plus333824unchangedH8.
+  Fresh independent CAD/FE evidence passes the explicit engineering policy;
+  the separate STEP writer still rejects. See NATIVE_CAP_ENGINEERING_BUNDLE.md.
+  This supersedes the earlier incomplete native-M6 status below, not the
+  unresolved socket/family/association/solver work.
+- Original Screw: measured phase compensation handles the whole2160-cell body
+  within6128source cells, with3968outside cells unchanged and1044face pairs
+  identified. Seventeen dedicated tests pass after independent review. Axis SJ remains zero, so this is
+  preprocessing only and is NOT an accepted repair or completed product.
+
+- 2026-11-05 continuation: immutable source-CAD2D/canonical3D payload interfaces
+  now have22 focused passing regressions, and the combined source/native
+  diagnostic suite has69passes/0skips. This is adapter input data, not native-HM
+  precision acceptance. A direct public-SDK94-face solid saves/reopens, but its
+  carrier still fails the unchanged geometric/volume gates. Source Screw
+  contact detection now prevents ID-unmatched faces from being treated as
+  globally free; the22-H8 replacement remains rejected for outside-source
+  overlap. Full-source neighbors refute a zero-dimensional-space claim at W,
+  so finite expanded-scope planning continues. See SOURCE_CAD_SDK_PAYLOAD.md.
+
 - The CAD-only exchange policy changed from 1e-8 to 1e-7 with explicit user
   approval on 2026-11-02. Earlier M6 ISO4032/DIN1587 rejections are historical;
   eight CAD cases pass the current policy. No FE/CAD or SJ gate changed.
