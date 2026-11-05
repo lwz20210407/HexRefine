@@ -18,6 +18,9 @@ repair of the complete original Screw**.
   topology operations, not a claim that a fixed helical FE frontier can always
   be filled by wrapping it once. No proprietary connectivity table is exposed
   or asserted to have been recovered from this manual.
+  The manual's Heal dialog addresses three listed boundary-singularity
+  classes with internal/external wraps, internal surfaces and optional buffer
+  layers. This is not documentation of a universal fixed-FE-frontier filler.
 - [ANSA2026.1 release](https://www.beta-cae.com/news/20260729_announcement_suite_2026.1.htm)
   reports volume decomposition and Hexa Fit as well as body-specific HEXA/PENTA
   meshing. Marketing capability is not evidence that the exact retained
