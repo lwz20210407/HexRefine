@@ -43,6 +43,28 @@ class WholeCacheGuardTests(unittest.TestCase):
         return (patch.object(Path, 'read_text', side_effect=[json.dumps(report), json.dumps(independent)]),
                 patch.object(whole, '_sha', side_effect=cache_hash))
 
+    def test_old_and_current_independent_connectivity_fields_are_strict_and_consistent(self):
+        cases=[({'connectivityExact':True},True),({'exactConnectivity':True},True),
+               ({'connectivityExact':True,'exactConnectivity':True},True),
+               ({},False),({'exactConnectivity':1},False),
+               ({'connectivityExact':True,'exactConnectivity':False},False),
+               ({'connectivityExact':False,'exactConnectivity':True},False),
+               ({'connectivityExact':True,'exactConnectivity':'true'},False)]
+        for fields,accepted in cases:
+            report,independent=cache_reports()
+            independent.pop('connectivityExact');independent.update(fields)
+            text_mock,hash_mock=self.load_with(report,independent)
+            with self.subTest(fields=fields),text_mock,hash_mock, \
+                    patch.object(whole.np,'load',side_effect=RuntimeError('actual mesh audit reached')) as load:
+                if accepted:
+                    with self.assertRaisesRegex(RuntimeError,'actual mesh audit reached'):
+                        whole.load_body_delivery('unused-delivery','body.npz','source.step')
+                    load.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(ValueError,'bind source/mesh/interface/independent K'):
+                        whole.load_body_delivery('unused-delivery','body.npz','source.step')
+                    load.assert_not_called()
+
     def test_each_source_mesh_interface_and_k_hash_is_bound_before_mesh_loading(self):
         for field in ('sourceStepSHA256', 'bodyMeshFileSHA256', 'interfaceFileSHA256', 'kSHA256'):
             report, independent=cache_reports()

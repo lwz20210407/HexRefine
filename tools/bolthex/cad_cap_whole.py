@@ -22,10 +22,12 @@ def load_body_delivery(directory,mesh_file,step):
     """
     directory,mesh_file,step=map(lambda p:Path(p).resolve(),(directory,mesh_file,step))
     report=json.loads((directory/'report.json').read_text());independent=json.loads((directory/'independent-k-audit.json').read_text())
+    connectivity_flags=[independent[name] for name in ('connectivityExact','exactConnectivity') if name in independent]
     if (report.get('sourceStepSHA256')!=_sha(step) or report.get('bodyMeshFileSHA256')!=_sha(mesh_file)
             or report.get('interfaceFileSHA256')!=_sha(directory/'dome-interface.npz')
             or report.get('kSHA256')!=_sha(directory/'model.k') or report.get('kSHA256')!=independent.get('kSHA256')
-            or independent.get('reader')!='ansys-dyna-core' or independent.get('connectivityExact') is not True):
+            or independent.get('reader')!='ansys-dyna-core' or not connectivity_flags
+            or any(value is not True for value in connectivity_flags)):
         raise ValueError('Body cache does not bind source/mesh/interface/independent K')
     if report.get('bodyAccepted') is not True or report.get('fullBody') is not True:raise ValueError('Body cache is not an accepted complete body')
     with np.load(mesh_file,allow_pickle=False) as data:
