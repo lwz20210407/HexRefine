@@ -54,9 +54,24 @@ def _check_development_profile(report,cad_report,mesh_bytes):
             raise ValueError('Development mode does not waive H8 validity/quality')
 
 
-def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,),native_cad_exchange=False):
+def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,),native_cad_exchange=False,*,native_cad_database=None):
+    """Build the owned host job; an optional native CAD capsule must be CAD-only.
+
+    The STEP remains the independent geometry reference, not a replacement by
+    FE-derived geometry. This low-level command builder issues no acceptance
+    certificate; the caller must bind hashes and independently audit geometry.
+    """
+    native=''
+    if native_cad_database is not None:
+        native_path=Path(native_cad_database).resolve()
+        if cad is None or native_path.suffix.lower()!='.hm':
+            raise ValueError('Native CAD input requires .hm and an independent CAD reference')
+        if native_path==(Path(output)/'model.hm').resolve():
+            raise ValueError('Native CAD input must not be the output database')
+        native=str(native_path)
     source = Path(__file__).with_suffix('.tcl').read_text(encoding='utf-8')
     values = dict(MESH=str(mesh).encode().hex(), CAD=('' if cad is None else str(cad)).encode().hex(),
+                  NATIVECADDB=native.encode().hex(),
                   DATABASE=str(output / 'model.hm').encode().hex(), AUDIT=str(output / 'host-audit.txt').encode().hex(),
                   TEMPLATE=str(template).encode().hex(), ROUNDTRIP=str(output / 'roundtrip.k').encode().hex(),
                   NODES=str(nodes), ELEMENTS=str(elements), SOLIDS=str(solids),

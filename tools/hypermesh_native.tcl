@@ -58,6 +58,7 @@ namespace eval ::hexrefine_native {
         set python [decode {@PYTHON@}]
         set mesh [decode {@MESH@}]
         set cad [decode {@CAD@}]
+        set nativeCadDatabase [decode {@NATIVECADDB@}]
         set database [decode {@DATABASE@}]
         set audit [decode {@AUDIT@}]
         set snapshotFile [file join [file dirname $audit] native-snapshot.txt]
@@ -67,8 +68,18 @@ namespace eval ::hexrefine_native {
         set log [open $audit w]
         if {[catch {
             if {$cad ne ""} {
-                *createstringarray 1 {CADIO_SPLIT_COMPONENTS_BY_BODY}
-                *feinputwithdata2 {#ct\step_reader} $cad 0 0 0 0 0 1 1 1 0
+                if {$nativeCadDatabase ne ""} {
+                    *readfile $nativeCadDatabase
+                    *createmark nodes 1 all
+                    *createmark elems 1 all
+                    if {[hm_marklength nodes 1] != 0 || [hm_marklength elems 1] != 0} {
+                        error "Native CAD capsule must not contain FE nodes or elements"
+                    }
+                    if {[llength [hm_entitylist surfs id]] == 0} {error "Native CAD capsule has no physical surfaces"}
+                } else {
+                    *createstringarray 1 {CADIO_SPLIT_COMPONENTS_BY_BODY}
+                    *feinputwithdata2 {#ct\step_reader} $cad 0 0 0 0 0 1 1 1 0
+                }
                 if {[llength [hm_entitylist solids id]] != @SOLIDS@} { error "Unexpected imported CAD solid count" }
                 *createmark components 1 all
                 *renumber components 1 @GEOCOMPSTART@ 1 0 0
