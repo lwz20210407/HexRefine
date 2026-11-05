@@ -90,7 +90,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
 | CAD-05 | Real driver recess and blind cap geometry | PARTIAL, SAVED M6 CAP COMPLETE | M6 and ASME 1/4-20 sockets retained. Whole saved M6 hemispherical cap nut now passes original CAD/H8/K/INP gates with real bore/runouts and exact dome/body interface. Cap HM, solver and wider sizes/families remain pending |
-| CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 now passes unchanged STEP/H8/K/INP/HM using opt-in planar-cap mapping, including 7,144 extra surface probes. M6 and through-nut cases retained; arbitrary runouts/recesses still unsupported |
+| CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 and prior M6 cases retained. Saved M6 cap nut now passes whole CAD/H8/K/INP with all body physical nodes/face centers verified and exact dome interface. Arbitrary runouts/recesses remain unsupported; current cap native-HM CAD transfer is rejected separately |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
 | IO-03 | Real native mesh-only HM | DONE | HyperMesh2022.3 save/clear/reopen; not renamed Tcl/CMF |
@@ -101,7 +101,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | STD-02 | Internal/external limits and tolerance classes | TODO | Nominal/limit models; radial clearance is not a 6g/6H model |
 | STD-03 | Validate cross-standard mappings | TODO | Similar ISO/DIN data must not automatically be relabelled GB/EN |
 | FAM-01 | Rod/stud, partial/full thread, hands/fine pitch | PARTIAL | Profile hand/phase tests done; complete family/request coverage pending |
-| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | M6 socket full H8/K/INP matching now passes; native HM geometry verification and other families pending |
+| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | M6 socket and saved M6 whole hemispherical cap nut H8/K/INP matching pass. Native cap/socket HM precision, broader sizes and flange/insert/slot families remain pending |
 | VAL-01 | Corner/Gauss/volume and boundary checks | PARTIAL | Existing case audits passed; not a proof for arbitrary imported CAD |
 | VAL-02 | Independent CAD acceptance | PARTIAL | Eight opt-in real CAD regressions pass at explicitly approved 1e-7 exchange limit. CAD/H8 QA stays volume<=1e-4, cornerSJ>=.15, nodal witness<=2e-6 mm and face-centre distance<=.02 mm |
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |

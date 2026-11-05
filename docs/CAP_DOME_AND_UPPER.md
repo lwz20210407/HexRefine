@@ -56,6 +56,10 @@ Final integration:66 targeted cap/body/outer/interface tests with actual saved
 CAD and ports passed, no skips;20 whole-cache/assembly/independent-K tests also
 passed with the genuine333824-H8 case enabled. These are scoped suites, not a
 claim that every slow CAD family or the whole repository was retested.
+The later configured Python tools discovery ran390 tests with real cap source,
+ports, body cache, original Screw K and independent readback enabled:
+367 passed,23 explicit opt-ins skipped,0 failures. This snapshot includes the
+bounded rejected-axis reproducer, not subsequent unvalidated cap research.
 
 ```powershell
 python -B -m tools.bolthex.cad_cap_whole SOURCE_STEP NEW_OUTPUT --node NODE_EXECUTABLE --validation-python PYDYNA_PYTHON

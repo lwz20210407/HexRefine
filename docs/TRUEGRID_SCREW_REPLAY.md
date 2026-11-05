@@ -351,3 +351,26 @@ interface tests and the previous 50 tests, with real-source opt-ins enabled.
 The extraction CLI returned the expected 2 because the finite core macro is
 incomplete; neither that negative result nor the positive attachment probe is
 counted as a complete original-mesh acceptance.
+
+## Multi-height End Closure Reproducer
+
+`screw_axis_macro.py` is a bounded research/rejection adapter, NOT a valid
+replacement template. It explicitly restores the missed source corner in a
+9-H8 candidate, retains eight real hard interfaces and audits the17-H8 local
+neighbor assembly. The candidate is rejected: minimum SJ-0.0832493, signed
+volume error about0.0143005. Twenty-four consistently oriented one-H8 closure
+charts share fixed-corner obstructions; this proves only that particular
+append strategy fails. A broader23-free-frontier survey likewise does not
+prove all possible 3D replacements impossible.
+
+The adapter preserves all source arrays and records a separate outside-cavity
+digest. No source cell is removed and no global replacement is applied.
+The overlap guard can establish separation from disjoint vertex AABBs, or
+produce actual two-reference-coordinate intersection witnesses. Unresolved
+pairs and invalid H8 quality are NOT certified overlap-free.
+
+Sixteen focused tests passed with the actual original K selected. The CLI
+returns2 and labels exported candidate K/INP as REJECTED. Its next cavity
+contract identifies chart cells1/4, seven fixed faces and three editable free
+faces for a genuinely multi-H8 cap. That next constructive replacement remains
+open; adding this diagnostic does not close UP-05 or the original axis task.

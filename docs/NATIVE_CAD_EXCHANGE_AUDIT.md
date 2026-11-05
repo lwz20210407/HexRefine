@@ -22,6 +22,15 @@ coverage only; it does not certify HM precision, CAD provenance or repair the
 previous socket exchange failures. The accepted whole M6 CAD/H8/K/INP case and
 the ongoing native transfer remain separately scoped.
 
+Actual cap transfer follow-up: the333824-H8 mesh was saved/reopened in HM
+unchanged with one native solid, but the original-STEP diagnostic FAILED.
+Measured source/native volume difference is0.0029899257 relative, source-face
+distance1.88965e-5mm, reverse-edge distance3.85890e-4mm and bounds difference
+1.91236e-5mm. The independent IGES check remains false. A regenerated-STEP
+control is recorded separately; native host save/reopen and geometric fidelity
+must not be conflated. These are source-CAD transfer diagnostics, not retroactive
+standards/origin certificates for the older saved STEP.
+
 ## Why another check is needed
 
 Native closest-point APIs disagree near trimmed edges, and a favorable
