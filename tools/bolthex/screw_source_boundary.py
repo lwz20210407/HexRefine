@@ -1,4 +1,4 @@
-"""Measured original-Screw 12-cell physical boundary and bounded Q4 queries.
+"""Measured original-Screw 12-cell ID frontier and bounded Q4 queries.
 
 ``analyse`` recognizes only the exact reviewed source SHA. Its union-volume
 proof is conditional on verified radial maps, disjoint angular sectors and
@@ -74,11 +74,11 @@ def project_q4(point,quads):
 
 
 def project_source_free_point(point,ledger):
-    """Witness on a measured source-free Q4, returning its original binding."""
+    """Legacy ID-unmatched Q4 witness, NOT proof of a globally free surface."""
     free=ledger['editableFreeFaces']
     witness=project_q4(point,[r['xyz'] for r in free])
     return dict(witness,binding=free[witness['faceIndex']]['binding'],
-                method='actual-source-free-Q4 multistart witness upper bound',
+                method='source-ID-unmatched-Q4 multistart witness upper bound',
                 exhaustiveNearestDistanceCertified=False)
 
 
@@ -182,7 +182,8 @@ def analyse(source):
     arrays_before=_arrays_sha(mesh)
     selected=set(SELECTED);coords={int(n):p for n,p in zip(mesh.node_ids,mesh.nodes)}
     records=[]
-    for owners in face_owners(mesh).values():
+    all_face_owners=face_owners(mesh)
+    for owners in all_face_owners.values():
         inside=[o for o in owners if o['eid'] in selected];outside=[o for o in owners if o['eid'] not in selected]
         if len(inside)!=1:continue
         face=inside[0];geometry=face_geometry(face['nodeIDs'],coords)
@@ -193,6 +194,35 @@ def analyse(source):
     hard=[r for r in physical if r['retained'] is not None];free=[r for r in physical if r['retained'] is None]
     if tuple(map(len,(records,zero,physical,hard,free)))!=(40,12,28,8,20):
         raise ValueError('Measured boundary no longer matches the bounded source case')
+    # Equal coordinates with different IDs are a contact candidate, not a weld.
+    # Cyclic/reversed corner agreement preserves a bilinear Q4's parametrization.
+    outside_by_corners=defaultdict(list)
+    for owners in all_face_owners.values():
+        for owner in owners:
+            if owner['eid'] not in selected:
+                xyz=[tuple(coords[n]) for n in owner['nodeIDs']]
+                outside_by_corners[tuple(sorted(xyz))].append((owner,xyz))
+    contacts=[]
+    for record in free:
+        xyz=[tuple(p) for p in record['xyz']];matches=[]
+        for owner,corners in outside_by_corners.get(tuple(sorted(xyz)),[]):
+            aligned=None
+            for reverse in (False,True):
+                rows=list(zip(corners,owner['nodeIDs']))
+                if reverse:rows=rows[::-1]
+                for shift in range(4):
+                    moved=rows[shift:]+rows[:shift]
+                    if [p for p,n in moved]==xyz:
+                        aligned=[int(n) for p,n in moved];break
+                if aligned is not None:break
+            if aligned is not None:
+                matches.append(dict(outsideBinding=owner,outsideNodeIDsInSelectedOrder=aligned,
+                    maximumCornerGapMm=0.,nodeIdentityShared=False,
+                    sourcePartIDsEqual=owner['pid']==record['binding']['pid']))
+        record['exactCoordinateCoincidentOutsideFaces']=matches
+        record['globalFreeSkinVerified']=False
+        record['retessellationAuthorized']=False
+        if matches:contacts.append(dict(selectedBinding=record['binding'],outsideMatches=matches))
     edge_rows=defaultdict(list);geometric=defaultdict(list);axis_edges=[]
     for index,record in enumerate(physical):
         f=record['binding']['nodeIDs']
@@ -251,6 +281,10 @@ def analyse(source):
         allSourceCells=len(mesh.elements),sourceCellsDeleted=0,sourceCoordinatesMoved=0,sourceIDsWelded=0,
         rawBoundaryFaces=len(records),zeroAreaFaces=len(zero),nonzeroPhysicalFaces=len(physical),
         actualRetainedFaces=len(hard),actualEditableFreeFaces=len(free),
+        idUnmatchedFaces=len(free),idUnmatchedFacesWithExactOutsideContacts=len(contacts),
+        exactCoordinateContactPairs=sum(len(c['outsideMatches']) for c in contacts),
+        freeFaceClassificationScope='Legacy editableFreeFaces means no shared-ID owner, not a global free skin',
+        globalFreeSkinVerified=False,retessellationAuthorized=False,
         rawIDTopology=skin_topology([r['binding']['nodeIDs'] for r in records]),
         nonzeroIDTopology=skin_topology([r['binding']['nodeIDs'] for r in physical]),
         nonaxisEdgeIncidenceHistogram=dict(Counter(len(r['owners']) for r in nonaxis)),
@@ -268,9 +302,13 @@ def analyse(source):
         caveats=['Axis-edge atomization is diagnostic only; no ID welding or retained-face subdivision applied',
                  'Union proof is conditional on the verified radial maps and disjoint angular/axial interiors',
                  'Signed Q4 flux alone is not an arbitrary mesh union-volume certificate',
-                 'Free Q4 point witnesses do not certify an entire retessellated physical boundary',
+                 'ID-unmatched Q4s may contact outside cells under different IDs; retessellation is not authorized',
+                 'Exact coordinate contacts are diagnostic, not an instruction to weld nodes or change parts',
+                 'Q4 point witnesses do not certify an entire retessellated physical boundary',
                  'No original bad cell is deleted; this is not an accepted replacement'])
     ledger=dict(faces=records,nonzeroPhysicalFaces=physical,hardRetainedFaces=hard,editableFreeFaces=free,
+        idUnmatchedFaces=free,exactCoordinateOutsideContacts=contacts,
+        globalFreeSkinVerified=False,retessellationAuthorized=False,
         zeroAreaFaces=zero,edgeOwnersByIDs=[dict(edgeNodeIDs=list(k),owners=v) for k,v in edge_rows.items()],
         geometricExactEdgeGroups=[dict(endpoints=list(k),owners=v) for k,v in geometric.items()],
         axisEdgeIntervals=atoms,axisStations=stations,radialCellCertificates=proofs,sectors=sectors)
@@ -286,6 +324,9 @@ def cavity_contract(summary,ledger):
         groups[name].append(face)
     return dict(schemaVersion=1,sourceSHA256=summary['sourceSHA256'],originalEIDs=list(SELECTED),
         hardFaces=ledger['hardRetainedFaces'],editableFreeFaceGroups=groups,
+        globalFreeSkinVerified=False,retessellationAuthorized=False,
+        exactCoordinateOutsideContacts=ledger['exactCoordinateOutsideContacts'],
+        roleScope='Selected 12-cell ID frontier only; preserve/check complete-source contacts before replacement',
         sourceUnionVolume=summary['sourceUnionVolume'],requiredOriginalCorner=summary['originalCorner'],
         hardAxisNodeIDs=summary['retainedAxisNodeIDs'],zeroAreaAxisFacesAreNotPhysicalSurfaces=True,
         noIDWeldingPerformed=True,originalSourceEdited=False,producerTrace=summary['producerTrace'])

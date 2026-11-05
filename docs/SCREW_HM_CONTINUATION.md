@@ -9,7 +9,11 @@ Neither original-Screw replacement nor native-HM fidelity is accepted yet.
 `screw_source_boundary` recognizes the reviewed original K hash and measures
 the twelve selected source cells without editing/deleting/welding anything.
 Their40 boundary Q4s comprise12 zero-area axis faces and28 nonzero physical
-faces:8 retained hard interfaces and20 free faces available for retessellation.
+faces:8 shared-ID retained interfaces and20 ID-unmatched faces. The latter are
+NOT certified free surfaces. Complete-source coordinate checks find outside
+contacts under different node IDs (for example2889/F1 with2853/F2 at exactly
+the same four coordinates). The producer now exposes these contact pairs and
+explicitly withholds retessellation authorization. It never welds their IDs.
 The hard interfaces retain actual EID/local-face/NID bindings, not constraints
 invented by the previous temporary candidate chart.
 

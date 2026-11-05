@@ -144,6 +144,23 @@ class OriginalSourceBoundaryTests(unittest.TestCase):
             with self.subTest(interval=(low,high)):
                 self.assertEqual(len(owners),2);self.assertEqual(sum(owners),0)
 
+    def test_id_unmatched_faces_are_not_automatically_free_in_the_complete_source(self):
+        self.assertFalse(self.summary['globalFreeSkinVerified'])
+        self.assertFalse(self.summary['retessellationAuthorized'])
+        self.assertGreater(self.summary['idUnmatchedFacesWithExactOutsideContacts'],0)
+        contacts=self.ledger['exactCoordinateOutsideContacts']
+        bottom=next(r for r in contacts if r['selectedBinding']['eid']==2889 and r['selectedBinding']['localFace']==1)
+        match=next(r for r in bottom['outsideMatches'] if r['outsideBinding']['eid']==2853)
+        self.assertEqual(match['maximumCornerGapMm'],0.)
+        self.assertFalse(match['nodeIdentityShared'])
+        self.assertTrue(match['sourcePartIDsEqual'])
+        np.testing.assert_array_equal([self.coords[n] for n in bottom['selectedBinding']['nodeIDs']],
+                                      [self.coords[n] for n in match['outsideNodeIDsInSelectedOrder']])
+        contract=boundary.cavity_contract(self.summary,self.ledger)
+        self.assertFalse(contract['globalFreeSkinVerified'])
+        self.assertFalse(contract['retessellationAuthorized'])
+        self.assertEqual(contract['exactCoordinateOutsideContacts'],contacts)
+
     def test_source_positive_open_cell_map_gives_actual_unsigned_union_volume(self):
         volume=0.;cells={int(eid):self.mesh.nodes[e] for eid,e in zip(self.mesh.element_ids,self.mesh.elements)}
         for eid in self.selected:
