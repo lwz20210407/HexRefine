@@ -23,15 +23,44 @@ def acceptance(metrics):
 def _interior_point(face):
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepClass import BRepClass_FaceClassifier
-    from OCP.TopAbs import TopAbs_IN,TopAbs_ON
+    from OCP.TopAbs import TopAbs_IN
     from OCP.gp import gp_Pnt2d
     surface=BRepAdaptor_Surface(face.wrapped,True)
     u0,u1=surface.FirstUParameter(),surface.LastUParameter();v0,v1=surface.FirstVParameter(),surface.LastVParameter()
-    if not all(math.isfinite(v) for v in (u0,u1,v0,v1)):raise ValueError('Unbounded CAD face cannot be sampled')
+    if not all(math.isfinite(v) for v in (u0,u1,v0,v1)) or u0>=u1 or v0>=v1:raise ValueError('Unbounded or empty CAD face cannot be sampled')
+    def verified(u,v):
+        if not math.isfinite(u) or not math.isfinite(v):return None
+        if BRepClass_FaceClassifier(face.wrapped,gp_Pnt2d(u,v),1e-9).State()!=TopAbs_IN:return None
+        point=surface.Value(u,v);xyz=[point.X(),point.Y(),point.Z()]
+        return xyz if all(math.isfinite(value) for value in xyz) else None
     for a,b in ((.5,.5),(.25,.5),(.75,.5),(.5,.25),(.5,.75),(.25,.25),(.75,.75)):
         u=u0+(u1-u0)*a;v=v0+(v1-v0)*b
-        if BRepClass_FaceClassifier(face.wrapped,gp_Pnt2d(u,v),1e-9).State() not in (TopAbs_IN,TopAbs_ON):continue
-        point=surface.Value(u,v);return [point.X(),point.Y(),point.Z()]
+        xyz=verified(u,v)
+        if xyz is not None:return xyz
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.BRep import BRep_Tool
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+    # Mesh only a deep geometry copy. In particular, never add/replace cached
+    # triangulation on a caller's shared face. UV triangles propose points;
+    # the ORIGINAL trimmed face must independently classify each one as IN.
+    isolated=TopoDS.Face_s(BRepBuilderAPI_Copy(face.wrapped,True,False).Shape())
+    if isolated.IsPartner(face.wrapped):raise ValueError('CAD witness requires an isolated face copy')
+    # Coarse chords can fall inside a narrow annular hole. Refine candidate
+    # geometry only, never the fixed classification tolerance; at most four
+    # serial meshes and 4096 triangle candidates are examined.
+    for deflection in (.01,.001,.0001,.00001):
+        mesher=BRepMesh_IncrementalMesh(isolated,deflection,True,.2,False)
+        if not mesher.IsDone():raise ValueError('CAD witness triangulation did not finish')
+        triangulation=BRep_Tool.Triangulation_s(isolated,TopLoc_Location())
+        if triangulation is None or not triangulation.HasUVNodes():raise ValueError('CAD witness triangulation lacks UV nodes')
+        count=triangulation.NbTriangles();budget=min(count,1024)
+        for i in range(budget):
+            index=1 if budget==1 else 1+i*(count-1)//(budget-1)
+            uv=[triangulation.UVNode(j) for j in triangulation.Triangle(index).Get()]
+            xyz=verified(sum(p.X() for p in uv)/3,sum(p.Y() for p in uv)/3)
+            if xyz is not None:return xyz
     raise ValueError('No trimmed-interior witness for a CAD face')
 
 

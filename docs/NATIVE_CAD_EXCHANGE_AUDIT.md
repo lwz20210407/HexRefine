@@ -1,7 +1,26 @@
 # Independent native CAD exchange audit
 
-Date:2026-11-04. Status: guarded opt-in measurement path implemented; real M6
+Date:2026-11-05. Status: guarded opt-in measurement path implemented; real M6
 socket native-HM case still REJECTED. This is not a fix/completion announcement.
+
+## Narrow Trimmed-Face Witness Follow-up
+
+The saved M6 cap source has94 faces. Two narrow planar trims (zero-based0 and47)
+miss all seven old UV seeds; skipping them would invalidate source-face coverage.
+`_interior_point` now keeps the fast path but only accepts strict `TopAbs_IN`,
+never a boundary `ON` result. When needed, a deep isolated face copy is meshed;
+up to4096 evenly selected triangle-UV barycenters propose points. The ORIGINAL
+trimmed face must independently classify the UV as IN and evaluate finite XYZ.
+No candidate means rejection, not a larger tolerance or an omitted face.
+
+Actual94/94 source faces now yield strict interior witnesses. Caller geometry,
+volume, file hashes and existing triangulation remain unchanged. A separate
+thin annulus regression misses every legacy seed but passes the new strict
+check. NaN coordinates, ON-only classifications, nonisolated copies, failed
+meshing and unbounded/empty UV domains reject. This improves measurement
+coverage only; it does not certify HM precision, CAD provenance or repair the
+previous socket exchange failures. The accepted whole M6 CAD/H8/K/INP case and
+the ongoing native transfer remain separately scoped.
 
 ## Why another check is needed
 
