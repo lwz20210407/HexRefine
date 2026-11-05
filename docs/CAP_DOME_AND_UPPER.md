@@ -1,7 +1,68 @@
 # Complete Dome And Upper-Cap Integration
 
-Date:2026-11-05. Complete hemispherical dome and conformal upper CAD crop
-verified, NOT a complete cap-nut, native-HM or solver acceptance.
+Date:2026-11-05. Complete hemispherical dome, upper crop and the saved M6
+WHOLE cap-nut CAD/H8/K/INP assembly verified. Native-HM, solver and wider-family
+acceptance remain separate. Earlier crop-only results below retain their scope.
+
+## Whole Saved M6 Increment
+
+`cad_cap_body.py` uses the actual nonuniform dome seeds and a nonuniform
+planar-runout chart. It covers original material Z=0..5, including the true
+bore, both runout caps, external hex and bevels. No R3.1 bore crop is retained.
+Both end charts return to their original angular directions. The accepted
+body has 284,672 H8, SJ0.21572946, CAD-volume error5.18523e-5. All146,432
+physical boundary nodes and145,920 face centers were checked against original
+trimmed CAD faces with separate2e-6mm/.02mm gates (distance witness upper
+bounds, not an exhaustive nearest-face claim).
+
+`cad_cap_whole.py` explicitly pairs the512 actual H8 boundary faces and1024
+unchanged nodes with the complete dome. Actual owner cycles must match, each
+component must contribute one owner, and paired ring IDs must equal the face
+vertex set exactly. No extra off-interface nodes may be welded.
+
+Actual whole result:333,824 H8,456,194 nodes, minimum SJ0.21572946, positive
+Gauss determinants, boundary Euler2, no nonmanifold faces/edges. Source CAD
+volume426.91720778mm3 versus integrated FE426.89249779mm3 gives about5.79e-5
+relative error; component FE/CAD sums and zero free join faces are separately
+verified. Dome coordinates/connectivity are retained as the original prefix.
+
+Actual K is53,042,950bytes and INP48,579,626bytes, not default huge test cases.
+The bounded native Node readback cap remains200k cells. This larger case uses
+the explicit independent PyDYNA interpreter instead, checking exact IDs/PID,
+connectivity, coordinate loss, SJ/Gauss/Euler and volume. meshio independently
+reads INP. Extra keyword cards, including indented cards, reject rather than
+being silently ignored. No material/contact/preload certification is implied.
+
+The WHOLE source CAD is unchanged, so model.step preserves the original STEP
+bytes, verifies the SHA and independently reimports it. This is deliberately
+reported as `unchanged-source-STEP-byte-copy-and-independent-reimport`, NOT a
+successful BRep writer round-trip: both tested BRep STEP writer settings failed
+on this whole source. Crop exports remain independently written geometries.
+No FE-to-STEP approximation or lowered gate was substituted.
+
+Final integration:66 targeted cap/body/outer/interface tests with actual saved
+CAD and ports passed, no skips;20 whole-cache/assembly/independent-K tests also
+passed with the genuine333824-H8 case enabled. These are scoped suites, not a
+claim that every slow CAD family or the whole repository was retested.
+
+```powershell
+python -B -m tools.bolthex.cad_cap_whole SOURCE_STEP NEW_OUTPUT --node NODE_EXECUTABLE --validation-python PYDYNA_PYTHON
+```
+
+The default reconstructs and validates the CAD body live. Optional
+`--body-delivery DIR --body-mesh BODY_NPZ` reuses this builder's local evidence
+only after source/mesh/interface/K hashes and actual mesh audits agree; this
+is a reproducibility cache, not a signed third-party acceptance certificate.
+Whole files and actual LS-PrePost full/cut views live in the dated evidence
+directory, cases `whole-cap-M6` and `lspp-whole`. The original source and previous
+accepted cases were not modified. Half-display K is inspection-only.
+
+`cad_cap_outer.py` additionally supports a local shoulder exterior band using
+the actual4096 shared faces/4608 nodes;8192 H8, SJ0.173661 and volume error
+5.916e-5. Its184 support-switch faces are NOT exact CAD-crease partitions
+(`cadCreaseConforming=false`). This band overlaps the complete body and must
+NOT be added to the whole assembly again. It remains a separately scoped
+local-macro experiment, not universal CAD partitioning.
 
 ## Implementation
 
@@ -77,6 +138,8 @@ Actual K/INP/STEP, independent audits and LS-PrePost images:
 `upper-cap-M6`. Half-mesh renderings are inspection-only; primary K is complete
 for its stated domain. Cut-facing views show the cavity/thickness.
 
-Still open: outer hex/chamfer shoulder, lower radial runout termination,
-threaded body, whole-nut CAD/volume/interface/K/INP/HM and wider families.
-Local or upper-crop success is not promoted to whole cap-nut acceptance.
+The saved M6 whole body/volume/interface/K/INP gap is now closed by the increment
+above, not by promoting the earlier upper crop. Still open: whole-cap native
+HM, solver behavior, general families/standards, generalized CAD-crease
+partitioning and the original Screw-axis replacement. No new2:1/3:1 thread
+count-grading capability is claimed by this CAD-driven cap construction.

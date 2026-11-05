@@ -131,7 +131,7 @@ def build_cad_dome(shape,divisions=128,radial_layers=1,element_limit=100000):
     return mesh,local,report
 
 
-def _publish_partition(step,output,node,mesh,local,report,source_hash):
+def _publish_partition(step,output,node,mesh,local,report,source_hash,validation_python=None,*,preserve_source_step=False):
     from .cad_mesh_pipeline import _write_inp,_sha
     from .standard_cad import _mass,CAD_ROUNDTRIP_VOLUME_LIMIT
     from build123d import import_step,export_step
@@ -139,21 +139,44 @@ def _publish_partition(step,output,node,mesh,local,report,source_hash):
     if output.exists() or not output.parent.is_dir() or not node.is_file():raise ValueError('Require fresh output and explicit Node executable')
     if not 0<step.stat().st_size<=16777216:raise ValueError('Dome source STEP budget is 16 MiB')
     if _sha(step)!=source_hash:raise ValueError('Source cap CAD changed before publication')
+    native_readback=len(mesh.elems)<=200000
+    if validation_python is not None and not Path(validation_python).is_file():raise ValueError('Independent validation Python does not exist')
+    if not native_readback and (validation_python is None or not Path(validation_python).is_file()):
+        raise ValueError('Large cap partitions require explicit independent PyDYNA Python')
+    if preserve_source_step and (report.get('fullCapNut') is not True or report.get('sourceCadUnmodified') is not True):
+        raise ValueError('Only the unchanged complete source domain may retain the original STEP bytes')
     project=Path(__file__).resolve().parents[2]
     with tempfile.TemporaryDirectory(prefix='cap-dome-',dir=output.parent) as temporary:
         stage=Path(temporary)/'result';stage.mkdir()
         mesh.nodes.astype('<f8').tofile(stage/'nodes.f64');mesh.elems.astype('<i4').tofile(stage/'elements.i32')
-        (stage/'mesh-binary.json').write_text(json.dumps(dict(schemaVersion=1,nodes=len(mesh.nodes),elements=len(mesh.elems),inspectionOnly=True,readback=True)))
+        (stage/'mesh-binary.json').write_text(json.dumps(dict(schemaVersion=1,nodes=len(mesh.nodes),elements=len(mesh.elems),
+            inspectionOnly=not report.get('fullCapNut',False),developmentOnly=report.get('developmentOnly',False),readback=native_readback,
+            expectedVolume=report['quality']['volume'],expectedEuler=report['quality']['boundaryEuler'])))
         result=subprocess.run([str(node),str(project/'scripts/export-cad-h8-binary.mjs'),str(stage)],cwd=project,capture_output=True,text=True,check=True,timeout=120)
         exported=json.loads(result.stdout);_write_inp(mesh,stage/'model.inp')
+        if validation_python is not None:
+            checked=subprocess.run([str(validation_python),'-B','-m','tools.bolthex.validate_binary_k',str(stage)],cwd=project,
+                                   capture_output=True,text=True,timeout=180,check=True)
+            independent=json.loads(checked.stdout)
+            if independent['kSHA256']!=exported['kSHA256']:raise ValueError('Independent K audit hash differs')
+            report['independentKReadback']=independent
         import meshio
         reopened=meshio.read(stage/'model.inp',file_format='abaqus')
         loss=float(np.max(abs(reopened.points-mesh.nodes)))
         if loss>1e-10 or not np.array_equal(reopened.get_cells_type('hexahedron'),mesh.elems):raise ValueError('Dome INP readback differs')
-        export_step(local,stage/'model.step');roundtrip=_mass(import_step(stage/'model.step'))
+        if preserve_source_step:
+            import shutil
+            shutil.copyfile(step,stage/'model.step')
+            if _sha(stage/'model.step')!=source_hash:raise ValueError('Preserved source STEP copy differs')
+            report['cadExchangeMethod']='unchanged-source-STEP-byte-copy-and-independent-reimport'
+        else:
+            export_step(local,stage/'model.step')
+            report['cadExchangeMethod']='BRep-STEP-export-and-independent-reimport'
+        roundtrip=_mass(import_step(stage/'model.step'))
         cad_exchange=abs(roundtrip-report['sourceCadPartitionVolume'])/report['sourceCadPartitionVolume']
         if cad_exchange>CAD_ROUNDTRIP_VOLUME_LIMIT:raise ValueError('Dome independent CAD exchange volume rejected')
-        report.update(sourceStep=str(step),sourceStepSHA256=source_hash,kSHA256=exported['kSHA256'],kReadback=exported['nativeReadback'],
+        report.update(sourceStep=str(step),sourceStepSHA256=source_hash,kSHA256=exported['kSHA256'],
+                      kReadback=exported.get('nativeReadback',report.get('independentKReadback')),
                       inpSHA256=_sha(stage/'model.inp'),inpReadbackCoordinateError=loss,partitionStepSHA256=_sha(stage/'model.step'),
                       cadExchangeRelativeVolumeError=cad_exchange,unit='mm')
         if _sha(step)!=source_hash:raise ValueError('Source cap CAD changed during generation')

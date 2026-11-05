@@ -11,11 +11,12 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
 
 The user explicitly resumed parallel development. Preserve
 [the historical pause handoff](FASTENER_HANDOFF_20261104.md).
-Whole dome CAD/K/INP and exact joining to the real late-runout shoulder now
-pass;49 targeted saved-CAD cap tests and47 binary tests passed separately.
-See [scope and evidence](CAP_DOME_AND_UPPER.md). The composite is an upper
-CAD crop, not the outer hex shoulder or lower threaded body. FullCapNut is
-still false. Screw interface and native socket CAD/HM remain open; corrected
+Whole dome, real late-runout body and the COMPLETE saved M6 cap-nut now pass
+independent CAD/H8/K/INP gates:333824 H8, minSJ0.21572946, volume error about
+5.79e-5. See [scope and evidence](CAP_DOME_AND_UPPER.md). Original CAD is
+unchanged;512 shared faces/1024 nodes are paired without welding. Exact source
+STEP copy/reimport is distinguished from the failing whole BRep STEP writer.
+Native cap HM/solver/wider families remain open. Screw interface and native socket CAD/HM remain open; corrected
 analytic node/face gates do not certify an independent CAD or the original TG.
 
 ## User-request checklist
@@ -75,7 +76,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | UP-02 | Complete femssc upstream self-drilling case | TODO | Drill tip, washer, Abaqus partitions, original Tie model not reproduced |
 | UP-03 | sunwhale rounded external/internal scalar profiles | DONE, BOUNDED | Independent maths; original 64+64 samples match ~3.6e-15 |
 | UP-04 | Complete sunwhale mesh workflows | PARTIAL, BAND IMPLEMENTATION REVIEWED | Seven-script/ten-case band replay work has been reviewed; current ten-case counts/quality/discrete volume rechecked before submission. Historical exact-source comparisons include explicit cyclic-label repairs. Complete fasteners/CAD/GUI remain pending; see HELICAL_BAND_REPLAY.md |
-| UP-05 | TrueGrid Screw source/example | TODO | Real TG run, element-type/Jacobian audit, remove/reject axis degeneracy |
+| UP-05 | TrueGrid Screw source/example | PARTIAL | Original TG audit rejects collapsed/bad cells; actual3D cavity/phase bindings and independent finite rod are implemented. Original finite axis replacement remains incomplete; see TRUEGRID_SCREW_REPLAY.md |
 | UP-06 | Coreform helical/endpoint partition methods | TODO | Reproduce referenced journals or document/validate open-kernel equivalent |
 | MESH-01 | Recovered solid bolt/nut/plate H8 generation | DONE, BOUNDED | Original demo and fixed catalogue; eight distinct-node checks in export |
 | MESH-02 | Independent TypeScript shaft/nut foundation | PARTIAL | Separate experimental API, not equivalent full Python port |
@@ -88,7 +89,7 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
-| CAD-05 | Real driver recess and blind cap geometry | PARTIAL | M6 and explicit ASME 1/4-20 socket cases pass full CAD/H8/K/INP gates using floor-aware core and fillet blocks. Other socket specifications and blind-cap topology remain pending |
+| CAD-05 | Real driver recess and blind cap geometry | PARTIAL, SAVED M6 CAP COMPLETE | M6 and ASME 1/4-20 sockets retained. Whole saved M6 hemispherical cap nut now passes original CAD/H8/K/INP gates with real bore/runouts and exact dome/body interface. Cap HM, solver and wider sizes/families remain pending |
 | CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 now passes unchanged STEP/H8/K/INP/HM using opt-in planar-cap mapping, including 7,144 extra surface probes. M6 and through-nut cases retained; arbitrary runouts/recesses still unsupported |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
