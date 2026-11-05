@@ -23,6 +23,11 @@ corner lines are anchored,286720 inner nodes retained, then the whole333824-H8
 cap reassembles with384514 unchanged inner nodes and identical connectivity.
 Its CAD-volume error is5.24309e-5; actual K/INP and29 targeted tests pass. This
 does not close general CAD-crease,3D thread grading, native-HM or Screw repair.
+Continued Screw/HM work now has a verified actual-source boundary contract and
+independent native-SDK/STEP-carrier validators;46 targeted tests pass. Original
+Screw replacement and native-HM fidelity still remain open. See
+[continuation evidence and limits](SCREW_HM_CONTINUATION.md); no diagnostic or
+passing support-surface sample is a completed native-HM or core-repair claim.
 
 ## User-request checklist
 
