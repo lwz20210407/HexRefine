@@ -13,6 +13,7 @@ from tools.hypermesh_geometry_probe import sha, validate_reference
 from tools.hypermesh_probe_reference import TrimmedFaceDistances
 from .native_cad_audit import _bounds, _interior_point
 from .standard_cad import _mass
+from .geometry_accuracy_policy import CadAccuracyPolicy
 
 
 LIMITS = dict(maximumSurfaceDistance=2e-6, maximumBoundaryNodeControlDistance=2e-6,
@@ -26,8 +27,18 @@ def _finite(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def step_carrier_acceptance(report):
-    """Require complete evidence, raw coverage and every unchanged metric gate."""
+def step_carrier_acceptance(report, policy=None, *, all_surfaces_critical=True):
+    """Require complete raw evidence against an explicit CAD accuracy policy.
+
+    The legacy default remains the strict regression profile. New engineering
+    jobs supply the declared target size; reports retain the strict result too.
+    This function never certifies mesh topology, native-HM content or contacts.
+    """
+    if policy is None:
+        policy=CadAccuracyPolicy()
+    if not isinstance(policy,CadAccuracyPolicy):
+        raise ValueError('Require a validated CAD accuracy policy')
+    limits=policy.carrier_limits(all_surfaces_critical=all_surfaces_critical)
     if (report.get('completeWitnessCoverage') is not True or report.get('sourceValid') is not True
             or report.get('candidateValid') is not True or report.get('inputsUnchanged') is not True
             or report.get('nativeApproxVolumeUsedForAcceptance') is not False
@@ -36,15 +47,16 @@ def step_carrier_acceptance(report):
             or type(report.get('candidateSolids')) is not int or report['candidateSolids'] != 1
             or report.get('failedWitnesses')):
         return False
-    for key, limit in LIMITS.items():
+    for key, limit in limits.items():
         value = report.get(key)
         if not _finite(value) or not 0 <= value <= limit:
             return False
     for key in ('sourceVolume', 'stepBrepVolume'):
         if not _finite(report.get(key)) or report[key] <= 0:
             return False
-    if abs(abs(report['stepBrepVolume']-report['sourceVolume'])/report['sourceVolume']
-           -report['relativeStepBrepVolumeError']) > 1e-12:
+    actual_volume_error=abs(report['stepBrepVolume']-report['sourceVolume'])/report['sourceVolume']
+    if (actual_volume_error>limits['relativeStepBrepVolumeError'] or
+            abs(actual_volume_error-report['relativeStepBrepVolumeError']) > 1e-12):
         return False
     forward = report.get('forward', [])
     n = report.get('referencePoints')
@@ -76,7 +88,8 @@ def step_carrier_acceptance(report):
     for metric, rows, field in groups:
         if not rows or any(not _finite(r.get(field)) or r[field] < 0 for r in rows):
             return False
-        if abs(max(r[field] for r in rows)-report[metric]) > 1e-12:
+        actual_maximum=max(r[field] for r in rows)
+        if actual_maximum>limits[metric] or abs(actual_maximum-report[metric]) > 1e-12:
             return False
     for rows in (forward, report['sourceFaceWitnesses'], report['reverse'], report['edgeReverse']):
         for row in rows:
@@ -96,18 +109,25 @@ def step_carrier_acceptance(report):
     if any(not isinstance(b, list) or len(b) != 6 or not all(_finite(v) for v in b)
            or any(b[i] >= b[i+3] for i in range(3)) for b in bounds):
         return False
-    if abs(max(abs(a-b) for a,b in zip(*bounds))-report['maximumCadBoundsDifference']) > 1e-12:
+    actual_bounds_error=max(abs(a-b) for a,b in zip(*bounds))
+    if (actual_bounds_error>limits['maximumCadBoundsDifference'] or
+            abs(actual_bounds_error-report['maximumCadBoundsDifference']) > 1e-12):
         return False
-    return (bool(controls) and abs(max(controls)-report['maximumControlDistanceError']) <= 1e-12
+    return (bool(controls) and max(controls)<=limits['maximumControlDistanceError']
+            and max(rechecks)<=limits['maximumSourceReferenceError']
+            and abs(max(controls)-report['maximumControlDistanceError']) <= 1e-12
             and abs(max(rechecks)-report['maximumSourceReferenceError']) <= 1e-12)
 
 
-def audit_step_carrier(source_step, carrier_step, reference_file, output=None, progress=None):
+def audit_step_carrier(source_step, carrier_step, reference_file, output=None, progress=None, *, accuracy_policy=None):
     """Audit every physical face/edge plus calibrated/nodal controls, read-only.
 
     Missing strict-IN face witnesses are recorded and reject the carrier, but
     do not prevent collecting the remaining physical-edge negative evidence.
     """
+    policy=CadAccuracyPolicy() if accuracy_policy is None else accuracy_policy
+    if not isinstance(policy,CadAccuracyPolicy):
+        raise ValueError('Require a validated CAD accuracy policy')
     source_step, carrier_step, reference_file = map(lambda p: Path(p).resolve(),
                                                    (source_step, carrier_step, reference_file))
     if output is not None:
@@ -148,6 +168,8 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
             sourceSolids=len(source.solids()), candidateSolids=len(candidate.solids()),
             sourceFaces=len(source_faces), candidateFaces=len(candidate_faces), candidateEdges=len(cp.edges()),
             preflightRejected=True, completeWitnessCoverage=False, strictStepCarrierVerified=False,
+            geometryAccuracyPolicy=policy.manifest(),selectedGeometryPolicyVerified=False,
+            engineeringStepCarrierVerified=False if policy.profile=='engineering-cad-transfer' else None,
             failedWitnesses=[dict(kind='preflight-validity', index=0, detail='Invalid source/carrier or physical trimmed-face complex')],
             referencePoints=len(reference['points']), boundaryNodeControls=0, forward=[], sourceFaceWitnesses=[], reverse=[], edgeReverse=[],
             sourceVolume=None, stepBrepVolume=None, allCandidateFacesOwnedBySingleSolid=False,
@@ -240,6 +262,10 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
         and {r['edge'] for r in edge_rows} == set(range(len(edges))))
     report['inputsUnchanged'] = all(sha(p) == h for p,h in hashes.items())
     report['strictStepCarrierVerified'] = step_carrier_acceptance(report)
+    report['geometryAccuracyPolicy']=policy.manifest()
+    report['selectedGeometryPolicyVerified']=step_carrier_acceptance(report,policy)
+    report['engineeringStepCarrierVerified']=(report['selectedGeometryPolicyVerified']
+        if policy.profile=='engineering-cad-transfer' else None)
     if output is not None:
         with output.open('x', encoding='utf8') as stream:
             json.dump(report, stream, indent=2, allow_nan=False)
@@ -252,10 +278,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('source', 'carrier', 'reference', 'output'):
         parser.add_argument(name, type=Path)
+    parser.add_argument('--accuracy-profile',choices=('strict','engineering'),default='strict',
+        help='Legacy strict regression or explicit size-aware engineering CAD transfer')
+    parser.add_argument('--target-size-mm',type=float,help='Declared local target seed size, not an incidental short edge')
+    parser.add_argument('--critical-target-size-mm',type=float)
+    parser.add_argument('--minimum-functional-gap-mm',type=float)
+    parser.add_argument('--minimum-root-radius-mm',type=float)
     args = parser.parse_args()
+    options=dict(target_size_mm=args.target_size_mm,critical_target_size_mm=args.critical_target_size_mm,
+        minimum_functional_gap_mm=args.minimum_functional_gap_mm,minimum_root_radius_mm=args.minimum_root_radius_mm)
+    policy=CadAccuracyPolicy('engineering-cad-transfer' if args.accuracy_profile=='engineering' else 'strict-cad-regression',**options)
     def progress(kind, done, total):
         print(json.dumps(dict(stage=kind, done=done, total=total)), file=sys.stderr, flush=True)
-    measured = audit_step_carrier(args.source, args.carrier, args.reference, args.output, progress)
+    measured = audit_step_carrier(args.source, args.carrier, args.reference, args.output, progress,accuracy_policy=policy)
     print(json.dumps({k: v for k, v in measured.items() if k not in
                       ('forward', 'sourceFaceWitnesses', 'reverse', 'edgeReverse')}, allow_nan=False))
-    raise SystemExit(0 if measured['strictStepCarrierVerified'] else 2)
+    raise SystemExit(0 if measured['selectedGeometryPolicyVerified'] else 2)

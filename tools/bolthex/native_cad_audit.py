@@ -8,6 +8,28 @@ from pathlib import Path
 from tools.hypermesh_geometry_probe import sha,validate_reference
 from tools.hypermesh_probe_reference import TrimmedFaceDistances
 from .standard_cad import CAD_ROUNDTRIP_VOLUME_LIMIT,_mass
+from .geometry_accuracy_policy import CadAccuracyPolicy
+
+
+SURFACE_METRICS=('maximumSurfaceDistance','maximumSourceFaceDistance','maximumControlDistanceError',
+                 'maximumReverseDistance','maximumReverseEdgeDistance','maximumCadBoundsDifference',
+                 'maximumSourceReferenceError')
+
+
+def _policy(accuracy_policy):
+    if accuracy_policy is None:return CadAccuracyPolicy()
+    if not isinstance(accuracy_policy,CadAccuracyPolicy):raise ValueError('Require a validated CAD accuracy policy')
+    return accuracy_policy
+
+
+def surface_acceptance(metrics,accuracy_policy=None):
+    """Finite surface/bounds result only; host volume is not independent BRep."""
+    limits=_policy(accuracy_policy).carrier_limits(all_surfaces_critical=True)
+    for key in SURFACE_METRICS:
+        value=metrics.get(key)
+        if type(value) not in (int,float) or not math.isfinite(value) or value<0:
+            raise ValueError('Invalid native CAD surface metric: '+key)
+    return all(metrics[key]<=limits[key] for key in SURFACE_METRICS)
 
 
 def acceptance(metrics):
@@ -77,15 +99,17 @@ def validate_samples(report,reference):
         if not isinstance(xyz,list) or len(xyz)!=3 or any(type(v) not in (int,float) or not math.isfinite(v) for v in xyz):raise ValueError('Invalid native CAD witness coordinate')
     forward=report.get('forward')
     if not isinstance(forward,list) or len(forward)!=len(reference['points']):raise ValueError('Incomplete forward witnesses')
-    surface=[];controls=[]
+    surface=[];controls=[];source_errors=[]
     for index,(row,expected) in enumerate(zip(forward,reference['points'])):
         point(row)
         if row.get('index')!=index or row.get('point')!=expected['point'] or row.get('role')!=expected['role']:raise ValueError('Forward witness identity changed')
         source=number(row.get('sourceDistance'));native=number(row.get('nativeDistance'))
         if abs(source-expected['sourceDistance'])>2e-6:raise ValueError('Forward source witness changed')
+        source_errors.append(abs(source-expected['sourceDistance']))
         (controls if row['role']=='control' else surface).append(abs(native-source) if row['role']=='control' else native)
     if report.get('surfaceWitnesses')!=len(surface) or report.get('controls')!=len(controls):raise ValueError('Forward witness count changed')
     declared('maximumSurfaceDistance',max(surface));declared('maximumControlDistanceError',max(controls))
+    if 'maximumSourceReferenceError' in report:declared('maximumSourceReferenceError',max(source_errors))
     for field,count_key,index_key,distance_key,metric in (
         ('sourceFaceWitnesses','sourceFaces','face','nativeDistance','maximumSourceFaceDistance'),
         ('reverse','nativeFaces','face','sourceDistance','maximumReverseDistance'),
@@ -112,7 +136,8 @@ def _bounds(shape):
     return values
 
 
-def audit_exchange(manifest_file,step,reference_file,output):
+def audit_exchange(manifest_file,step,reference_file,output,*,accuracy_policy=None):
+    policy=_policy(accuracy_policy)
     manifest_file,step,reference_file,output=map(lambda p:Path(p).resolve(),(manifest_file,step,reference_file,output))
     if output.exists() or not output.parent.is_dir():raise ValueError('Require a new audit file in an existing directory')
     if manifest_file.stat().st_size>65536 or reference_file.stat().st_size>2097152:raise ValueError('Oversized native CAD audit input')
@@ -183,9 +208,20 @@ def audit_exchange(manifest_file,step,reference_file,output):
                  maximumReverseDistance=max(row['sourceDistance'] for row in reverse),
                  maximumReverseEdgeDistance=max(row['sourceDistance'] for row in edge_reverse),
                  maximumCadBoundsDifference=max(abs(a-b) for a,b in zip(sb,nb)),
+                 maximumSourceReferenceError=max(abs(row['sourceDistance']-expected['sourceDistance'])
+                    for row,expected in zip(forward,reference['points'])),
                  relativeNativeVolumeError=abs(before-source_volume)/source_volume)
+    selected=surface_acceptance(metrics,policy)
     result=dict(schemaVersion=1,purpose='independent-native-cad-surface-audit',**metrics,
                 sampledNativeCadVerified=acceptance(metrics),exactNativeCadCertified=False,fullModelAcceptance=False,
+                geometryAccuracyPolicy=policy.manifest(all_surfaces_critical=True),
+                selectedGeometryPolicyVerified=selected,
+                engineeringCadGeometryVerified=selected if policy.profile=='engineering-cad-transfer' else None,
+                geometryVerificationScope='finite trimmed-surface/edge witnesses and independent face-only bounds; not solid/HM/FE certification',
+                geometryPolicyAppliedMetrics=list(SURFACE_METRICS),
+                geometryPolicyUnmeasuredMetrics=['maximumBoundaryNodeControlDistance','relativeStepBrepVolumeError'],
+                independentNativeBrepVolumeVerified=False,nativeApproxVolumeUsedForGeometryAcceptance=False,
+                nativeVolumeMethod='host nativeVolumeBefore/After measurement, not independent reconstructed BRep volume',
                 igesSolidReconstructionVerified=False,igesRole='trimmed-surface measurement carrier, not a reconstructed solid STEP',
                 sourceVolume=source_volume,nativeVolume=before,sourceBounds=sb,nativeBounds=nb,nativeFaces=len(native_faces),nativeEdges=len(edges),
                 sourceFaces=len(source_faces),sourceFaceWitnesses=source_witnesses,
@@ -195,6 +231,8 @@ def audit_exchange(manifest_file,step,reference_file,output):
                 referenceSHA256=bindings[3][1],manifestSHA256=bindings[4][1],
                 limitations=['Finite samples do not prove global BRep identity.',
                              'IGES solid topology is not certified; native solid count/volume remain separate host measurements.',
+                             'Selected geometry policy verification excludes independent native BRep volume; legacy sampledNativeCadVerified remains strict.',
+                             'No separate FE boundary-node coverage or full geometry coupling is certified by this surface carrier.',
                              'This audit does not certify an FE mesh, contact, material or standards/tolerance class.'])
     validate_samples(result,reference)
     if any(sha(path)!=digest for path,digest in bindings):raise ValueError('Native CAD audit source changed during measurement')
@@ -202,9 +240,23 @@ def audit_exchange(manifest_file,step,reference_file,output):
     return result
 
 
-if __name__=='__main__':
+def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('manifest','step','reference','output'):parser.add_argument(name,type=Path)
-    args=parser.parse_args();result=audit_exchange(args.manifest,args.step,args.reference,args.output)
+    parser.add_argument('--accuracy-profile',choices=('strict','engineering'),default='strict')
+    parser.add_argument('--target-size-mm',type=float)
+    parser.add_argument('--critical-target-size-mm',type=float)
+    parser.add_argument('--minimum-functional-gap-mm',type=float)
+    parser.add_argument('--minimum-root-radius-mm',type=float)
+    args=parser.parse_args(argv)
+    policy=CadAccuracyPolicy('engineering-cad-transfer' if args.accuracy_profile=='engineering' else 'strict-cad-regression',
+        target_size_mm=args.target_size_mm,critical_target_size_mm=args.critical_target_size_mm,
+        minimum_functional_gap_mm=args.minimum_functional_gap_mm,minimum_root_radius_mm=args.minimum_root_radius_mm)
+    result=audit_exchange(args.manifest,args.step,args.reference,args.output,accuracy_policy=policy)
     print(json.dumps({key:value for key,value in result.items() if key not in ('forward','reverse','edgeReverse','sourceFaceWitnesses')},indent=2))
-    raise SystemExit(0 if result['sampledNativeCadVerified'] else 2)
+    # Keep the legacy default exit status, including its host-volume diagnostic.
+    passed=result['sampledNativeCadVerified'] if args.accuracy_profile=='strict' else result['selectedGeometryPolicyVerified']
+    return 0 if passed else 2
+
+
+if __name__=='__main__':raise SystemExit(main())
