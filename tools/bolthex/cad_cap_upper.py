@@ -31,9 +31,17 @@ def join_interfaces(first,second,a,b):
     rest=np.flatnonzero(mapping<0);mapping[rest]=np.arange(len(first.nodes),len(first.nodes)+len(rest))
     nodes=np.concatenate((first.nodes,second.nodes[rest]));cells=np.concatenate((first.elems,mapping[second.elems]))
     inventories=[]
-    for item,ids,remap in ((a,x,None),(b,y,mapping)):
+    for part,item,ids,remap in ((first,a,x,None),(second,b,y,mapping)):
         faces=np.asarray(item['faces'])
         if faces.ndim!=2 or faces.shape[1]!=4 or not np.issubdtype(faces.dtype,np.integer) or not np.isin(faces,ids).all():raise ValueError('Invalid interface face partition')
+        declared={tuple(sorted(map(int,f))):_cycle(f) for f in faces}
+        actual=part.elems[:,FACES].reshape(-1,4)
+        actual=actual[np.isin(actual,ids).all(axis=1)]
+        owners={}
+        for face in actual:owners.setdefault(tuple(sorted(map(int,face))),[]).append(_cycle(face))
+        if owners.keys()!=declared.keys() or any(len(items)!=1 for items in owners.values()):
+            raise ValueError('Interface requires one actual boundary owner on each component, not two total owners')
+        if any(declared[key]!=owners[key][0] for key in declared):raise ValueError('Interface orientations differ from actual H8 face cycles')
         if remap is not None:faces=remap[faces]
         inventory={tuple(sorted(map(int,f))):_cycle(f) for f in faces}
         if len(inventory)!=len(faces):raise ValueError('Duplicate interface faces')
@@ -44,13 +52,18 @@ def join_interfaces(first,second,a,b):
     touching=faces[np.isin(faces,x).all(axis=1)]
     ownership=Counter(tuple(sorted(map(int,f))) for f in touching)
     if ownership.keys()!=left.keys() or any(n!=2 for n in ownership.values()):raise ValueError('Interface must have exactly two owners per face')
-    return nodes,cells,mapping,dict(sharedNodes=len(x),sharedFaces=len(left),twoOwnersEveryFace=True,coordinatesUnmodified=True)
+    return nodes,cells,mapping,dict(sharedNodes=len(x),sharedFaces=len(left),twoOwnersEveryFace=True,oneOwnerEachComponent=True,coordinatesUnmodified=True)
 
 
-def build_upper(shape,divisions=128,radial_layers=1,lower_depth=.1):
+def _upper_counts(divisions,radial_layers,lower_depth):
     if type(lower_depth) not in (int,float) or not math.isfinite(lower_depth) or not 0<lower_depth<=.2:raise ValueError('Late-runout depth must be in (0,.2] mm')
     count=_seed_counts(divisions,radial_layers,100000)+4*divisions*(2+radial_layers)*8
     if count>100000:raise ValueError('Combined upper-cap allocation exceeds 100000 H8')
+    return count
+
+
+def build_upper(shape,divisions=128,radial_layers=1,lower_depth=.1):
+    count=_upper_counts(divisions,radial_layers,lower_depth)
     dome,_,dome_report=build_cad_dome(shape,divisions,radial_layers)
     eq=equatorial_interface(dome);center=np.asarray(eq['centerMm']);radii=eq['radiiMm']
     if max(abs(center[:2]))>1e-10:raise ValueError('Upper-cap shoulder currently requires a centered M6 axis')
@@ -95,6 +108,7 @@ def build_upper(shape,divisions=128,radial_layers=1,lower_depth=.1):
 
 
 def generate(step,output,node,divisions=128,lower_depth=.1):
+    _upper_counts(divisions,1,lower_depth)
     from build123d import import_step
     from .cad_mesh_pipeline import _sha
     step,output,node=map(lambda p:Path(p).resolve(),(step,output,node))

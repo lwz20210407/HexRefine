@@ -96,6 +96,11 @@ def shoulder_equatorial_interface(mesh):
 
 
 def _interface_audit(mesh, interfaces, expected_regions):
+    seen=set()
+    for name,faces in interfaces.items():
+        keys=[tuple(sorted(map(int,face))) for face in faces]
+        if len(keys)!=len(set(keys)) or any(key in seen for key in keys):raise ValueError('Duplicate shoulder interface face records')
+        seen.update(keys)
     targets = {tuple(sorted(face)): [] for faces in interfaces.values() for face in faces}
     for eid, element in enumerate(mesh.elems):
         for face in element[FACES]:

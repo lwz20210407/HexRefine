@@ -66,6 +66,12 @@ not new certified2:1/3:1 three-dimensional thread grading.
 
 All49 targeted cap tests passed with saved CAD/interface selected, no skips.
 The binary writer/read-back47 tests passed separately, not a full-repo claim.
+An adversarial follow-up found metadata-cycle/ownership and duplicate-record
+false positives in the public helpers. These were fixed: each declared face
+must match its ACTUAL H8 boundary cycle and have exactly one owner on EACH
+component, not merely two owners in total. Duplicate shoulder face records
+reject, and invalid generation arguments reject before CAD loading. All47
+follow-up tests (including14 adversarial contracts and saved CAD) passed.
 Actual K/INP/STEP, independent audits and LS-PrePost images:
 `F:/PythonWoking/temp/20261105-cap-integration`, cases `dome-M6-final` and
 `upper-cap-M6`. Half-mesh renderings are inspection-only; primary K is complete
