@@ -1,11 +1,22 @@
 # Fastener development TODO
 
-Updated: 2026-11-04, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-05, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
 component; TODO = not implemented; WITHDRAWN = earlier acceptance corrected.
 Reading a repository is not porting it. Writing a STEP is not independent CAD.
+
+## Resumed, 2026-11-05
+
+The user explicitly resumed parallel development. Preserve
+[the historical pause handoff](FASTENER_HANDOFF_20261104.md).
+Whole dome CAD/K/INP and exact joining to the real late-runout shoulder now
+pass;49 targeted saved-CAD cap tests and47 binary tests passed separately.
+See [scope and evidence](CAP_DOME_AND_UPPER.md). The composite is an upper
+CAD crop, not the outer hex shoulder or lower threaded body. FullCapNut is
+still false. Screw interface and native socket CAD/HM remain open; corrected
+analytic node/face gates do not certify an independent CAD or the original TG.
 
 ## User-request checklist
 
