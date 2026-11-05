@@ -123,10 +123,10 @@ def read_keyword(path: Path) -> ImportedSolids:
 
 
 def audit_import(mesh: ImportedSolids) -> dict:
-    """Diagnose even rejected cells, then apply unchanged SJ and topology gates.
+    """Diagnose rejected cells and apply the explicitly historical project screen.
 
     Volume is the exact 2x2x2 integration of each trilinear FE map, NOT CAD
-    fidelity. Corner/Gauss sampling does not certify positivity everywhere.
+    fidelity. Corner/center/Gauss sampling does not certify positivity everywhere.
     Axis below means the original Screw's global Z axis (x=y=0).
     """
     nodes, elements = np.asarray(mesh.nodes), np.asarray(mesh.elements)
@@ -141,6 +141,7 @@ def audit_import(mesh: ImportedSolids) -> dict:
         raise ValueError('Invalid element IDs')
     id_hist, geometry_hist = Counter(), Counter()
     repeated, coincident, axis_collapsed, bad_corner, bad_gauss, bad_volume = ([] for _ in range(6))
+    bad_center=[];min_center_det=min_center_sj=float('inf')
     min_sj, min_corner_det, min_gauss_det = float('inf'), float('inf'), float('inf')
     volume, min_volume = 0.0, float('inf')
     for start in range(0, len(elements), 4096):
@@ -182,6 +183,11 @@ def audit_import(mesh: ImportedSolids) -> dict:
             min_sj = min(min_sj, float(sj.min()))
             min_corner_det = min(min_corner_det, float(det.min()))
             corner_ok &= (sj >= MINIMUM_SJ) & (det > 0) & np.isfinite(sj)
+        j=jac((0.,0.,0.));det=np.linalg.det(j);denominator=np.linalg.norm(j,axis=1).prod(axis=1)
+        sj=np.divide(det,denominator,out=np.zeros_like(det),where=denominator>0)
+        min_center_det=min(min_center_det,float(det.min()));min_center_sj=min(min_center_sj,float(sj.min()))
+        center_ok=(det>0)&np.isfinite(det)&np.isfinite(sj)&(sj>=MINIMUM_SJ)
+        bad_center.extend(map(int,ids[~center_ok]))
         volumes = np.zeros(len(conn))
         for q in product((-1 / np.sqrt(3), 1 / np.sqrt(3)), repeat=3):
             det = np.linalg.det(jac(q))
@@ -200,7 +206,8 @@ def audit_import(mesh: ImportedSolids) -> dict:
         (bool(repeated), 'Repeated node IDs in eight-slot solids'),
         (bool(coincident), 'Geometrically collapsed solids; eight unique positions required'),
         (bool(axis_collapsed), 'Z-axis collapse (wedge-like solids are not H8)'),
-        (bool(bad_corner), 'Corner SJ below 0.15 or nonpositive corner determinant'),
+        (bool(bad_corner), 'Legacy project corner SJ screen below 0.15 or nonpositive corner determinant; not a vendor standard'),
+        (bool(bad_center), 'Legacy project center SJ screen below 0.15 or nonpositive center determinant; not a vendor standard'),
         (bool(bad_gauss), 'Nonpositive/nonfinite Gauss determinant'),
         (bool(bad_volume), 'Nonpositive/nonfinite integrated element volume'),
     ):
@@ -220,12 +227,16 @@ def audit_import(mesh: ImportedSolids) -> dict:
                 axisCollapsedElementIDs=axis_collapsed, badCornerElementIDs=bad_corner,
                 badGaussElementIDs=bad_gauss, nonpositiveVolumeElementIDs=bad_volume,
                 minimumCornerScaledJacobian=min_sj, minimumCornerJacobian=min_corner_det,
+                minimumCenterJacobian=min_center_det,minimumCornerAndCenterScaledJacobian=min(min_sj,min_center_sj),
+                badCenterElementIDs=bad_center,
                 minimumGaussJacobian=min_gauss_det, integratedVolume=volume,
                 minimumElementVolume=min_volume, topology=topology, rejectionReasons=reasons,
                 meshOnlyAccepted=not reasons, fullModelAccepted=False,
+                legacyProjectScreenPassed=not reasons,engineeringQualityAccepted=False,
+                qualityScreenBasis='historical-project-screen-not-vendor-standard',
                 minimumAllowedCornerSJ=MINIMUM_SJ, coincidenceToleranceMM=COINCIDENCE_MM,
                 cadVolumeLimit=1e-4, cadSurfaceLimitMM=2e-6, cadExchangeLimit=1e-7,
-                cadVerified=False, jacobianScope='8 corners and 8 Gauss points; not a global positivity proof',
+                cadVerified=False, jacobianScope='8 corners, center and 8 Gauss points; not a global positivity proof',
                 limitations=['No CAD, solver, global overlap or complete screw coverage certification.',
                              'Six unique positions indicate collapse, not a certified C3D6 conversion.',
                              'No welding, orientation repair, axis deletion or hollow-core substitution.'],
@@ -246,7 +257,7 @@ def write_diagnostic_inp(mesh: ImportedSolids, path: Path):
     solver/material cards and must not be interpreted as an accepted FE model.
     """
     report = audit_import(mesh)
-    status = 'MESH-ONLY ACCEPTED' if report['meshOnlyAccepted'] else 'REJECTED H8 NEGATIVE CONTROL'
+    status = 'LEGACY PROJECT SCREEN PASSED; ENGINEERING QUALITY NOT CERTIFIED' if report['meshOnlyAccepted'] else 'REJECTED H8 NEGATIVE CONTROL'
     with Path(path).open('x', encoding='ascii') as out:
         out.write(f'*HEADING\n{status}; NOT CAD OR SOLVER VALIDATION\n')
         out.write('** Eight-slot connectivity preserved without welding or repair.\n*NODE\n')
@@ -270,7 +281,7 @@ def main(argv=None):
     write_diagnostic_inp(mesh, args.output / 'diagnostic.inp')
     (args.output / 'audit.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n', encoding='ascii')
     (args.output / 'result.txt').write_text(
-        ('MESH-ONLY ACCEPTED' if report['meshOnlyAccepted'] else 'REJECTED')
+        ('LEGACY PROJECT SCREEN PASSED; ENGINEERING QUALITY NOT CERTIFIED' if report['meshOnlyAccepted'] else 'REJECTED')
         + '\nNot full screw/CAD/solver acceptance.\n'
         + f"Nodes: {report['nodes']}; eight-slot solids: {report['solids']}\n"
         + f"Unique node IDs per solid: {report['uniqueNodeIDHistogram']}\n"

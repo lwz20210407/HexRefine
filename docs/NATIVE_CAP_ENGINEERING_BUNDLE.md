@@ -3,6 +3,15 @@
 Status: **implemented and verified for the saved M6 case**,2026-11-05.
 This is not all fastener families or completion of the Screw repair.
 
+Quality clarification: the saved bundle verifies native geometry/data transfer
+and the historical mesh screen, not solver-ready engineering quality. The
+subsequent complete333824-cell metric reassessment retains minimum SJ0.215729
+but identifies36290cells below the Verdict/Cubit0.5reference and8cells below
+the HyperMesh-style Gauss determinant-ratio0.7reference (minimum0.605334).
+Sampled Jacobians remain positive. These are separate advisory metrics, not
+interchangeable thresholds. See [the corrected metric policy](H8_QUALITY_METRIC_POLICY.md).
+The previous local evidence is not rewritten or upgraded to solver acceptance.
+
 ## Product And Verification
 
 The actual native HyperMesh database contains94CADfaces/one solid plus

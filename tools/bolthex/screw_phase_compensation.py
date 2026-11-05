@@ -47,8 +47,9 @@ def _validated_policy(value):
 def _check_quality_regression(before,after,old_corner,new_corner):
     for key,label in (('badGaussElementIDs','nonpositive Gauss cell'),
                       ('nonpositiveVolumeElementIDs','nonpositive cell volume'),
-                      ('badCornerElementIDs','corner quality failure')):
-        if not set(after[key])<=set(before[key]):raise ValueError('Compensation introduced a new '+label)
+                      ('badCornerElementIDs','corner quality failure'),
+                      ('badCenterElementIDs','center quality failure')):
+        if not set(after.get(key,[]))<=set(before.get(key,[])):raise ValueError('Compensation introduced a new '+label)
     if (old_corner.shape!=new_corner.shape or not np.isfinite(old_corner).all()
             or not np.isfinite(new_corner).all()):raise ValueError('Invalid corner regression measurements')
     if np.any((old_corner>0)&(new_corner<=0)) or np.any((old_corner>=0)&(new_corner<0)):

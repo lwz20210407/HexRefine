@@ -50,7 +50,7 @@ mesh acceptance. The output has only `*ELEMENT_SOLID`, all in PID 1.
 
 Volume is in original coordinate units cubed; the teaching source does not
 certify a dimensional standard or unit system. No CAD-volume comparison was
-performed. Fixed production limits remain SJ 0.15, CAD-H8 relative volume 1e-4,
+performed. Historical project screens remain corner SJ0.15, CAD-H8 relative volume1e-4,
 surface 2e-6 mm, CAD exchange 1e-7; no limit was relaxed or claimed to pass.
 
 **This actual collapse is not a standard six-node wedge.** For example, EID

@@ -41,7 +41,7 @@ class PhaseCompensationGuards(unittest.TestCase):
                 with self.assertRaises(ValueError):phase.compensate('missing.k',policy)
 
     def test_new_corner_gauss_or_volume_failures_cannot_hide_in_an_existing_bad_set(self):
-        keys=('badCornerElementIDs','badGaussElementIDs','nonpositiveVolumeElementIDs')
+        keys=('badCornerElementIDs','badCenterElementIDs','badGaussElementIDs','nonpositiveVolumeElementIDs')
         for key in keys:
             before={k:[1] for k in keys};after={k:[1] for k in keys};after[key]=[1,2]
             with self.subTest(key=key),self.assertRaises(ValueError):
