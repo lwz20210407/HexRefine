@@ -8,7 +8,8 @@ interface JointReport {
   parameters:Record<string,unknown>&{axial:Record<string,number>;handedness:string;connection_mode:string};
   plan:{seeds:{axialPerPitch:number;axialPerPlate:number};headToPlateAxialGap:number|null;axialDimensionsChanged:boolean};
 }
-interface JointJob {id:string;state:"running"|"succeeded"|"failed"|"cancelled"|"interrupted";error:string|null;files?:Record<string,string>;report?:JointReport;}
+interface JointJob {id:string;state:"running"|"succeeded"|"failed"|"cancelled"|"interrupted";error:string|null;files?:Record<string,string>;report?:JointReport;parentJobId?:string;retryMode?:string;}
+interface JointHistory {id:string;state:JointJob["state"];created:number;retryAvailable?:boolean;retryError?:string|null;parentJobId?:string|null;}
 interface JointPreflight {estimatedElements:number;axial:JointReport["plan"];qualityVerified:boolean;fullMeshVerified:boolean;}
 export interface NativeJointSnapshot {
   mesh:Mesh;model:LsdynaMixedMesh;request:{kind:string;parameters:Record<string,unknown>};
@@ -57,7 +58,9 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const planText=document.createElement("div");planText.className="nj-preflight nj-status";planText.style.padding="8px 16px";
   form.insertBefore(planText,quality);
   const inputs=new Map<string,HTMLInputElement>();let pending=false;let activeJob:string|null=null;let cancelRequested=false;
-  let historyAvailable=false;let planAvailable=false;
+  let historyAvailable=false;let planAvailable=false;let retryAvailable=false;
+  let historyRevision=0;
+  const historyJobs=new Map<string,JointHistory>();
   let parameterBase:Record<string,unknown>={};
   for(const [title,fields] of groups){
     const fieldset=document.createElement("fieldset");const legend=document.createElement("legend");legend.textContent=title;
@@ -75,14 +78,23 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const connectionLabel=document.createElement("label");connectionLabel.textContent="部件连接";connectionLabel.append(connection);
   fieldRoot.querySelector(".nj-fields")!.append(connectionLabel);
   const historyGroup=document.createElement("fieldset");
-  historyGroup.innerHTML='<legend>任务记录</legend><div class="nj-fields"><label>已验收结果<select name="joint_history"></select></label><button type="button" data-nj="history-open" disabled>打开结果</button><button type="button" data-nj="history-refresh" disabled>刷新记录</button></div>';
+  historyGroup.innerHTML='<legend>任务记录</legend><div class="nj-fields"><label>本机任务<select name="joint_history"></select></label><button type="button" data-nj="history-open" disabled>打开结果</button><button type="button" data-nj="history-retry" disabled title="使用中断任务的原参数创建新任务，不是断点续跑">重新生成</button><button type="button" data-nj="history-refresh" disabled>刷新记录</button></div><p class="nj-status" data-nj="history-status"></p>';
   form.insertBefore(historyGroup,message);
   const history=historyGroup.querySelector<HTMLSelectElement>('select')!;
   const historyOpen=historyGroup.querySelector<HTMLButtonElement>('[data-nj="history-open"]')!;
   const historyRefresh=historyGroup.querySelector<HTMLButtonElement>('[data-nj="history-refresh"]')!;
+  const historyRetry=historyGroup.querySelector<HTMLButtonElement>('[data-nj="history-retry"]')!;
+  const historyStatus=historyGroup.querySelector<HTMLElement>('[data-nj="history-status"]')!;
+  const stateLabels:Record<JointJob["state"],string>={running:"运行中",succeeded:"已生成",failed:"失败",cancelled:"已取消",interrupted:"已中断"};
+  function historyActions(){
+    const selected=historyJobs.get(history.value);
+    historyOpen.disabled=pending||selected?.state!=="succeeded";
+    historyRetry.disabled=pending||!retryAvailable||selected?.state!=="interrupted"||selected.retryAvailable!==true;
+    historyStatus.textContent=selected?`${stateLabels[selected.state]}${selected.parentJobId?` · 原任务 ${selected.parentJobId.slice(0,8)} · 重新生成`:""}${selected.state==="interrupted"?" · 原进程未接管，非断点续跑":""}${selected.retryError?` · ${selected.retryError}`:""}`:"";
+  }
   function busy(value:boolean){pending=value;options.setBusy(value);generate.disabled=value;reset.disabled=value;cancel.disabled=!value;progress.hidden=!value;
     for(const input of inputs.values())input.disabled=value;hand.disabled=value;connection.disabled=value;
-    history.disabled=value||!historyAvailable;historyRefresh.disabled=value||!historyAvailable;historyOpen.disabled=value||!history.value;
+    history.disabled=value||!historyAvailable;historyRefresh.disabled=value||!historyAvailable;historyActions();
     planButton.disabled=value||!planAvailable;
   }
   function invalidate(){downloads.replaceChildren();quality.textContent="";planText.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
@@ -112,17 +124,20 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   });
   async function refreshHistory(){
     if(!historyAvailable)return;
-    const data=await json('/api/native-joint/jobs') as {jobs:Array<{id:string;state:string;created:number}>};
-    const selected=history.value;history.replaceChildren();
-    for(const job of data.jobs.filter(j=>j.state==="succeeded")){
+    const revision=++historyRevision;
+    const data=await json('/api/native-joint/jobs') as {jobs:JointHistory[]};
+    if(revision!==historyRevision)return;
+    const selected=history.value;history.replaceChildren();historyJobs.clear();
+    for(const job of data.jobs){
+      historyJobs.set(job.id,job);
       const item=document.createElement("option");item.value=job.id;
-      item.textContent=`${new Date(job.created*1000).toLocaleString()} · ${job.id.slice(0,8)}`;history.append(item);
+      item.textContent=`${stateLabels[job.state]} · ${new Date(job.created*1000).toLocaleString()} · ${job.id.slice(0,8)}`;history.append(item);
     }
     if([...history.options].some(o=>o.value===selected))history.value=selected;
-    historyOpen.disabled=pending||!history.value;
+    historyActions();
   }
-  historyRefresh.addEventListener("click",()=>{void refreshHistory().catch(error=>{message.textContent=String(error);});});
-  history.addEventListener("change",()=>{historyOpen.disabled=pending||!history.value;});
+  historyRefresh.addEventListener("click",()=>{invalidate();void refreshHistory().catch(error=>{message.textContent=String(error);});});
+  history.addEventListener("change",()=>{invalidate();historyActions();});
   async function installJob(job:JointJob,parameters:Record<string,unknown>){
     if(job.state!=="succeeded"||!job.files||!job.report)throw new Error(job.error??'生成失败');
     const response=await fetch(job.files['model.k']!);if(!response.ok)throw new Error('无法读取已生成的 K');
@@ -144,10 +159,10 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   }
   historyOpen.addEventListener("click",async()=>{
     if(pending||options.isBusy()||!history.value)return;
-    invalidate();busy(true);status.textContent="读取已验收结果";
+    invalidate();busy(true);status.textContent="读取已生成结果";
     try{
       const job=await json(`/api/native-joint/jobs/${history.value}`) as JointJob;
-      if(!job.report)throw new Error(job.error??'任务没有已验收结果');
+      if(!job.report)throw new Error(job.error??'任务没有已发布结果');
       const parameters=job.report.parameters;
       await installJob(job,parameters);
       parameterBase=structuredClone(parameters);
@@ -160,6 +175,38 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
     cancelRequested=true;cancel.disabled=true;status.textContent="正在取消";if(!activeJob)return;
     try{await json(`/api/native-joint/jobs/${activeJob}`,{method:"DELETE"});}catch(error){message.textContent=String(error);cancel.disabled=false;cancelRequested=false;}
   });
+  async function awaitJob(job:JointJob){
+    activeJob=job.id;
+    if(cancelRequested)await json(`/api/native-joint/jobs/${activeJob}`,{method:"DELETE"});
+    while(job.state==="running"){
+      await new Promise(resolve=>setTimeout(resolve,350));job=await json(`/api/native-joint/jobs/${job.id}`) as JointJob;
+    }
+    return job;
+  }
+  historyRetry.addEventListener("click",async()=>{
+    const parent=historyJobs.get(history.value);
+    if(pending||options.isBusy()||!retryAvailable||parent?.state!=="interrupted"||!parent.retryAvailable)return;
+    invalidate();activeJob=null;cancelRequested=false;busy(true);status.textContent="按原参数重新生成新任务";
+    try{
+      let job=await json(`/api/native-joint/jobs/${parent.id}/retry`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}) as JointJob;
+      if(job.id===parent.id||job.parentJobId!==parent.id||job.retryMode!=="fresh-regeneration")throw new Error('重新生成任务来源不一致');
+      job=await awaitJob(job);
+      if(job.state==="cancelled"){status.textContent="已取消重新生成";return;}
+      if(cancelRequested){status.textContent="取消请求到达时任务已结束，可从记录检查";return;}
+      if(job.state!=="succeeded"||!job.report)throw new Error(job.error??'重新生成失败');
+      const parameters=job.report.parameters;
+      await installJob(job,parameters);parameterBase=structuredClone(parameters);
+      for(const [key,input] of inputs)input.value=String(axial.has(key)?parameters.axial[key]:parameters[key]);
+      hand.value=parameters.handedness;connection.value=parameters.connection_mode;
+      status.textContent=`重新生成完成 · ${job.id.slice(0,8)} · 原任务 ${parent.id.slice(0,8)}`;
+    }catch(error){message.textContent=error instanceof Error?error.message:String(error);status.textContent="重新生成失败";downloads.replaceChildren();}
+    finally{
+      const child=activeJob;activeJob=null;cancelRequested=false;
+      try{await refreshHistory();if(child&&historyJobs.has(child))history.value=child;}
+      catch(error){message.textContent+=`\n任务记录刷新失败：${String(error)}`;}
+      busy(false);
+    }
+  });
   form.addEventListener("submit",async event=>{
     event.preventDefault();if(pending||options.isBusy()||!form.reportValidity())return;
     invalidate();cancelRequested=false;busy(true);status.textContent="生成与审计中";
@@ -168,12 +215,9 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
       if(planAvailable)await preflight(parameters);
       if(cancelRequested){status.textContent="已取消";return;}
       let job=await json('/api/native-joint/jobs',{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({schemaVersion:1,parameters})}) as JointJob;
-      activeJob=job.id;
-      if(cancelRequested)await json(`/api/native-joint/jobs/${activeJob}`,{method:"DELETE"});
-      while(job.state==="running"){
-        await new Promise(resolve=>setTimeout(resolve,350));job=await json(`/api/native-joint/jobs/${job.id}`) as JointJob;
-      }
+      job=await awaitJob(job);
       if(job.state==="cancelled"){status.textContent="已取消";return;}
+      if(cancelRequested){status.textContent="取消请求到达时任务已结束，可从记录检查";return;}
       await installJob(job,parameters);
       try{await refreshHistory();history.value=job.id;}catch(error){message.textContent=`任务记录刷新失败：${String(error)}`;}
     }catch(error){message.textContent=error instanceof Error?error.message:String(error);status.textContent="任务失败";}
@@ -183,6 +227,7 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   if(!options.available){status.textContent="本机装配后端未启用";return;}
   void json('/api/native-joint/capabilities').then(async data=>{
     open.disabled=false;status.textContent="本机后端可用";historyAvailable=data.historyAvailable===true;
+    retryAvailable=data.retryInterruptedAvailable===true;
     planAvailable=data.planAvailable===true;planButton.disabled=!planAvailable;
     history.disabled=!historyAvailable;historyRefresh.disabled=!historyAvailable;
     try{await refreshHistory();}catch(error){message.textContent=`任务记录读取失败：${String(error)}`;}

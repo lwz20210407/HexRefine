@@ -1,5 +1,5 @@
 """Loopback-only workbench host for the repository-native Python joint backend."""
-import argparse,importlib.util,json,math,os,shutil,signal,subprocess,sys,threading,time,uuid
+import argparse,hashlib,importlib.util,json,math,os,shutil,signal,subprocess,sys,threading,time,uuid
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote,urlsplit
@@ -29,6 +29,8 @@ class JointJobs:
     def _persist(self,job):
         record={key:job[key] for key in ('id','state','error','created')}
         record['schemaVersion']=1
+        for key in ('requestSHA256','parentJobId','parentRequestSHA256','retryMode'):
+            if key in job:record[key]=job[key]
         if job['state']=='succeeded':record['hashes']=job['hashes']
         write_record(job['directory']/'job.json',record)
 
@@ -52,26 +54,64 @@ class JointJobs:
             source=directory/'job.json'
             if not source.exists():continue
             job=dict(id=directory.name,directory=directory,state='failed',error=None,created=directory.stat().st_mtime,restored=True)
+            changed=False
             try:
                 if source.is_symlink() or source.stat().st_size>65536:raise ValueError('Invalid job record')
                 record=json.loads(source.read_text(encoding='utf8'))
                 if record['schemaVersion']!=1 or record['id']!=directory.name or record['state'] not in ('running','succeeded','failed','cancelled','interrupted'):raise ValueError('Invalid job record')
                 if type(record['created']) not in (int,float) or not math.isfinite(record['created']):raise ValueError('Invalid job timestamp')
                 job.update(state=record['state'],error=record['error'],created=record['created'])
+                if 'requestSHA256' in record:
+                    digest=record['requestSHA256']
+                    if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):
+                        raise ValueError('Invalid request hash')
+                    job['requestSHA256']=digest
+                if 'parentJobId' in record:
+                    parent=record['parentJobId']
+                    if (not isinstance(parent,str) or len(parent)!=32 or any(c not in '0123456789abcdef' for c in parent)
+                            or parent==directory.name or record.get('retryMode')!='fresh-regeneration'
+                            or not record.get('requestSHA256') or record.get('parentRequestSHA256')!=record['requestSHA256']):
+                        raise ValueError('Invalid retry lineage')
+                    job.update(parentJobId=parent,parentRequestSHA256=record['parentRequestSHA256'],retryMode=record['retryMode'])
                 if job['state']=='running':
                     job.update(state='interrupted',error='Previous service stopped before job completion; not resumed automatically')
+                    changed=True
                 elif job['state']=='succeeded':
                     result=directory/'result'
                     if result.is_symlink() or not result.is_dir():raise ValueError('Invalid native result directory')
                     report,hashes=self._published(result,record['hashes'])
                     job.update(report=report,hashes=hashes)
-            except Exception as exc:job.update(state='failed',error='Recovery rejected: '+str(exc))
+                if job['state']=='interrupted':
+                    try:
+                        raw,request=self._request_snapshot(job)
+                        job.update(retryRequestBytes=raw,retryRequestSHA256=hashlib.sha256(raw).hexdigest())
+                    except (ValueError,OSError) as exc:job['retryError']='Saved request cannot be regenerated: '+str(exc)
+            except Exception as exc:
+                job.update(state='failed',error='Recovery rejected: '+str(exc));changed=True
             self.jobs[job['id']]=job
-            if job['state'] in ('interrupted','failed'):self._persist(job)
+            if changed:self._persist(job)
+
+    def _request_snapshot(self,job):
+        directory=job['directory'];path=directory/'request.json'
+        if (directory.is_symlink() or directory.resolve()!=self.output/job['id']
+                or path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=65536):
+            raise ValueError('Missing, linked or oversized saved request')
+        with path.open('rb') as stream:raw=stream.read(65537)
+        if not 0<len(raw)<=65536:raise ValueError('Saved request length must be 1..65536 bytes')
+        digest=hashlib.sha256(raw).hexdigest()
+        expected=job.get('requestSHA256',job.get('retryRequestSHA256'))
+        if expected is not None and expected!=digest:raise ValueError('Saved request hash changed')
+        def reject_constant(value):raise ValueError('Nonfinite saved request')
+        try:request=json.loads(raw,parse_constant=reject_constant)
+        except (UnicodeError,json.JSONDecodeError) as exc:raise ValueError('Invalid saved request JSON') from exc
+        self.plan(request)
+        return raw,request
 
     def inventory(self):
         with self.lock:
-            return [dict(id=j['id'],state=j['state'],created=j['created'],restored=j.get('restored',False))
+            return [dict(id=j['id'],state=j['state'],created=j['created'],restored=j.get('restored',False),
+                         retryAvailable=j['state']=='interrupted' and 'retryRequestBytes' in j,
+                         retryError=j.get('retryError'),parentJobId=j.get('parentJobId'),retryMode=j.get('retryMode'))
                     for j in sorted(self.jobs.values(),key=lambda j:j['created'],reverse=True)]
 
     def plan(self,request):
@@ -83,15 +123,36 @@ class JointJobs:
         return plan_native_joint(spec)
 
     def start(self,request):
+        raw=json.dumps(request,allow_nan=False).encode('utf8')
+        if not 0<len(raw)<=65536:raise ValueError('Request length must be 1..65536 bytes')
+        return self._start(json.loads(raw),raw)
+
+    def retry(self,identity):
+        with self.lock:
+            parent=self.jobs.get(identity)
+            if parent is None:raise KeyError(identity)
+            if parent['state']!='interrupted':raise RuntimeError('Only interrupted jobs can be regenerated')
+            if 'retryRequestBytes' not in parent:raise ValueError(parent.get('retryError','Saved request is unavailable'))
+            raw,request=self._request_snapshot(parent)
+            if raw!=parent['retryRequestBytes']:raise ValueError('Saved request changed since recovery')
+        return self._start(request,raw,parent_id=identity)
+
+    def _start(self,request,raw,parent_id=None):
         self.plan(request)
         with self.lock:
             if self.closed:raise RuntimeError('Joint service is closed')
             if any(j['state']=='running' for j in self.jobs.values()):raise RuntimeError('Another joint job is running')
             if self.started>=32:raise RuntimeError('Session job limit reached; restart service')
             if shutil.disk_usage(self.output).free<256*1024*1024:raise RuntimeError('Insufficient output disk space')
+            if parent_id is not None:
+                parent=self.jobs[parent_id]
+                if parent['state']!='interrupted' or self._request_snapshot(parent)[0]!=raw:
+                    raise ValueError('Retry source changed before regeneration')
             identity=uuid.uuid4().hex;directory=self.output/identity;directory.mkdir()
-            source=directory/'request.json';source.write_text(json.dumps(request,allow_nan=False))
-            job=dict(id=identity,state='running',error=None,directory=directory,cancel=False,created=time.time())
+            source=directory/'request.json';source.write_bytes(raw)
+            digest=hashlib.sha256(raw).hexdigest()
+            job=dict(id=identity,state='running',error=None,directory=directory,cancel=False,created=time.time(),requestSHA256=digest)
+            if parent_id is not None:job.update(parentJobId=parent_id,parentRequestSHA256=digest,retryMode='fresh-regeneration')
             self._persist(job)
             log=(directory/'job.log').open('w',encoding='utf8')
             startup=None
@@ -136,6 +197,10 @@ class JointJobs:
             job=self.jobs.get(identity)
             if job is None:raise KeyError(identity)
             result=dict(id=identity,state=job['state'],error=job['error'])
+            for key in ('parentJobId','parentRequestSHA256','retryMode'):
+                if key in job:result[key]=job[key]
+            if job['state']=='interrupted':
+                result.update(retryAvailable='retryRequestBytes' in job,retryError=job.get('retryError'))
             if job['state']=='succeeded':
                 result['files']={name:f'/api/native-joint/jobs/{identity}/files/{name}' for name in ARTIFACTS}
                 result['report']=job['report']
@@ -185,12 +250,19 @@ def handler_for(jobs):
             origin=self.headers.get('Origin')
             return origin is None or origin in (f'http://127.0.0.1:{port}',f'http://localhost:{port}')
 
+        def _request(self):
+            if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('JSON request required')
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0<length<=65536:raise ValueError('Request length must be 1..65536 bytes')
+            def reject_constant(value):raise ValueError('Nonfinite JSON number')
+            return json.loads(self.rfile.read(length),parse_constant=reject_constant)
+
         def _route(self,method):
             if not self._local():self._json(403,dict(error='Loopback same-origin requests only'));return
             path=urlsplit(self.path).path
             try:
                 if method=='GET' and path=='/api/native-joint/capabilities':
-                    self._json(200,dict(available=True,schemaVersion=1,elementLimit=200000,historyAvailable=True,planAvailable=True));return
+                    self._json(200,dict(available=True,schemaVersion=1,elementLimit=200000,historyAvailable=True,planAvailable=True,retryInterruptedAvailable=True));return
                 if method=='GET' and path=='/api/native-joint/jobs':
                     self._json(200,dict(jobs=jobs.inventory()));return
                 if method=='GET' and path=='/favicon.ico':
@@ -200,17 +272,16 @@ def handler_for(jobs):
                     self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8')
                     self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
                 if method=='POST' and path in ('/api/native-joint/jobs','/api/native-joint/plan'):
-                    if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('JSON request required')
-                    length=int(self.headers.get('Content-Length','0'))
-                    if not 0<length<=65536:raise ValueError('Request length must be 1..65536 bytes')
-                    def reject_constant(value):raise ValueError('Nonfinite JSON number')
-                    request=json.loads(self.rfile.read(length),parse_constant=reject_constant)
+                    request=self._request()
                     if path.endswith('/plan'):self._json(200,jobs.plan(request))
                     else:self._json(202,jobs.start(request))
                     return
                 tokens=path.strip('/').split('/')
                 if len(tokens)>=4 and tokens[:3]==['api','native-joint','jobs']:
                     identity=tokens[3]
+                    if method=='POST' and len(tokens)==5 and tokens[4]=='retry':
+                        if self._request()!={}:raise ValueError('Retry takes an empty object; original parameters cannot be overridden')
+                        self._json(202,jobs.retry(identity));return
                     if method=='GET' and len(tokens)==4:self._json(200,jobs.snapshot(identity));return
                     if method=='DELETE' and len(tokens)==4:
                         jobs.cancel(identity);self._json(202,jobs.snapshot(identity));return

@@ -24,6 +24,11 @@ disabled and makes no native API request. The upstream GitHub Pages workbench
 does not serve this backend. This host does not implement the separate general
 offline-export API of the existing Node/desktop hosts.
 
+Interrupted-job history now has an explicit `重新生成` action. It creates a new
+UUID from the saved request, preserves the old directory, and does not adopt an
+old PID or continue a partial mesh. See [fresh retry contract and bounded
+verification](NATIVE_JOINT_RETRY.md). Checkpoint continuation remains unsupported.
+
 ## Supported flow and semantics
 
 - Parameter entry for coaxial hex-head bolt, open hex nut and rectangular
