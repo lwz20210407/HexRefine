@@ -47,6 +47,22 @@ or all source-application options. The remaining-work table below still applies.
   passed with zero skips. Boundary-distance acceptance, actual core meshing,
   global interfaces and complete K/INP remain open. A tiny SJ=1 witness is not
   an engineering mesh or mandatory seed. See [target scope](SCREW_TIP_REGULARIZATION.md).
+- DONE, LOCAL ONLY: [actual tip BRep construction](SCREW_TIP_BREP.md) now
+  reconstructs the reviewed source cell, materializes the target and performs
+  a configured zero-fuzzy/non-destructive union, save/readback and real boundary
+  checks for both source variants. The union has14faces/one positive closed
+  solid; complete original F1/F3/F4 support/trim/topology remain unchanged.
+  Dense local source patches and reverse faces/edges/vertices are checked,
+  not only the whole-face grids that miss the tiny changed region. Measured
+  maxima are0.000146410mm and0.000154623mm. Nineteen targeted tests pass,
+  including post-readback/pre-publication artifact corruption rejection.
+  This is not independent design CAD, a whole Screw mesh, a global boundary
+  Hausdorff certificate or K/INP acceptance. Core/end interfaces remain open.
+
+The latest combined endpoint/collar/target/independent-readback/local-BRep
+selection passed106tests with zero skips in113.395seconds. Evidence:
+`iges-production-screw-20261107/screw-study/combined-main-106-tests.log`.
+This remains a scoped actual-source selection, not the full repository suite.
 
 Current native delivery and VTK readback views:
 `F:/PythonWoking/temp/20261105-cap-integration/continued-screw-hm/iges-production-screw-20261107/REVIEW.html`.

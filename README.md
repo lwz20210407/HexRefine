@@ -23,6 +23,8 @@
 > are not an accepted whole-model repair.
 > An explicitly bounded [upper-tip geometry target](docs/SCREW_TIP_REGULARIZATION.md)
 > preserves source files and retained geometry; it is not a remeshed Screw.
+> Its [local BRep construction and cold-read checks](docs/SCREW_TIP_BREP.md)
+> are implemented separately from the still-unfinished complete core fill.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.
