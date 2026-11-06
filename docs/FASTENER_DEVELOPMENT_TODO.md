@@ -1,11 +1,62 @@
 # Fastener development TODO
 
-Updated: 2026-11-05, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-06, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
 component; TODO = not implemented; WITHDRAWN = earlier acceptance corrected.
 Reading a repository is not porting it. Writing a STEP is not independent CAD.
+
+## Current Remaining Work, 2026-11-06
+
+This section supersedes stale status descriptions in the historical increments
+below. The branch is not only awaiting release cleanup. No overall completion
+percentage is certified: families, parameter combinations and solver workflows
+have different scopes and costs.
+
+| Priority | Workstream | Implemented scope | Required next closure |
+| --- | --- | --- | --- |
+| P0 | Original Screw finite axis and endpoints | Full6128-cell phase compensation;1044face pairs;3968outside cells unchanged. Whole2160-parent mapped collar produces15120H8 and8640inner quads | Fill the actual core, close both nonplanar end loops and neck/head interfaces, verify no void/overlap, domain volume and complete K/INP. The19088-cell hollow composite is NOT a repaired Screw |
+| P0 | Quality and acceptance | Explicit corner/center/Gauss metrics; VTK/Verdict comparison; center-collapse rejection; whole-M6 reassessment | Region-aware quality/size distributions, cross-tool/solver checks and application-dependent acceptance. Historical SJ0.15is NOT a universal vendor standard or sufficient engineering acceptance |
+| P1 | CAD/HM fidelity and reusable geometry bridge | Saved M6 hemisphere cap native94faces/one solid +333824unchangedH8 verified for geometry/data. Real trim query module verifies94faces/1053queries | General reusable closed-BRep assembly, broader socket/cap/runout coverage, engineering-profile recheck of prior socket failures, CAD associations without unauthorized FE motion, robust STEP carrier export |
+| P1 | Complete fastener structures | Bounded hex bolts/open nuts, original faded M8, M6 and1/4-20sockets, saved M6 complete cap | Shoulder/actual bore-wall late-runout variants; wider caps/blind ends; flanges,washers,self-drilling tips,slots,inserts; consistent independent CAD+H8+K/INP/HM for exposed combinations |
+| P1 | Three-dimensional local grading | Bounded circumferential2:1core grading and paired patches | Axial and joint3D grading, near-thread3:1/multilevel transitions, general O-grid corners/weak-balance/multiple fronts while preserving the focus region and retained exterior |
+| P1 | Assembly, GUI and batching | Native complete hex-bolt/open-nut/rectangular plate stack; shared/separate node K/INP; browser preflight,preview,cancel and completed-job recovery | CAD-matched assembly variants, offsets/hole selections and all generators in one request schema; original GUI options; desktop packaging,batch queues and interrupted-job continuation |
+| P2 | Standards and source-project coverage | Pinned nominal libraries and bounded original/upstream profile/catalogue cases | Versioned GB/ISO/DIN/ASME dimensions and crosswalks, internal/external tolerance classes, complete upstream self-drill/washer and fastener workflows, cq_warehouse/FreeCAD adapters where useful |
+| P2 | Regression and release | Scoped real-case evidence, separate small/medium/large tiers, local/fork increments | Complete declared support matrix, parameter/boundary/performance regressions, repeatable deployment and API docs. Contact/preload/physical solver validation are a separate declared layer, not automatically certified by mesh export |
+
+### Immediate Execution Order
+
+1. Close original Screw core/endpoints using the existing whole interface data;
+   do not replace this with another isolated positive box or analytic rod.
+2. Validate a whole-model candidate and its region-level quality; preserve the
+   original files and explicitly distinguish old defects from newly generated
+   cells. Nonstructured ALL-H8 is user-authorized; intermediate TET/PYR is not
+   a permitted final element mix.
+3. Consolidate the verified native-CAD/HM mechanisms, then close remaining
+   shoulder/bore-runout and exposed structure combinations in parallel.
+4. Integrate verified generators into the GUI/batch workflow and execute the
+   declared release matrix. Standard-library expansion remains separately
+   tracked instead of silently changing the definition of completion.
+
+### Evidence And Important Qualifications
+
+- Current published branch checkpoint:9c12e08; development branch only.
+- Whole M6 geometry/data pass remains valid. Quality reassessment finds36290
+  of333824cells below the Verdict/Cubit SJ0.5reference and8below the separate
+  HyperMesh-style Gauss determinant-ratio0.7reference. These are advisory
+  comparisons, not interchangeable standards or automatic solver acceptance.
+  See [metric policy](H8_QUALITY_METRIC_POLICY.md).
+- The whole Screw collar has exact hard tooth/lateral matches, but two76-node
+  nonplanar inner end loops and308annular faces remain unresolved. Its raw
+  minimum SJ is0.14476584, with27cells below the historical0.15screen; the
+  failed quality-constrained template solve is retained. Neither that number
+  nor positive samples certify the unfilled model.
+- Optional Gmsh TET-to-H8 and mixed-pyramid controls are prerequisites under
+  development, not a completed full-source repair. No third-party GPL template
+  table is silently incorporated into this repository.
+
+## Historical Increments
 
 ## Resumed, 2026-11-05
 
@@ -16,7 +67,9 @@ independent CAD/H8/K/INP gates:333824 H8, minSJ0.21572946, volume error about
 5.79e-5. See [scope and evidence](CAP_DOME_AND_UPPER.md). Original CAD is
 unchanged;512 shared faces/1024 nodes are paired without welding. Exact source
 STEP copy/reimport is distinguished from the failing whole BRep STEP writer.
-Native cap HM/solver/wider families remain open. Screw interface and native socket CAD/HM remain open; corrected
+At this historical checkpoint cap HM/solver/wider families were open; the
+bounded cap native-HM geometry/data result is now closed as noted above.
+Screw interface and native socket CAD/HM remain open; corrected
 analytic node/face gates do not certify an independent CAD or the original TG.
 The optional complete-body exterior alignment also passes: all six actual hex
 corner lines are anchored,286720 inner nodes retained, then the whole333824-H8
@@ -99,8 +152,8 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | CAD-02 | Earlier FE-station ruled STEP | WITHDRAWN | Valid BRep, but grid-derived and not accepted design CAD; diagnostic flag only |
 | CAD-03 | Earlier CAD-plus-mesh HM product acceptance | WITHDRAWN | Transfer mechanism worked; supplied geometry did not meet CAD-01 |
 | CAD-04 | Real smooth helical geometry library backend | DONE, BOUNDED | bd_warehouse v0.3/build123d0.11.1; eight CAD regressions pass at user-approved 1e-7 exchange limit; old 1e-8 rejections retained as history |
-| CAD-05 | Real driver recess and blind cap geometry | PARTIAL, SAVED M6 CAP COMPLETE | M6 and ASME 1/4-20 sockets retained. Whole saved M6 hemispherical cap nut now passes original CAD/H8/K/INP gates with real bore/runouts and exact dome/body interface. Cap HM, solver and wider sizes/families remain pending |
-| CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 and prior M6 cases retained. Saved M6 cap nut now passes whole CAD/H8/K/INP with all body physical nodes/face centers verified and exact dome interface. Arbitrary runouts/recesses remain unsupported; current cap native-HM CAD transfer is rejected separately |
+| CAD-05 | Real driver recess and blind cap geometry | PARTIAL, SAVED M6 CAP GEOMETRY/DATA VERIFIED | M6 and ASME1/4-20sockets retained. Whole saved M6 cap has real bore/runouts, exact dome/body interface and verified native-HM geometry/data. Wider sizes/families and solver/quality assessment remain open |
+| CAD-06 | CAD/FE boundary matching | PARTIAL | Original faded M8 and prior M6 cases retained. Saved M6 cap has bounded CAD/H8/K/INP/native-HM evidence; its separate Altair STEP writer still fails full reference coverage. Arbitrary runouts/recesses and general reusable closed-BRep transfer remain open |
 | IO-01 | Mesh-only LS-DYNA K | DONE | Existing writer/read-back, distinct PIDs, NODE/SOLID |
 | IO-02 | Abaqus INP with bodies/regions/surfaces | DONE, BOUNDED | Demo STEEL defaults are not material calibration; explicit material selection pending |
 | IO-03 | Real native mesh-only HM | DONE | HyperMesh2022.3 save/clear/reopen; not renamed Tcl/CMF |
@@ -111,9 +164,9 @@ See SOCKET_INCH_AND_PREFLIGHT.md; all other unverified families remain open.
 | STD-02 | Internal/external limits and tolerance classes | TODO | Nominal/limit models; radial clearance is not a 6g/6H model |
 | STD-03 | Validate cross-standard mappings | TODO | Similar ISO/DIN data must not automatically be relabelled GB/EN |
 | FAM-01 | Rod/stud, partial/full thread, hands/fine pitch | PARTIAL | Profile hand/phase tests done; complete family/request coverage pending |
-| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | M6 socket and saved M6 whole hemispherical cap nut H8/K/INP matching pass. Native cap/socket HM precision, broader sizes and flange/insert/slot families remain pending |
+| FAM-02 | Flange, socket, blind/cap, insert/slot families | PARTIAL | Saved M6 whole cap native-HM geometry/data is verified. Socket engineering-profile recheck, broader sizes and flange/insert/slot/self-drill/washer families remain pending |
 | VAL-01 | Corner/Gauss/volume and boundary checks | PARTIAL | Existing case audits passed; not a proof for arbitrary imported CAD |
-| VAL-02 | Independent CAD acceptance | PARTIAL | Eight opt-in real CAD regressions pass at explicitly approved 1e-7 exchange limit. CAD/H8 QA stays volume<=1e-4, cornerSJ>=.15, nodal witness<=2e-6 mm and face-centre distance<=.02 mm |
+| VAL-02 | Independent CAD and mesh-quality acceptance | PARTIAL, POLICIES SEPARATED | Eight opt-in CAD regressions retain their stated exchange policy. Size-aware CAD-transfer profiles are now explicit; source math and mesh validity are separate. Historical cornerSJ0.15is not a vendor-wide standard or sufficient engineering acceptance; see H8_QUALITY_METRIC_POLICY.md |
 | VAL-03 | LSPP inspection of generated catalogue | DONE | 168-case board, M16 12-case board, two profile windows actually opened |
 | VAL-04 | Extreme/odd seeds, tolerance/clearance, invalid inputs | PARTIAL | Limited guards; complete product-family validation matrix pending |
 | VAL-05 | Regression coverage after current changes | PARTIAL, STATED SCOPE | Socket floor/void and discrete volume tests run against saved CAD; development budget/quality guards added. Full slow eight-case CAD construction and full TS suite not rerun in this iteration; exact current test totals recorded in socket development notes |
