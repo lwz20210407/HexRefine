@@ -38,6 +38,15 @@ or all source-application options. The remaining-work table below still applies.
   Jacobian checks are not relaxed. The lower neck interface is a different
   geometry and must not receive the same treatment without evidence. A local
   repaired geometry target will not count as a meshed or accepted whole Screw.
+- DONE AS A CANDIDATE GENERATOR, NOT A REPAIR: the hash-bound upper-tip target
+  implements that approved local regularization for the reviewed raw/phase
+  source pair. It reuses declared target0.2mm / critical budget0.0005mm,
+  allocates half to geometry and reserves half for future mesh approximation.
+  Exact solid-domain deviation bound is0.000224751mm; conservative relative
+  added-volume bound is4.49411e-5. Thirty actual-source/helper/readback tests
+  passed with zero skips. Boundary-distance acceptance, actual core meshing,
+  global interfaces and complete K/INP remain open. A tiny SJ=1 witness is not
+  an engineering mesh or mandatory seed. See [target scope](SCREW_TIP_REGULARIZATION.md).
 
 Current native delivery and VTK readback views:
 `F:/PythonWoking/temp/20261105-cap-integration/continued-screw-hm/iges-production-screw-20261107/REVIEW.html`.

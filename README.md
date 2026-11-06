@@ -21,6 +21,8 @@
 > Direct native STEP failures remain rejected; CAD association is not certified.
 > Screw [endpoint partition diagnostics](docs/SCREW_ENDPOINT_CONTRACT.md)
 > are not an accepted whole-model repair.
+> An explicitly bounded [upper-tip geometry target](docs/SCREW_TIP_REGULARIZATION.md)
+> preserves source files and retained geometry; it is not a remeshed Screw.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.
