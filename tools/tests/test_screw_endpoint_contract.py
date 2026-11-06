@@ -136,6 +136,8 @@ class ParameterAndPolicyTests(unittest.TestCase):
         self.assertTrue(rejected['failureWitnesses'])
 
     def test_shared_solver_empty_domain_cannot_be_a_plan(self):
+        with self.assertRaisesRegex(ValueError, 'empty mesh task'):
+            endpoint.solve_shared_partitions({}, [], {})
         result = endpoint.solve_shared_partitions({10: [], 20: [0]}, [], {})
         self.assertFalse(result['solved'])
         self.assertEqual(result['initialEmptyParents'], [10])

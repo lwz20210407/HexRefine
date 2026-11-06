@@ -387,6 +387,7 @@ def opposite_partitions(a, b):
 
 def solve_shared_partitions(domains, interfaces, partitions, *, max_search=10000, candidate_costs=None):
     """Bounded arc consistency + search, followed by independent all-edge readback."""
+    _require(bool(domains), 'An empty mesh task is not a partition plan')
     _require(type(max_search) is int and max_search > 0, 'Positive search budget required')
     adjacency = defaultdict(list)
     allowed = {}
