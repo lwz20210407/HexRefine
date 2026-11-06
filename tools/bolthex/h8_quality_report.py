@@ -7,7 +7,7 @@ min/max ratios are different measures and cannot reuse an SJ threshold.
 from itertools import product
 import numpy as np
 
-from .mesh_audit import SIGNS
+from .mesh_audit import SIGNS,FACES
 
 
 REFERENCES={
@@ -31,7 +31,8 @@ def measure_h8(nodes,elements):
         raise ValueError('Require bounded distinct H8 node references')
     names=('cornerScaledJacobian','cornerAndCenterScaledJacobian','minimumCornerDeterminant',
            'centerDeterminant','minimumGaussDeterminant','positiveCornerDetRatio',
-           'positiveGaussDetRatio','integratedVolume','maxEdgeOverMinEdge')
+           'positiveGaussDetRatio','integratedVolume','maxEdgeOverMinEdge',
+           'minimumFaceCornerAngleDegrees','maximumFaceCornerAngleDegrees','maximumFaceDiagonalNormalAngleDegrees')
     result={name:np.empty(len(e)) for name in names}
     for start in range(0,len(e),32768):
         xyz=np.asarray(p[e[start:start+32768]],dtype=float);xyz=xyz-xyz[:,:1]
@@ -53,12 +54,27 @@ def measure_h8(nodes,elements):
             return np.divide(lo,hi,out=np.full(len(xyz),np.nan),where=(lo>0)&np.isfinite(lo)&np.isfinite(hi))
         edge_lengths=np.linalg.norm(xyz[:,EDGES[:,1]]-xyz[:,EDGES[:,0]],axis=2)
         lo=edge_lengths.min(axis=1)
+        faces=xyz[:,FACES]
+        a=np.roll(faces,-1,axis=2)-faces;b=np.roll(faces,1,axis=2)-faces
+        denominator=np.linalg.norm(a,axis=3)*np.linalg.norm(b,axis=3)
+        cosine=np.divide(np.sum(a*b,axis=3),denominator,out=np.full(denominator.shape,np.nan),where=denominator>0)
+        angles=np.degrees(np.arccos(np.clip(cosine,-1,1)))
+        warps=[]
+        for q in (faces,np.roll(faces,-1,axis=2)):
+            n1=np.cross(q[:,:,1]-q[:,:,0],q[:,:,2]-q[:,:,0])
+            n2=np.cross(q[:,:,2]-q[:,:,0],q[:,:,3]-q[:,:,0])
+            denominator=np.linalg.norm(n1,axis=2)*np.linalg.norm(n2,axis=2)
+            cosine=np.divide(np.sum(n1*n2,axis=2),denominator,out=np.full(denominator.shape,np.nan),where=denominator>0)
+            warps.append(np.degrees(np.arccos(np.clip(cosine,-1,1))))
         values=dict(cornerScaledJacobian=cs.min(axis=1),
             cornerAndCenterScaledJacobian=np.minimum(cs.min(axis=1),centre_sj),
             minimumCornerDeterminant=cd.min(axis=1),centerDeterminant=centre,
             minimumGaussDeterminant=gauss.min(axis=1),positiveCornerDetRatio=ratio(cd),
             positiveGaussDetRatio=ratio(gauss),integratedVolume=gauss.sum(axis=1),
-            maxEdgeOverMinEdge=np.divide(edge_lengths.max(axis=1),lo,out=np.full(len(xyz),np.nan),where=lo>0))
+            maxEdgeOverMinEdge=np.divide(edge_lengths.max(axis=1),lo,out=np.full(len(xyz),np.nan),where=lo>0),
+            minimumFaceCornerAngleDegrees=angles.min(axis=(1,2)),
+            maximumFaceCornerAngleDegrees=angles.max(axis=(1,2)),
+            maximumFaceDiagonalNormalAngleDegrees=np.maximum(*warps).max(axis=1))
         for name,value in values.items():result[name][start:start+len(xyz)]=value
     result['sampledPositiveJacobians']=np.logical_and.reduce([
         np.isfinite(result[k])&(result[k]>0) for k in
@@ -75,13 +91,14 @@ def summarize_h8(metrics,element_ids=None):
         raise ValueError('Require matching unique integer element IDs')
     def stats(values):
         values=np.asarray(values);good=np.isfinite(values);finite=values[good]
-        worst=np.flatnonzero(good)[np.argsort(finite,kind='stable')[:20]]
+        order=np.argsort(finite,kind='stable');indices=np.flatnonzero(good)
+        worst=indices[order[:20]];highest=indices[order[-20:][::-1]]
         return dict(finiteCount=int(good.sum()),undefinedCount=int((~good).sum()),
             minimum=float(finite.min()) if len(finite) else None,
             maximum=float(finite.max()) if len(finite) else None,
             mean=float(finite.mean()) if len(finite) else None,
             percentiles={str(q):float(np.percentile(finite,q)) for q in (1,5,50,95,99)} if len(finite) else {},
-            lowestElementIDs=ids[worst].tolist())
+            lowestElementIDs=ids[worst].tolist(),highestElementIDs=ids[highest].tolist())
     rows={key:stats(value) for key,value in metrics.items() if key!='sampledPositiveJacobians'}
     sj=metrics['cornerAndCenterScaledJacobian'];ratio=metrics['positiveGaussDetRatio']
     return dict(schemaVersion=1,elements=size,metrics=rows,
@@ -90,7 +107,9 @@ def summarize_h8(metrics,element_ids=None):
         sampling='8corners+center for scaled Jacobian;8corners and8Gauss points for separate determinant ratios',
         metricDefinitions=dict(scaledJacobian='det(J)/(norm(column1)*norm(column2)*norm(column3))',
             positiveDetRatio='min(det(J))/max(det(J)) within one element and one sampling set, only when all samples positive',
-            maxEdgeOverMinEdge='12edge length ratio, not every vendor-specific aspect-ratio formula'),
+            maxEdgeOverMinEdge='12edge length ratio, not every vendor-specific aspect-ratio formula',
+            faceCornerAngleDegrees='Euclidean angle between the two incident edges at each of24face corners',
+            faceDiagonalNormalAngleDegrees='Worst normal angle of the two triangles for BOTH diagonals of each Q4; not a certified vendor implementation match'),
         referenceComparisons=dict(
             verdictScaledJacobian=dict(referenceLowerBound=.5,belowCount=int((np.isfinite(sj)&(sj<.5)).sum()),
                 undefinedCount=int((~np.isfinite(sj)).sum()),source=REFERENCES['verdict'],advisoryOnly=True),

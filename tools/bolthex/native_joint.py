@@ -12,6 +12,7 @@ from .axial_envelope import AxialEnvelope
 from .mesh_core import Mesh3D,build_bolt_section,build_head_ring_section,build_ring_section,hexagon_R,thread_R
 from .cad_mesh import _sweep,_join_exact
 from .mesh_audit import audit_h8
+from .h8_quality_report import measure_h8,summarize_h8
 from .inp_writer import write_inp
 
 
@@ -190,8 +191,20 @@ def build_native_joint(spec=NativeJointSpec()):
     if len(cells)!=count:raise ValueError('Native joint allocation count mismatch')
     relative=abs(sum(row['volume'] for row in part_reports)-quality['volume'])/quality['volume']
     if relative>1e-10:raise ValueError('Assembly changed summed component volume')
+    metric_arrays=measure_h8(nodes,cells);global_eids=np.arange(1,len(cells)+1,dtype=np.int64)
+    region_metrics=[]
+    for pid,part in enumerate(parts,1):
+        selected=pids==pid
+        region_metrics.append(dict(partId=pid,name=part.name,elementIDSpace='global exported K/merged INP',
+            metrics=summarize_h8({key:value[selected] for key,value in metric_arrays.items()},global_eids[selected])))
+    diagnostics=dict(scope='Mesh-only geometric diagnostics; no solver is required to generate this mesh',
+        overall=summarize_h8(metric_arrays,global_eids),regions=region_metrics,regionKey='partId',
+        focusAndTransitionRegionsSeparatelyClassified=False,
+        referencesAreAdvisoryNotUniversalAcceptance=True,solverVerificationRequiredForMeshGeneration=False,
+        engineeringAnalysisVerified=False)
     report=dict(schemaVersion=1,kernel='repository-six-sector-analytical-joint',parameters=asdict(spec),plan=plan,preflight=preflight,
                 quality=quality,parts=part_reports,sharedNodes=shared,estimatedElements=count,
+                qualityDiagnostics=diagnostics,
                 relativeAssemblyVolumeError=relative,physicalEnvelope=envelope.knots,
                 geometryReference='analytical-thread-field',independentCadVerified=False,solverVerified=False,
                 connectionMode=spec.connection_mode,nodeOwnership=ownership,

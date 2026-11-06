@@ -20,6 +20,9 @@ class DefinitionTests(unittest.TestCase):
             self.assertAlmostEqual(a[k][0],1.);self.assertAlmostEqual(b[k][0],1.)
         self.assertAlmostEqual(b['maxEdgeOverMinEdge'][0],100.)
         self.assertAlmostEqual(a['integratedVolume'][0],1.)
+        self.assertAlmostEqual(a['minimumFaceCornerAngleDegrees'][0],90.)
+        self.assertAlmostEqual(a['maximumFaceCornerAngleDegrees'][0],90.)
+        self.assertAlmostEqual(a['maximumFaceDiagonalNormalAngleDegrees'][0],0.)
 
     def test_affine_shear_distinguishes_sj_from_constant_determinant_ratio(self):
         p=CUBE.copy();p[:,0]+=4*p[:,1]
@@ -27,11 +30,22 @@ class DefinitionTests(unittest.TestCase):
         self.assertAlmostEqual(m['cornerAndCenterScaledJacobian'][0],1/np.sqrt(17))
         self.assertAlmostEqual(m['positiveCornerDetRatio'][0],1.)
         self.assertAlmostEqual(m['positiveGaussDetRatio'][0],1.)
+        self.assertAlmostEqual(m['minimumFaceCornerAngleDegrees'][0],np.degrees(np.arctan(.25)))
+        self.assertAlmostEqual(m['maximumFaceCornerAngleDegrees'][0],180-np.degrees(np.arctan(.25)))
+        self.assertAlmostEqual(m['maximumFaceDiagonalNormalAngleDegrees'][0],0.)
         r=summarize_h8(m,np.array([42]))
         self.assertEqual(r['referenceComparisons']['verdictScaledJacobian']['belowCount'],1)
         self.assertEqual(r['referenceComparisons']['hypermeshGaussDetRatio']['belowCount'],0)
         self.assertFalse(r['engineeringQualityAccepted'])
         self.assertFalse(r['historicalProjectScreen']['officialVendorStandard'])
+        self.assertEqual(r['metrics']['maxEdgeOverMinEdge']['highestElementIDs'],[42])
+
+    def test_warped_face_is_detected_and_shapes_are_scale_translation_invariant(self):
+        p=CUBE.copy();p[6,2]+=.2
+        a=measure_h8(p,CELL);b=measure_h8(p*3+[100,-20,10],CELL)
+        self.assertGreater(a['maximumFaceDiagonalNormalAngleDegrees'][0],0.)
+        for key in ('minimumFaceCornerAngleDegrees','maximumFaceCornerAngleDegrees','maximumFaceDiagonalNormalAngleDegrees','maxEdgeOverMinEdge'):
+            self.assertAlmostEqual(a[key][0],b[key][0],places=10)
 
     def test_inverted_and_collapsed_cells_are_reported_not_hidden_by_a_ratio(self):
         for scale in ([-1,1,1],[1,1,0]):
