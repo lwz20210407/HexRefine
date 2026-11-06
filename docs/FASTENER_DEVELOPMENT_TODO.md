@@ -41,7 +41,8 @@ have different scopes and costs.
 
 ### Evidence And Important Qualifications
 
-- Current published branch checkpoint:9c12e08; development branch only.
+- Quality-policy checkpoint:9c12e08; subsequent increments are verified against
+  the fork separately, on the development branch only.
 - Whole M6 geometry/data pass remains valid. Quality reassessment finds36290
   of333824cells below the Verdict/Cubit SJ0.5reference and8below the separate
   HyperMesh-style Gauss determinant-ratio0.7reference. These are advisory
