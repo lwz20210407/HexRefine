@@ -61,3 +61,23 @@ with the failed stage, child exit code and finite diagnostic measurements.
 An absent/invalid audit is not turned into zero error. The candidate HM is
 retained for diagnosis; no accepted `report.json` is published. Existing
 pre-change experiment folders are not rewritten to manufacture new evidence.
+
+## Bounded Alternative Under Investigation
+
+The2026-11-07 diagnostic recovered a closed solid from the actual exported
+washer IGES faces, not from FE nodes or the source STEP. Sewing was tried at
+1e-7,1e-6,1e-5and5e-5mm. The first three retained free edges; at5e-5mm the six
+unchanged support surfaces formed one valid closed solid with zero free or
+multiple edges and no deleted faces. The native HM was not edited.
+
+The reconstructed analysis carrier then passed the existing full finite
+source/forward/reverse/physical-edge/volume audit under the same engineering
+policy: maximum surface distance1.11813e-5mm, maximum reverse-edge distance
+2.09772e-5mm and relative independent volume error8.61176e-7. All source/HM/K
+hashes remained unchanged. Evidence is in `resume-20261107/iges-solid-probe-v1`
+and `resume-20261107/iges-solid-full-audit-v1` below the same local root.
+
+This does not fix the direct native STEP writer and is not a production fallback.
+It still needs a reusable explicit topology/provenance contract, mutation and
+negative-case regressions, and integration with the high-level export path.
+Its reports intentionally keep `nativeHmVerified` and `productAcceptance` false.
