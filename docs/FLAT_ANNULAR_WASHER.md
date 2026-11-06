@@ -124,8 +124,8 @@ SHA256 hashes. `cad-report.json` binds `matchedMeshVerified` to this exact
 listed geometry checks, not native HM verification or solver acceptance.
 
 `nativeHmVerified`, `solverVerified` and `engineeringQualityAccepted` remain
-false. Main can independently import/save/reopen the STEP and K in HM using
-these reports; this worker does not run that step. No other fastener family or
+false. A separate native host adapter can import/save/reopen the STEP and K
+using these reports; the generator does not launch that host. No other fastener family or
 original Screw completion is implied by this complete custom washer geometry.
 
 The additional288/11/6seed case has19008H8/24192nodes. The2026-11-07 native

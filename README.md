@@ -11,6 +11,12 @@
 > is verified on this branch; wider families, native-HM and solver acceptance
 > remain separate. The [original Screw audit](docs/TRUEGRID_SCREW_REPLAY.md)
 > deliberately rejects the unresolved collapsed-axis model.
+> Recent bounded additions: [custom annular washer CAD/H8/K/INP](docs/FLAT_ANNULAR_WASHER.md),
+> [nominal catalogue](docs/FASTENER_NOMINAL_CATALOG.md),
+> [mesh quality by part](docs/NATIVE_JOINT_QUALITY.md) and
+> [interrupted-job regeneration](docs/NATIVE_JOINT_RETRY.md).
+> Mesh generation does not require a physical solver; see the separate
+> [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.
 > Original authorship and notices are retained.
 

@@ -1,11 +1,64 @@
 # Fastener development TODO
 
-Updated: 2026-11-06, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-07, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
 component; TODO = not implemented; WITHDRAWN = earlier acceptance corrected.
 Reading a repository is not porting it. Writing a STEP is not independent CAD.
+
+## Verified Bounded Closures, 2026-11-07
+
+These increments close specific missing interfaces, not the entire workstream
+or all source-application options. The remaining-work table below still applies.
+
+- DONE: mesh-only joint quality diagnostics, overall and per PID, with exported
+  global element IDs, separately named SJ/determinant-ratio/angle measures and
+  advisory references. Commit8767ca8. Region classification and optimization
+  remain open; a solver is not required to generate or publish a mesh.
+- DONE, BOUNDED: seven pinned nominal catalogue entries with explicit unknown
+  standards editions and unsupported tolerance-class requirements. Commitbc68dc5.
+  This is not complete GB/ISO/DIN/ASME coverage or an equivalence table.
+- DONE: interrupted-job fresh regeneration through HTTP and the workbench,
+  immutable saved request, new UUID, parent lineage, cancellation and recovery.
+  Commit9dbcb7d. This is not continuation of an old process or partial mesh.
+- DONE, BOUNDED: release evidence/allowlisted-test harness separates required
+  mesh delivery from optional physical analysis and refuses ambiguous duplicate
+  artifacts. Commit0eb955f;28tests passed. Full-feature release remains false.
+- DONE, BOUNDED: custom unchamfered annular washer independently generates
+  design CAD plus H8, STEP, K and INP. The complete19008-H8/24192-node case has
+  exact K/INP connectivity, source geometry preserved and volume error7.93256e-5.
+  Commited76bc0. This is not a standards-certified washer, graded washer or
+  complete native-HM acceptance.
+- PARTIAL: high-level HM export now propagates the explicit engineering CAD
+  profile and checks raw native geometry plus independent closed BRep volume.
+  Commit38ad5a9. The real washer's native save/reopen retained all mesh data,
+  but exported STEP distances0.001076/0.001066mm exceeded the unchanged0.0005mm
+  policy in BSpline/Standard modes. Both failures remain recorded. See
+  [native HM policy](NATIVE_HM_POLICY.md).
+- OPTIONAL, NOT A MESH GATE: previously developed affine-verification tooling
+  is isolated in commite4b8941, without adding runtime solver dependencies to
+  mesh generation. No commercial solver was needed in this continuation.
+- DONE: workbench overall/per-PID quality foldouts, formula-specific values,
+  undefined-field handling and global element IDs; old reports stay compatible.
+  Six formatter tests and a complete actual10440-H8 production-handler GUI
+  generation/readback/recovery/mobile run passed. This is a diagnostic viewer,
+  not automated shape optimization or focus-region classification.
+- DONE: failed native STEP audits explicitly produce a rejection record rather
+  than treating the retained candidate `.hm` as an accepted delivery. Commit992eb0a;
+  eight policy tests passed, including missing and nonfinite audit evidence.
+
+Current regression evidence:
+`F:/PythonWoking/temp/20261105-cap-integration/continued-screw-hm/resume-20261107`.
+The82-test core/HTTP selection passed with zero skips; TypeScript source,
+public types and build passed. A later35-test washer/HM selection passed with
+zero skips. These overlap and are not advertised as a sum or full project suite.
+The separate optional verifier selection passed10tests.
+
+Current mesh screenshots and independent readback evidence:
+`../flat-washer/review-20261107/evidence-v1/index.html` relative to that evidence
+directory. The HTML explicitly marks the native STEP/HM case as not accepted.
+No original source models, previous evidence or user GUI sessions were replaced.
 
 ## Current Remaining Work, 2026-11-06
 
@@ -17,7 +70,7 @@ have different scopes and costs.
 | Priority | Workstream | Implemented scope | Required next closure |
 | --- | --- | --- | --- |
 | P0 | Original Screw finite axis and endpoints | Full6128-cell phase compensation;1044face pairs;3968outside cells unchanged. Whole2160-parent mapped collar produces15120H8 and8640inner quads | Fill the actual core, close both nonplanar end loops and neck/head interfaces, verify no void/overlap, domain volume and complete K/INP. The19088-cell hollow composite is NOT a repaired Screw |
-| P0 | Quality and acceptance | Explicit corner/center/Gauss metrics; VTK/Verdict comparison; center-collapse rejection; whole-M6 reassessment | Region-aware quality/size distributions, cross-tool/solver checks and application-dependent acceptance. Historical SJ0.15is NOT a universal vendor standard or sufficient engineering acceptance |
+| P0 | Quality and acceptance | Explicit corner/center/Gauss metrics; VTK/Verdict comparison; center-collapse rejection; whole-M6 reassessment; mesh-only whole-joint/per-PID diagnostics | Focus/transition-region classification, shape optimization and geometry/mesh/IO acceptance. Solver/convergence checks are optional analysis verification and MUST NOT block mesh generation or mesh-only publication. Historical SJ0.15is NOT a universal vendor standard |
 | P1 | CAD/HM fidelity and reusable geometry bridge | Saved M6 hemisphere cap native94faces/one solid +333824unchangedH8 verified for geometry/data. Real trim query module verifies94faces/1053queries | General reusable closed-BRep assembly, broader socket/cap/runout coverage, engineering-profile recheck of prior socket failures, CAD associations without unauthorized FE motion, robust STEP carrier export |
 | P1 | Complete fastener structures | Bounded hex bolts/open nuts, original faded M8, M6 and1/4-20sockets, saved M6 complete cap | Shoulder/actual bore-wall late-runout variants; wider caps/blind ends; flanges,washers,self-drilling tips,slots,inserts; consistent independent CAD+H8+K/INP/HM for exposed combinations |
 | P1 | Three-dimensional local grading | Bounded circumferential2:1core grading and paired patches | Axial and joint3D grading, near-thread3:1/multilevel transitions, general O-grid corners/weak-balance/multiple fronts while preserving the focus region and retained exterior |

@@ -110,13 +110,14 @@ A report always retains
   successful solve and not a mesh-development or mesh-release blocker.
 - scikit-fem 12.0.2 installation is not a test result. Hash-bound independent
   engine evidence may be recorded as partial; it never satisfies R11 or
-  engineering fastener contact/preload. Main owns solver acceptance code.
+  engineering fastener contact/preload. Optional numerical verification is a
+  separate module, not a mesh-generator dependency.
 - Original Screw core, nonplanar endpoints and whole-domain validation remain
   separate from the complete saved M6 cap result.
 - Missing live CAD/HM/GUI oracles remain not_run or historical partial. Use
   unsupported only for an explicitly unsupported workflow, not a missing tool.
 - No keys, licenses, private binaries or large case files belong in commits.
-- Main integrates the three owned files; this worker does not commit or push.
+- Review and commit only verified source changes; keep large case evidence local.
 
 Unit tests: `python -B -m unittest tools.tests.test_fastener_release -v`, with
 `BOLTHEX_TEST_ROOT`, `TEMP`, `TMP` under the explicit output root.
