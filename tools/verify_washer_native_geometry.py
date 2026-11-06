@@ -52,12 +52,13 @@ def measure_points(points,source_distance,native_distance,carrier_distance,sourc
         sourceDiscretizationLimitMM=source_limit,nativeGeometryTransferLimitMM=transfer_limit)
 
 
-def verify(source_bundle,native_bundle,output,*,geometry_policy,sewing_tolerance):
+def verify(source_bundle,native_bundle,output,*,geometry_policy,sewing_tolerance,reference_file=None):
     started=time.monotonic()
     policy=validated_policy(geometry_policy);source=Path(source_bundle).resolve();native=Path(native_bundle).resolve()
+    reference_path=(source/'native-reference.json') if reference_file is None else Path(reference_file).resolve()
     output=Path(output).absolute()
     if output.exists() or output.is_symlink() or not output.parent.is_dir():raise ValueError('Require a fresh report path')
-    paths=[source/name for name in ('model.k','model.inp','model.step','report.json','cad-report.json','native-reference.json')]
+    paths=[source/name for name in ('model.k','model.inp','model.step','report.json','cad-report.json')]+[reference_path]
     paths += [native/name for name in ('model.hm','report.json','native-cad.iges','native-cad-manifest.json','native-cad-audit.json',
                                      'native-brep-audit.json','iges-reconstruction/reconstruction.json','iges-reconstruction/reconstructed.brep')]
     bindings={str(p):sha(p) for p in paths}
@@ -74,13 +75,17 @@ def verify(source_bundle,native_bundle,output,*,geometry_policy,sewing_tolerance
     manifest=json.loads((native/'native-cad-manifest.json').read_text())
     check_native_identity(host,construction,manifest,bindings,native)
     raw=json.loads((native/'native-cad-audit.json').read_text())
-    reference=json.loads((source/'native-reference.json').read_text())
+    reference=json.loads(reference_path.read_text())
+    from tools.hypermesh_geometry_probe import validate_reference
+    expected_reference_hashes={'sourceStepSHA256':original['sourceStepSHA256'],'sourceKSHA256':original['kSHA256'],
+        'sourceReportSHA256':bindings[str(source/'report.json')],'sourceCadReportSHA256':bindings[str(source/'cad-report.json')]}
+    validate_reference(reference,expected_hashes={k:v for k,v in expected_reference_hashes.items() if k in reference})
     from tools.bolthex.native_cad_audit import surface_policy_acceptance
     if (host.get('nativeCadAuditSHA256')!=bindings[str(native/'native-cad-audit.json')]
             or raw.get('sourceHmSHA256')!=host['hmSHA256'] or raw.get('igesSHA256')!=bindings[str(native/'native-cad.iges')]
             or raw.get('manifestSHA256')!=bindings[str(native/'native-cad-manifest.json')]
             or raw.get('sourceStepSHA256')!=original['sourceStepSHA256']
-            or raw.get('referenceSHA256')!=bindings[str(source/'native-reference.json')]
+            or raw.get('referenceSHA256')!=bindings[str(reference_path)]
             or raw.get('geometryAccuracyPolicy')!=policy.manifest() or not surface_policy_acceptance(raw,reference,policy)):
         raise ValueError('Raw native CAD audit does not bind this HM/IGES/source/reference')
     carrier=validate_reconstruction(construction,native/'native-cad-manifest.json',native/'iges-reconstruction',
@@ -89,7 +94,7 @@ def verify(source_bundle,native_bundle,output,*,geometry_policy,sewing_tolerance
     if (not carrier_acceptance(prior,policy) or prior.get('carrierFormat')!='occt-brep'
             or host.get('nativeCarrierSHA256')!=sha(carrier) or prior.get('carrierBrepSHA256')!=sha(carrier)
             or prior.get('sourceStepSHA256')!=original['sourceStepSHA256']
-            or prior.get('referenceSHA256')!=bindings[str(source/'native-reference.json')]
+            or prior.get('referenceSHA256')!=bindings[str(reference_path)]
             or prior.get('geometryAccuracyPolicy')!=policy.manifest()
             or host.get('nativeCarrierAuditSHA256')!=bindings[str(native/'native-brep-audit.json')]
             or host.get('nativeReconstructionSHA256')!=bindings[str(native/'iges-reconstruction/reconstruction.json')]):
@@ -143,6 +148,7 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('source','native','output'):p.add_argument(name,type=Path)
     p.add_argument('--target-size-mm',type=float,required=True);p.add_argument('--sewing-tolerance-mm',type=float,required=True)
-    a=p.parse_args();r=verify(a.source,a.native,a.output,geometry_policy=CadAccuracyPolicy.engineering(a.target_size_mm),sewing_tolerance=a.sewing_tolerance_mm)
+    p.add_argument('--reference',type=Path,help='Explicit independent source-reference file; defaults to source/native-reference.json')
+    a=p.parse_args();r=verify(a.source,a.native,a.output,geometry_policy=CadAccuracyPolicy.engineering(a.target_size_mm),sewing_tolerance=a.sewing_tolerance_mm,reference_file=a.reference)
     print(json.dumps({key:r[key] for key in ('passed','nodes','H8','allCellCentresChecked','relativeMeshToNativeCarrierVolumeError','sourceInputsUnchanged')}))
     raise SystemExit(0 if r['passed'] else 2)

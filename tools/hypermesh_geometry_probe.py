@@ -14,8 +14,15 @@ def sha(path):
     return digest.hexdigest()
 
 
-def validate_reference(reference):
+def validate_reference(reference,*,expected_hashes=None):
     if not isinstance(reference,dict):raise ValueError('Reference must be an object')
+    if expected_hashes is not None:
+        if not isinstance(expected_hashes,dict):raise ValueError('Expected source hashes must be an object')
+        for key,value in expected_hashes.items():
+            if (not isinstance(key,str) or not key.endswith('SHA256') or not isinstance(value,str)
+                    or len(value)!=64 or any(c not in '0123456789abcdef' for c in value)
+                    or reference.get(key)!=value):
+                raise ValueError('Source reference hash mismatch: '+str(key))
     points=reference.get('points')
     if not isinstance(points,list) or not 2<=len(points)<=4096:
         raise ValueError('Require 2..4096 bounded reference points')

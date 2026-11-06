@@ -9,6 +9,7 @@ import unittest
 from tools.hypermesh_native import make_tcl,export_hm,_accuracy_arguments,_reject_step_audit
 from tools.bolthex.geometry_accuracy_policy import CadAccuracyPolicy
 from tools.bolthex.native_cad_audit import surface_acceptance,surface_policy_acceptance
+from tools.hypermesh_geometry_probe import validate_reference
 
 
 def sample():
@@ -27,6 +28,15 @@ def sample():
 
 
 class NativePolicyTests(unittest.TestCase):
+    def test_optional_mesh_specific_reference_provenance_cannot_be_ignored(self):
+        _,reference=sample();reference['points'][1]['sourceDistance']=.1
+        reference['sourceKSHA256']='a'*64
+        validate_reference(reference,expected_hashes={'sourceKSHA256':'a'*64})
+        with self.assertRaisesRegex(ValueError,'Source reference hash mismatch'):
+            validate_reference(reference,expected_hashes={'sourceKSHA256':'b'*64})
+        with self.assertRaises(ValueError):validate_reference(reference,expected_hashes={'sourceReportSHA256':'a'*64})
+        validate_reference(reference)
+
     def test_all_engineering_constraints_reach_the_child_cli(self):
         p=CadAccuracyPolicy.engineering(.1,critical_target_size_mm=.04,minimum_functional_gap_mm=.004,minimum_root_radius_mm=.01)
         args=_accuracy_arguments(p)

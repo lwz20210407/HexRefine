@@ -191,6 +191,10 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         solids = cr['solids']
     elif associate:
         raise ValueError('Association requires CAD')
+    if cad_reference is not None:
+        expected={'sourceStepSHA256':cr['stepSHA256'],'sourceKSHA256':report['kSHA256'],
+                  'sourceReportSHA256':_sha(source_report),'sourceCadReportSHA256':_sha(cad_report)}
+        validate_reference(reference,expected_hashes={key:value for key,value in expected.items() if key in reference})
     template = executable.parents[3] / 'templates/feoutput/ls-dyna971/dyna971_R112.key'
     if native_k_export and not template.is_file():
         raise ValueError('Matching LS-DYNA R11 output template is unavailable')
