@@ -15,6 +15,12 @@
 > [nominal catalogue](docs/FASTENER_NOMINAL_CATALOG.md),
 > [mesh quality by part](docs/NATIVE_JOINT_QUALITY.md) and
 > [interrupted-job regeneration](docs/NATIVE_JOINT_RETRY.md).
+> The complete washer also has a verified, explicit
+> [native IGES/BRep HM workflow](docs/WASHER_NATIVE_WORKFLOW.md) and
+> [independent native K/INP roundtrip](docs/NATIVE_MESH_ROUNDTRIP.md).
+> Direct native STEP failures remain rejected; CAD association is not certified.
+> Screw [endpoint partition diagnostics](docs/SCREW_ENDPOINT_CONTRACT.md)
+> are not an accepted whole-model repair.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.

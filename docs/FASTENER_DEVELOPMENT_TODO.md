@@ -12,6 +12,38 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
 These increments close specific missing interfaces, not the entire workstream
 or all source-application options. The remaining-work table below still applies.
 
+### Latest Native Washer And Screw Status
+
+- DONE, BOUNDED: explicit unoptimized native IGES to exact-valid BRep carrier
+  is integrated in the production HM exporter (cb3ae6a). No automatic fallback,
+  STEP renaming or tolerance escalation. Direct native STEP remains rejected.
+- DONE, BOUNDED: the complete D12/d6.4/t1.6 washer has a saved/reopened native
+  HM with 24,192 nodes, 19,008 H8, six surfaces and one solid. Full-boundary
+  geometry and independent native K/source K/INP identity checks passed
+  (436e58c). All 9,792 boundary nodes, 9,792 boundary face centres and 19,008
+  cell centres were tested. Mesh/carrier relative volume error is 8.018667e-5
+  against the unchanged 1e-4 limit. CAD association and physics are NOT certified.
+- DONE: source-bundle-driven washer references, outside immutable source input,
+  with actual STEP/K/report hashes and real NIDs (d7fbc74). Two sizes are tested;
+  the generated reference was rechecked against actual existing native carriers.
+  The 134-test CAD/HM/reference selection and separate 37-test IO selection
+  passed with zero skips; these are not the full repository suite.
+- IN PROGRESS: original Screw. The protected endpoint template solve remains
+  rejected after a bounded 114-to-256-parent diagnostic search. No successful
+  replacement or whole Screw K/INP was produced. This finite-library result is
+  not a general impossibility theorem for hex meshes.
+- AUTHORIZED, NOT YET ACCEPTED: the user approved local engineering-budget
+  regularization of the actual upper axis cusp on 2026-11-07. Original files,
+  threads and retained regions must remain unchanged; output is separate and
+  Jacobian checks are not relaxed. The lower neck interface is a different
+  geometry and must not receive the same treatment without evidence. A local
+  repaired geometry target will not count as a meshed or accepted whole Screw.
+
+Current native delivery and VTK readback views:
+`F:/PythonWoking/temp/20261105-cap-integration/continued-screw-hm/iges-production-screw-20261107/REVIEW.html`.
+The older snapshots below describe their original checkpoints, not the latest
+washer acceptance. Screenshots are explicitly VTK data renders, not HM/LSPP UI.
+
 - DONE: mesh-only joint quality diagnostics, overall and per PID, with exported
   global element IDs, separately named SJ/determinant-ratio/angle measures and
   advisory references. Commit8767ca8. Region classification and optimization
