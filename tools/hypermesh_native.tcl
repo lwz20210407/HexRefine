@@ -144,6 +144,9 @@ namespace eval ::hexrefine_native {
                 foreach id [hm_entitylist solids id] {set volumeBefore [expr {$volumeBefore+[hm_getvolumeofsolid solids $id]}]}
                 puts $log "nativeCadVolumeBefore $volumeBefore"
                 *geomexport "iges_altair" [decode {@NATIVEIGES@}] "SourceUnits=MMKS (mm kg N s)" "TargetUnits=Millimeters" "OptimizeForCAD=off" "OuterLoop=Mandatory"
+                if {@NATIVESTEPEXPORT@} {
+                    *geomexport "step_ct" [decode {@NATIVESTEP@}] "SourceUnits=MMKS (mm kg N s)" "TargetUnits=Millimeters" "Version=AP214" "GeometryMode=Standard" "TopologyMode=Solid/Shell" "OptimizeForCAD=off"
+                }
                 set volumeAfter 0
                 foreach id [hm_entitylist solids id] {set volumeAfter [expr {$volumeAfter+[hm_getvolumeofsolid solids $id]}]}
                 puts $log "nativeCadVolumeAfter $volumeAfter"

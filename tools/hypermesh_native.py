@@ -54,13 +54,15 @@ def _check_development_profile(report,cad_report,mesh_bytes):
             raise ValueError('Development mode does not waive H8 validity/quality')
 
 
-def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,),native_cad_exchange=False,*,native_cad_database=None):
+def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, tolerance, boundary, boundary_count=None,native_k_export=False,source_pids=(1,),native_cad_exchange=False,*,native_cad_database=None,native_step_export=False):
     """Build the owned host job; an optional native CAD capsule must be CAD-only.
 
     The STEP remains the independent geometry reference, not a replacement by
     FE-derived geometry. This low-level command builder issues no acceptance
     certificate; the caller must bind hashes and independently audit geometry.
     """
+    if type(native_step_export) is not bool or native_step_export and (cad is None or not native_cad_exchange):
+        raise ValueError('Native STEP carrier requires explicit CAD exchange')
     native=''
     if native_cad_database is not None:
         native_path=Path(native_cad_database).resolve()
@@ -80,6 +82,7 @@ def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, to
                   BOUNDARYCOUNT=str(len(boundary) if boundary_count is None else boundary_count),
                   NATIVEKEXPORT=str(int(native_k_export)),
                   NATIVECADEXCHANGE=str(int(native_cad_exchange)),NATIVEIGES=str(output/'native-cad.iges').encode().hex(),
+                  NATIVESTEPEXPORT=str(int(native_step_export)),NATIVESTEP=str(output/'native-cad.step').encode().hex(),
                   GEOCOMPSTART=str(max(source_pids)+1000),SOURCEPIDS=' '.join(str(int(pid)) for pid in source_pids),
                   BOUNDARY=' '.join(str(int(n)) for n in boundary))
     for key, value in values.items():
@@ -87,11 +90,27 @@ def make_tcl(mesh, cad, output, template, nodes, elements, solids, associate, to
     return source
 
 
+def _accuracy_arguments(policy):
+    args=['--accuracy-profile','engineering' if policy.profile=='engineering-cad-transfer' else 'strict']
+    for attribute,flag in (('target_size_mm','--target-size-mm'),('critical_target_size_mm','--critical-target-size-mm'),
+                           ('minimum_functional_gap_mm','--minimum-functional-gap-mm'),('minimum_root_radius_mm','--minimum-root-radius-mm')):
+        value=getattr(policy,attribute)
+        if value is not None:args.extend((flag,repr(value)))
+    return args
+
+
 def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None,
               associate=False, tolerance=1e-7, debug_discrete_cad=False,native_k_export=False,host_timeout=300,development_only=False,
-              cad_reference=None,cad_python=None):
+              cad_reference=None,cad_python=None,*,accuracy_policy=None,native_step_export=False):
     if type(host_timeout) is not int or not 1<=host_timeout<=3600:
         raise ValueError('Host timeout must be an integer in [1,3600] seconds')
+    from tools.bolthex.geometry_accuracy_policy import validated_policy
+    policy=validated_policy(accuracy_policy)
+    if type(native_step_export) is not bool:raise ValueError('Native STEP export flag must be boolean')
+    if (accuracy_policy is not None or native_step_export) and (cad is None or cad_reference is None or cad_python is None):
+        raise ValueError('Explicit geometry policy/STEP carrier requires source CAD, references and CAD runtime')
+    if policy.profile=='engineering-cad-transfer' and not native_step_export:
+        raise ValueError('Engineering native verification requires independent STEP BRep volume evidence')
     mesh, source_report, executable, output = [Path(p).resolve() for p in [mesh, source_report, executable, output]]
     if output.exists() or not output.parent.is_dir():
         raise ValueError('Require a new output directory with an existing parent')
@@ -176,7 +195,7 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         boundary_count=len(boundary)
     output.mkdir()
     tcl = output / 'export.tcl'
-    tcl.write_text(make_tcl(mesh, cad, output, template, report['nodes'], report['elements'], solids, associate, tolerance, boundary,boundary_count,native_k_export,source_pids,cad_reference is not None), encoding='utf-8')
+    tcl.write_text(make_tcl(mesh, cad, output, template, report['nodes'], report['elements'], solids, associate, tolerance, boundary,boundary_count,native_k_export,source_pids,cad_reference is not None,native_step_export=native_step_export), encoding='utf-8')
     startup = None
     if hasattr(subprocess, 'STARTUPINFO'):
         startup = subprocess.STARTUPINFO();startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -204,7 +223,7 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         raise RuntimeError('Source K changed during native export')
     if cad is not None and _sha(cad)!=cr['stepSHA256']:
         raise RuntimeError('Source CAD changed during native export')
-    database=output/'model.hm';native_audit=None
+    database=output/'model.hm';native_audit=None;step_audit=None
     if cad_reference is not None:
         if _sha(cad_reference)!=reference_hash:raise RuntimeError('CAD audit reference changed during native export')
         manifest=dict(nativeHmPath=str(database),nativeHmSHA256=_sha(database),sourceStepSHA256=_sha(cad),
@@ -213,12 +232,14 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
                       nativeVolumeBefore=float(stats['nativeCadVolumeBefore']),nativeVolumeAfter=float(stats['nativeCadVolumeAfter']))
         manifest_file=output/'native-cad-manifest.json';manifest_file.write_text(json.dumps(manifest,indent=2))
         with (output/'native-cad-audit.log').open('w') as log:
-            done=subprocess.run([str(cad_python),'-B','-m','tools.bolthex.native_cad_audit',str(manifest_file),str(cad),str(cad_reference),str(output/'native-cad-audit.json')],
+            done=subprocess.run([str(cad_python),'-B','-m','tools.bolthex.native_cad_audit',str(manifest_file),str(cad),str(cad_reference),str(output/'native-cad-audit.json'),*_accuracy_arguments(policy)],
                                 cwd=Path(__file__).resolve().parents[1],env={**os.environ,'TEMP':str(output),'TMP':str(output),'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1'},
                                 stdout=log,stderr=subprocess.STDOUT,startupinfo=startup,timeout=600,check=False)
         if done.returncode!=0 or not (output/'native-cad-audit.json').is_file():raise RuntimeError('Independent native CAD audit failed; inspect retained audit log')
         native_audit=json.loads((output/'native-cad-audit.json').read_text())
-        if (native_audit.get('sampledNativeCadVerified') is not True or native_audit.get('sourceHmSHA256')!=_sha(database)
+        selected_flag='sampledNativeCadVerified' if policy.profile=='strict-cad-regression' else 'selectedGeometryPolicyVerified'
+        if (native_audit.get(selected_flag) is not True or native_audit.get('geometryAccuracyPolicy')!=policy.manifest()
+                or native_audit.get('sourceHmSHA256')!=_sha(database)
                 or native_audit.get('sourceStepSHA256')!=cr['stepSHA256'] or native_audit.get('referenceSHA256')!=reference_hash
                 or native_audit.get('igesSHA256')!=_sha(output/'native-cad.iges') or native_audit.get('manifestSHA256')!=_sha(manifest_file)):
             raise RuntimeError('Independent native CAD audit does not bind this HM/STEP/reference')
@@ -228,9 +249,9 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
                     or any(type(v) not in (int,float) or not math.isfinite(v) for v in values)
                     or any(values[i]>=values[i+3] for i in range(3))):
                 raise RuntimeError('Independent native CAD geometry bounds are invalid')
-        from tools.bolthex.native_cad_audit import acceptance,validate_samples
-        if not acceptance(native_audit):raise RuntimeError('Independent native CAD measurements exceed acceptance limits')
-        validate_samples(native_audit,reference)
+        from tools.bolthex.native_cad_audit import acceptance,surface_policy_acceptance
+        if not surface_policy_acceptance(native_audit,reference,policy):raise RuntimeError('Raw independent native geometry witnesses exceed the selected policy')
+        if policy.profile=='strict-cad-regression' and not acceptance(native_audit):raise RuntimeError('Independent native CAD measurements exceed strict diagnostic limits')
         if abs(native_audit['nativeVolume']-manifest['nativeVolumeBefore'])/manifest['nativeVolumeBefore']>1e-12:
             raise RuntimeError('Independent native CAD volume does not bind the host measurement')
         measured_bounds=max(abs(a-b) for a,b in zip(native_audit['nativeBounds'],native_audit['sourceBounds']))
@@ -238,6 +259,23 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
             raise RuntimeError('Independent native CAD geometry bounds differ from declared measurements')
         if _sha(mesh)!=report['kSHA256'] or _sha(cad)!=cr['stepSHA256'] or _sha(cad_reference)!=reference_hash:
             raise RuntimeError('Source mesh/CAD/reference changed during independent native audit')
+        if native_step_export:
+            carrier=output/'native-cad.step';carrier_hash=_sha(carrier)
+            with (output/'native-step-audit.log').open('w') as log:
+                done=subprocess.run([str(cad_python),'-B','-m','tools.bolthex.native_cad_conditioning',str(cad),str(carrier),
+                    str(cad_reference),str(output/'native-step-audit.json'),*_accuracy_arguments(policy)],
+                    cwd=Path(__file__).resolve().parents[1],env={**os.environ,'TEMP':str(output),'TMP':str(output),'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1'},
+                    stdout=log,stderr=subprocess.STDOUT,startupinfo=startup,timeout=600,check=False)
+            if done.returncode!=0 or not (output/'native-step-audit.json').is_file():
+                raise RuntimeError('Independent native STEP BRep geometry/volume audit failed')
+            step_audit=json.loads((output/'native-step-audit.json').read_text())
+            from tools.bolthex.native_cad_conditioning import step_carrier_acceptance
+            if (step_audit.get('selectedGeometryPolicyVerified') is not True or step_audit.get('geometryAccuracyPolicy')!=policy.manifest()
+                    or not step_carrier_acceptance(step_audit,policy)
+                    or step_audit.get('sourceStepSHA256')!=cr['stepSHA256'] or step_audit.get('carrierStepSHA256')!=carrier_hash
+                    or step_audit.get('referenceSHA256')!=reference_hash or _sha(carrier)!=carrier_hash
+                    or _sha(database)!=manifest['nativeHmSHA256'] or _sha(mesh)!=report['kSHA256']):
+                raise RuntimeError('Native STEP audit does not bind the unchanged HM/source inputs')
     cad_bounds = None
     bounds_verified=False
     bounds_error=None
@@ -249,7 +287,7 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         facet_bounds=list(cad_bounds);facet_error=max(abs(a-b) for a,b in zip(facet_bounds,expected))
         if native_audit is not None:cad_bounds=native_audit['nativeBounds']
         bounds_error=max(abs(a-b) for a,b in zip(cad_bounds,expected))
-        bounds_verified=bounds_error<=1e-5
+        bounds_verified=bounds_error<=policy.carrier_limits()['maximumCadBoundsDifference']
         if not bounds_verified and not development_only:
             raise RuntimeError('Native HM geometry bounds differ from the independent CAD')
         if development_only:
@@ -276,7 +314,14 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
         cadBoundsMethod='independent-native-IGES-BRep' if native_audit is not None else 'native-faceted-bounds',
         nativeFacetCadBounds=None if cad is None or debug_discrete_cad else facet_bounds,
         maximumNativeFacetBoundsDifference=None if cad is None or debug_discrete_cad else facet_error,
-        sampledNativeCadVerified=native_audit is not None,exactNativeCadCertified=False,
+        sampledNativeCadVerified=native_audit is not None and native_audit.get('sampledNativeCadVerified') is True,
+        selectedNativeCadGeometryVerified=native_audit is not None,
+        geometryAccuracyPolicy=policy.manifest(),nativeBrepVolumeVerified=step_audit is not None,
+        nativeStepCarrierSHA256=None if step_audit is None else _sha(output/'native-cad.step'),
+        nativeStepAuditSHA256=None if step_audit is None else _sha(output/'native-step-audit.json'),
+        nativeBrepVolumeMethod=None if step_audit is None else 'independent exported STEP BRep; not approximate host volume',
+        nativeCadVerificationMethod=None if native_audit is None else 'read-only carriers exported after reopening saved HM; finite geometry comparison',
+        exactNativeCadCertified=False,engineeringAnalysisVerified=False,
         nativeCadAuditSHA256=None if native_audit is None else _sha(output/'native-cad-audit.json'),
         associationTolerance=tolerance if associate else None,
         limitations=['Native HM requires installed HyperMesh; K/INP do not.',
@@ -296,5 +341,16 @@ if __name__ == '__main__':
     p.add_argument('--host-timeout',type=int,default=300)
     p.add_argument('--development-only',action='store_true')
     p.add_argument('--cad-reference');p.add_argument('--cad-python')
+    p.add_argument('--accuracy-profile',choices=('strict','engineering'))
+    p.add_argument('--target-size-mm',type=float);p.add_argument('--critical-target-size-mm',type=float)
+    p.add_argument('--minimum-functional-gap-mm',type=float);p.add_argument('--minimum-root-radius-mm',type=float)
+    p.add_argument('--native-step-export',action='store_true',help='Independent native STEP BRep geometry/volume check; required by engineering profile')
     a = p.parse_args()
-    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad,a.native_k_export,a.host_timeout,a.development_only,a.cad_reference,a.cad_python), indent=2))
+    policy=None
+    options=dict(target_size_mm=a.target_size_mm,critical_target_size_mm=a.critical_target_size_mm,
+        minimum_functional_gap_mm=a.minimum_functional_gap_mm,minimum_root_radius_mm=a.minimum_root_radius_mm)
+    if a.accuracy_profile is not None or any(v is not None for v in options.values()):
+        from tools.bolthex.geometry_accuracy_policy import CadAccuracyPolicy
+        policy=CadAccuracyPolicy('engineering-cad-transfer' if a.accuracy_profile=='engineering' else 'strict-cad-regression',**options)
+    print(json.dumps(export_hm(a.mesh, a.source_report, a.hmbatch, a.output, a.cad, a.cad_report, a.associate, a.tolerance, a.debug_discrete_cad,a.native_k_export,a.host_timeout,a.development_only,a.cad_reference,a.cad_python,
+        accuracy_policy=policy,native_step_export=a.native_step_export), indent=2))

@@ -134,6 +134,24 @@ def _bounds(shape):
     return values
 
 
+def surface_policy_acceptance(report,reference,accuracy_policy=None):
+    """Check raw finite geometry witnesses, not rounded summaries or host mass."""
+    validate_samples(report,reference)
+    values=dict(report)
+    forward=report['forward']
+    values['maximumSurfaceDistance']=max(r['nativeDistance'] for r in forward if r['role']!='control')
+    values['maximumControlDistanceError']=max(abs(r['nativeDistance']-r['sourceDistance']) for r in forward if r['role']=='control')
+    values['maximumSourceReferenceError']=max(abs(r['sourceDistance']-p['sourceDistance']) for r,p in zip(forward,reference['points']))
+    for field,value_key,metric in (('sourceFaceWitnesses','nativeDistance','maximumSourceFaceDistance'),
+            ('reverse','sourceDistance','maximumReverseDistance'),('edgeReverse','sourceDistance','maximumReverseEdgeDistance')):
+        values[metric]=max(r[value_key] for r in report[field])
+    bounds=[report.get(key) for key in ('sourceBounds','nativeBounds')]
+    if any(not isinstance(b,list) or len(b)!=6 or any(type(v) not in (int,float) or not math.isfinite(v) for v in b)
+           or any(b[i]>b[i+3] for i in range(3)) for b in bounds):raise ValueError('Invalid raw CAD bounds')
+    values['maximumCadBoundsDifference']=max(abs(a-b) for a,b in zip(*bounds))
+    return surface_acceptance(values,accuracy_policy)
+
+
 def audit_exchange(manifest_file,step,reference_file,output,*,accuracy_policy=None):
     policy=_policy(accuracy_policy)
     manifest_file,step,reference_file,output=map(lambda p:Path(p).resolve(),(manifest_file,step,reference_file,output))
