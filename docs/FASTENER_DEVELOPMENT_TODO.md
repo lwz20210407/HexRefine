@@ -47,6 +47,18 @@ or all source-application options. The remaining-work table below still applies.
 - DONE: failed native STEP audits explicitly produce a rejection record rather
   than treating the retained candidate `.hm` as an accepted delivery. Commit992eb0a;
   eight policy tests passed, including missing and nonfinite audit evidence.
+- DONE, BOUNDED: reusable native-capture closed-BRep assembly and save/comparison
+  guards. Root ownership, full state, current tolerances and true geometry
+  mutations are checked.29tests passed, including five actual complete-M6
+  construction/save/reopen checks; the earlier full source sweep was not rerun.
+  Only observed codec normalization is accepted on readback, not relaxed CAD
+  accuracy. This analysis BRep bridge is not generic CAD healing or a native-HM
+  product certificate. See [scope](NATIVE_TRIM_SOLID.md).
+
+Final deduplicated bounded regression:190Python tests, zero skips, excluding
+the separately tested native-solid module and optional analysis tooling.
+Evidence: `resume-20261107/final-bounded-regression-v1/result.json`. This remains
+a selected fastener regression, not the entire TypeScript/Python repository.
 
 Current regression evidence:
 `F:/PythonWoking/temp/20261105-cap-integration/continued-screw-hm/resume-20261107`.
