@@ -1,8 +1,10 @@
 import {parseNativeLsdynaMixedKeyword,type LsdynaMixedMesh} from "./lsdyna-mixed.js";
 import type {Mesh} from "./types.js";
+import {formatJointQualityDiagnostics} from "./native-joint-quality.js";
 
 interface JointQuality {nodes:number;elements:number;minimumCornerScaledJacobian:number;minimumGaussJacobian:number;}
 interface JointReport {
+  qualityDiagnostics?:unknown;
   quality:JointQuality;parts:Array<JointQuality&{name:string}>;limitations:string[];kReadback:{sha256:string};
   connectionMode:"shared"|"separate";nodeOwnership:{componentNodeSetsDisjoint:boolean};
   parameters:Record<string,unknown>&{axial:Record<string,number>;handedness:string;connection_mode:string};
@@ -41,6 +43,7 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const style=document.createElement("style");
   style.textContent=`.nj-panel{padding:10px 0;border-top:1px solid var(--line)}.nj-panel button{width:100%;margin:4px 0}.nj-status{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.nj-dialog{width:min(780px,calc(100vw - 24px));max-height:88vh;padding:0;border:1px solid var(--line);border-radius:6px;color:var(--text);background:var(--panel)}.nj-dialog::backdrop{background:rgba(0,0,0,.35)}.nj-dialog header,.nj-dialog footer{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 16px;background:var(--panel);position:sticky;z-index:2}.nj-dialog header{top:0;border-bottom:1px solid var(--line)}.nj-dialog footer{bottom:0;border-top:1px solid var(--line)}.nj-dialog h2{margin:0;font-size:17px;flex:1}.nj-dialog button{width:auto}.nj-dialog fieldset{border:0;border-bottom:1px solid var(--line);margin:0;padding:14px 16px}.nj-dialog legend{font-size:13px;color:var(--muted)}.nj-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 12px}.nj-fields label{display:flex;flex-direction:column;min-width:0;font-size:13px;gap:5px}.nj-fields input,.nj-fields select{box-sizing:border-box;min-width:0;width:100%;height:34px;border:1px solid var(--line);border-radius:3px;background:var(--input-bg);color:var(--text);padding:5px;font-size:14px}.nj-message{padding:0 16px;color:var(--bad);white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}.nj-quality{padding:10px 16px;font-size:13px;white-space:pre-wrap}.nj-downloads{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;padding:8px 16px}.nj-downloads a{color:var(--accent)}.nj-dialog progress{width:120px;height:8px}.nj-dialog :disabled{opacity:.5}.nj-dialog [hidden]{display:none!important}@media(max-width:620px){.nj-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:370px){.nj-fields{grid-template-columns:1fr}}`;
   document.head.append(style);root.classList.add("nj-panel");
+  style.textContent+=`.nj-diagnostics{padding:10px 16px;font-size:13px;overflow-wrap:anywhere}.nj-diagnostics summary{cursor:pointer;padding:8px 0;min-height:24px}.nj-diagnostics summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.nj-diagnostics p{margin:6px 0;line-height:1.5}.nj-quality-scope{border-top:1px solid var(--line)}.nj-metric{padding:10px 0;border-top:1px solid var(--line)}.nj-metric-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.nj-metric-range{font-variant-numeric:tabular-nums}.nj-metric-formula,.nj-quality-note{color:var(--muted);font-size:12px}.nj-eids{font-variant-numeric:tabular-nums}.nj-eids summary{font-size:12px}.nj-quality{overflow-wrap:anywhere}@media(max-width:460px){.nj-metric-head{grid-template-columns:1fr;gap:4px}}`;
   root.innerHTML=`<h2>螺栓连接</h2><button type="button" data-nj="open">装配参数</button><div class="nj-status" role="status"></div>`;
   const dialog=document.createElement("dialog");dialog.id="native-joint-dialog";dialog.className="nj-dialog";
   dialog.innerHTML=`<form><header><h2>HexRefine · 螺栓连接</h2><button type="button" data-nj="close" aria-label="关闭装配参数">关闭</button></header><div data-nj="fields"></div><p class="nj-message" role="alert"></p><div class="nj-quality"></div><div class="nj-downloads"></div><footer><button type="submit" data-nj="generate">生成</button><button type="button" data-nj="cancel" disabled>取消任务</button><button type="button" data-nj="reset">恢复默认</button><progress hidden aria-label="装配任务运行中"></progress></footer></form>`;
@@ -48,6 +51,40 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
   const form=dialog.querySelector("form")!;const fieldRoot=dialog.querySelector<HTMLElement>('[data-nj="fields"]')!;
   const message=dialog.querySelector<HTMLElement>(".nj-message")!;const quality=dialog.querySelector<HTMLElement>(".nj-quality")!;
   const downloads=dialog.querySelector<HTMLElement>(".nj-downloads")!;const status=root.querySelector<HTMLElement>(".nj-status")!;
+  const diagnostics=document.createElement("div");diagnostics.className="nj-diagnostics";diagnostics.hidden=true;
+  quality.after(diagnostics);
+  function renderDiagnostics(value:unknown){
+    diagnostics.replaceChildren();
+    const sections=formatJointQualityDiagnostics(value);diagnostics.hidden=sections.length===0;
+    if(!sections.length)return;
+    const panel=document.createElement("details");panel.dataset.nj="quality-diagnostics";
+    const heading=document.createElement("summary");heading.textContent="网格质量诊断 · Overall / PID";panel.append(heading);
+    const note=document.createElement("p");note.className="nj-quality-note";
+    note.textContent="各项公式与采样位置不同，不能共用阈值；参照值仅提示，不代表工程合格。有限采样不证明全域 Jacobian 为正。PID 不等于核心/过渡区分类。";panel.append(note);
+    const idNote=document.createElement("p");idNote.className="nj-quality-note";
+    idNote.textContent="低/高 EID：导出 K / merged INP 的全局单元编号，非分件局部编号。";panel.append(idNote);
+    for(const [index,section] of sections.entries()){
+      const scope=document.createElement("details");scope.className="nj-quality-scope";scope.open=index===0;
+      const title=document.createElement("summary");title.textContent=`${section.title} · ${section.elements} H8`;scope.append(title);
+      const sampled=document.createElement("p");sampled.textContent=`采样 Jacobian 无效单元：${section.sampledInvalid}`;scope.append(sampled);
+      for(const row of section.rows){
+        const item=document.createElement("div");item.className="nj-metric";item.dataset.metric=row.key;
+        const head=document.createElement("div");head.className="nj-metric-head";
+        const label=document.createElement("strong");label.textContent=row.label;
+        const range=document.createElement("span");range.className="nj-metric-range";range.textContent=`最小 ${row.minimum} / 最大 ${row.maximum}`;head.append(label,range);
+        const formula=document.createElement("p");formula.className="nj-metric-formula";formula.textContent=`${row.formula} · 未定义 ${row.undefinedCount}`;
+        const eids=document.createElement("details");eids.className="nj-eids";
+        const toggle=document.createElement("summary");toggle.textContent=`${row.label} · 低/高 EID`;eids.append(toggle);
+        for(const [name,values] of [["低值 EID",row.lowestIDs],["高值 EID",row.highestIDs]]){
+          const line=document.createElement("p");line.textContent=`${name}：${values}`;eids.append(line);
+        }
+        item.append(head,formula,eids);scope.append(item);
+      }
+      for(const reference of section.references){const line=document.createElement("p");line.className="nj-quality-note";line.textContent=reference;scope.append(line);}
+      panel.append(scope);
+    }
+    diagnostics.append(panel);
+  }
   const open=root.querySelector<HTMLButtonElement>('[data-nj="open"]')!;
   const generate=dialog.querySelector<HTMLButtonElement>('[data-nj="generate"]')!;
   const cancel=dialog.querySelector<HTMLButtonElement>('[data-nj="cancel"]')!;
@@ -97,7 +134,7 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
     history.disabled=value||!historyAvailable;historyRefresh.disabled=value||!historyAvailable;historyActions();
     planButton.disabled=value||!planAvailable;
   }
-  function invalidate(){downloads.replaceChildren();quality.textContent="";planText.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
+  function invalidate(){downloads.replaceChildren();quality.textContent="";renderDiagnostics(undefined);planText.textContent="";message.textContent="";if(!pending)status.textContent="参数已修改";}
   fieldRoot.addEventListener("input",invalidate);
   open.addEventListener("click",()=>dialog.showModal());
   dialog.querySelector('[data-nj="close"]')!.addEventListener("click",()=>dialog.close());
@@ -150,8 +187,9 @@ export function mountNativeJointWorkbench(root:HTMLElement,options:{available:bo
     const mesh:Mesh={kind:"H1",nodes:model.nodes.map(p=>[...p]),elements:model.solids.map(s=>[...s.nodes])};
     options.show({mesh,model,request:{kind:"native-joint",parameters},plan:{},quality:report.quality,
       summary:{nodes:model.nodes.length,solids:model.solids.length,quads:0,beams:0,warnings:report.limitations}});
-    quality.textContent=`节点 ${report.quality.nodes} · 六面体 ${report.quality.elements}\n最小 SJ ${report.quality.minimumCornerScaledJacobian.toFixed(5)}\n有效轴向分段（每螺距 / 单板）：${report.plan.seeds.axialPerPitch} / ${report.plan.seeds.axialPerPlate}\n轴向尺寸变化：${report.plan.axialDimensionsChanged?"有":"无"}\n头板间隙：${report.plan.headToPlateAxialGap??"—"} mm\n几何来源：解析参数（非独立 CAD）\n`+report.parts.map((p,i)=>`PID ${i+1} · ${p.name} · ${p.elements}`).join("\n");
+    quality.textContent=`节点 ${report.quality.nodes} · 六面体 ${report.quality.elements}\n最小角点 SJ ${report.quality.minimumCornerScaledJacobian.toFixed(5)}\n有效轴向分段（每螺距 / 单板）：${report.plan.seeds.axialPerPitch} / ${report.plan.seeds.axialPerPlate}\n轴向尺寸变化：${report.plan.axialDimensionsChanged?"有":"无"}\n头板间隙：${report.plan.headToPlateAxialGap??"—"} mm\n几何来源：解析参数（非独立 CAD）\n`+report.parts.map((p,i)=>`PID ${i+1} · ${p.name} · ${p.elements}`).join("\n");
     quality.textContent+=`\n连接模式：${report.connectionMode==="shared"?"共节点（粘结）":"分件（无耦合）"}\n跨部件节点：${report.nodeOwnership.componentNodeSetsDisjoint?"独立":"共享"}`;
+    renderDiagnostics(report.qualityDiagnostics);
     for(const [name,label] of [['model.k','下载 K'],['merged.inp','装配 INP'],['parts.inp','分件 INP'],['report.json','审计报告']] as const){
       const link=document.createElement("a");link.href=job.files[name]!;link.download=name;link.textContent=label;downloads.append(link);
     }

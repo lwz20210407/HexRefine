@@ -29,3 +29,35 @@ are in `report.json`; subsequent metric additions remain read-only.
 This closes a bounded reporting interface, not quality optimization, generic
 region classification, engineering convergence or full fastener validation.
 Mesh development/publication does not wait for optional physical-analysis tests.
+
+## Workbench Summary
+
+The native-joint dialog now reads `report.qualityDiagnostics` into a collapsible
+overall/per-PID summary. Corner SJ and corner-plus-center SJ are separate;
+Gauss determinant ratio, 12-edge length ratio, minimum/maximum face angles and
+worst Q4 diagonal-normal angle retain their own formulas and units. Each row
+shows its range, undefined count and expandable lowest/highest exported global
+K/merged-INP EIDs. No part-local offset or new selection/backend API is used.
+Reference bands are advisory, not engineering acceptance; no 0.15 gate is added.
+
+Older reports without diagnostics retain the count/minSJ display. Partial
+diagnostics show unavailable fields explicitly, never as zero. Parameter edits
+and job changes clear stale summaries. Text is inserted using `textContent`.
+
+2026-11-07 GUI evidence is in
+`continued-screw-hm/resume-20261107/joint-quality-gui`: six Node formatter tests,
+scratch-only TypeScript build, desktop/mobile screenshots and browser-checks.json.
+The isolated real workbench module loads the saved 53592-H8 K with its real hash
+and counts; current face-angle metrics are recomputed read-only from the same
+saved merged INP. This tests presentation and compatibility, not the full
+production server, 3D preview, new geometry, solver or engineering acceptance.
+
+A separate full-workbench run then used the real production HTTP handler and
+a fresh interrupted-record fixture:10440H8/12426nodes were actually generated,
+downloaded and read back as K/INP. The real report displayed5quality sections
+and35metric rows, with new face metrics present. Retry lineage, original-folder
+immutability, cancellation, page reload, desktop/mobile rendering and canvas
+pixel checks passed. No physical solver was started. Evidence is in
+`resume-20261107/integrated-gui-v1/integrated-result.json`, with actual
+workbench screenshots and the generated bundle in its `qa/` directory.
+The fixture remains a saved interrupted record, not a claimed OS crash test.
