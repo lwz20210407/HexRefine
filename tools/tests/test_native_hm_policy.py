@@ -1,9 +1,12 @@
 """Explicit native-HM policy forwarding and independent raw witness checks."""
 import copy
+import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 
-from tools.hypermesh_native import make_tcl,export_hm,_accuracy_arguments
+from tools.hypermesh_native import make_tcl,export_hm,_accuracy_arguments,_reject_step_audit
 from tools.bolthex.geometry_accuracy_policy import CadAccuracyPolicy
 from tools.bolthex.native_cad_audit import surface_acceptance,surface_policy_acceptance
 
@@ -67,6 +70,29 @@ class NativePolicyTests(unittest.TestCase):
         self.assertTrue(surface_policy_acceptance(report,reference,CadAccuracyPolicy.engineering(.04)))
         changed=copy.deepcopy(report);changed['forward'][0]['sourceDistance']=1e-4
         with self.assertRaises(ValueError):surface_policy_acceptance(changed,reference,CadAccuracyPolicy.engineering(.04))
+
+    @unittest.skipUnless(os.environ.get('BOLTHEX_TEST_ROOT'),'Explicit task scratch required')
+    def test_failed_step_is_recorded_without_promoting_existing_hm(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['BOLTHEX_TEST_ROOT']) as folder:
+            root=Path(folder);hm=root/'model.hm';hm.write_bytes(b'failed candidate is preserved')
+            (root/'native-step-audit.json').write_text(json.dumps(dict(
+                selectedGeometryPolicyVerified=False,maximumSurfaceDistance=.001066,
+                maximumReverseEdgeDistance=float('nan'),nativeVolume=100)))
+            with self.assertRaisesRegex(RuntimeError,'rejection.json'):_reject_step_audit(root,2)
+            result=json.loads((root/'rejection.json').read_text())
+            self.assertEqual(result['status'],'rejected');self.assertFalse(result['overallNativeHmAccepted'])
+            self.assertEqual(result['measurements'],{'maximumSurfaceDistance':.001066})
+            self.assertTrue(result['auditSHA256']);self.assertFalse(result['thresholdsAdjusted'])
+            self.assertFalse((root/'report.json').exists());self.assertEqual(hm.read_bytes(),b'failed candidate is preserved')
+
+    @unittest.skipUnless(os.environ.get('BOLTHEX_TEST_ROOT'),'Explicit task scratch required')
+    def test_missing_audit_is_a_rejection_not_a_zero_error(self):
+        with tempfile.TemporaryDirectory(dir=os.environ['BOLTHEX_TEST_ROOT']) as folder:
+            root=Path(folder)
+            with self.assertRaises(RuntimeError):_reject_step_audit(root,1)
+            result=json.loads((root/'rejection.json').read_text())
+            self.assertEqual(result['measurements'],{});self.assertIsNone(result['auditFile'])
+            self.assertIsNone(result['auditSHA256']);self.assertFalse(result['overallNativeHmAccepted'])
 
 
 if __name__=='__main__':unittest.main()

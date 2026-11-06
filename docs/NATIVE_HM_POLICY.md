@@ -55,3 +55,9 @@ existing native export/capsule guards. These do not certify every CAD family.
 Further work is to preserve the actual finite trim geometry across native
 exchange or validate the native SDK BRep route, not relax the witness budget.
 No solver is involved in this geometry/data workflow.
+
+On an independent STEP audit failure, subsequent runs write `rejection.json`
+with the failed stage, child exit code and finite diagnostic measurements.
+An absent/invalid audit is not turned into zero error. The candidate HM is
+retained for diagnosis; no accepted `report.json` is published. Existing
+pre-change experiment folders are not rewritten to manufacture new evidence.

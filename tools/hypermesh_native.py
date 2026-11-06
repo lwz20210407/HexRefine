@@ -99,6 +99,31 @@ def _accuracy_arguments(policy):
     return args
 
 
+def _reject_step_audit(output, exit_code):
+    """Keep a failed native file visibly distinct from an accepted delivery."""
+    report_path=output/'native-step-audit.json'
+    evidence={}
+    if report_path.is_file() and report_path.stat().st_size<=16*1024*1024:
+        try:
+            report=json.loads(report_path.read_text())
+            for name in ('maximumSurfaceDistance','maximumBoundaryNodeControlDistance',
+                         'maximumReverseEdgeDistance','maximumCadBoundsDifference','relativeStepBrepVolumeError'):
+                value=report.get(name)
+                if type(value) in (int,float) and math.isfinite(value):evidence[name]=value
+        except (ValueError,OSError,AttributeError):
+            pass
+    rejection=dict(schemaVersion=1,status='rejected',stage='independent-native-step-audit',
+        overallNativeHmAccepted=False,measurementsAreDiagnosticsOnly=True,childExitCode=exit_code,
+        measurements=evidence,reason='Independent STEP BRep geometry/volume verification did not pass',
+        auditFile=report_path.name if report_path.is_file() else None,
+        auditSHA256=_sha(report_path) if report_path.is_file() else None,
+        nativeHmFile='model.hm',nativeHmIsFailedCandidateNotAcceptedDelivery=True,
+        originalSourcesReplaced=False,thresholdsAdjusted=False)
+    with (output/'rejection.json').open('x',encoding='utf8') as stream:
+        json.dump(rejection,stream,indent=2,allow_nan=False)
+    raise RuntimeError('Independent native STEP BRep geometry/volume audit failed; see rejection.json')
+
+
 def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None,
               associate=False, tolerance=1e-7, debug_discrete_cad=False,native_k_export=False,host_timeout=300,development_only=False,
               cad_reference=None,cad_python=None,*,accuracy_policy=None,native_step_export=False):
@@ -267,7 +292,7 @@ def export_hm(mesh, source_report, executable, output, cad=None, cad_report=None
                     cwd=Path(__file__).resolve().parents[1],env={**os.environ,'TEMP':str(output),'TMP':str(output),'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1'},
                     stdout=log,stderr=subprocess.STDOUT,startupinfo=startup,timeout=600,check=False)
             if done.returncode!=0 or not (output/'native-step-audit.json').is_file():
-                raise RuntimeError('Independent native STEP BRep geometry/volume audit failed')
+                _reject_step_audit(output,done.returncode)
             step_audit=json.loads((output/'native-step-audit.json').read_text())
             from tools.bolthex.native_cad_conditioning import step_carrier_acceptance
             if (step_audit.get('selectedGeometryPolicyVerified') is not True or step_audit.get('geometryAccuracyPolicy')!=policy.manifest()
