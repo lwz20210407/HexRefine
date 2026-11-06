@@ -41,6 +41,16 @@ class NativePolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'BRep volume'):
             export_hm(None,None,None,None,cad='cad.step',cad_reference='refs.json',cad_python='python',accuracy_policy=p)
 
+    def test_iges_path_is_explicit_bounded_and_not_an_automatic_step_fallback(self):
+        p=CadAccuracyPolicy.engineering(.04)
+        for value in (True,0.,1e-8,float('nan'),float('inf'),.0004000001):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'IGES sewing tolerance'):
+                export_hm(None,None,None,None,accuracy_policy=p,iges_sewing_tolerance=value)
+        with self.assertRaisesRegex(ValueError,'one explicit native volume carrier'):
+            export_hm(None,None,None,None,accuracy_policy=p,native_step_export=True,iges_sewing_tolerance=5e-5)
+        with self.assertRaisesRegex(ValueError,'references'):
+            export_hm(None,None,None,None,accuracy_policy=p,iges_sewing_tolerance=5e-5)
+
     def test_step_export_is_opt_in_and_within_readonly_export_guards(self):
         args=(Path('in.k'),Path('cad.step'),Path('out'),Path('template'),8,1,1,False,1e-7,[])
         default=make_tcl(*args,native_cad_exchange=True)

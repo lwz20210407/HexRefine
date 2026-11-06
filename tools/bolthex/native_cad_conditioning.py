@@ -116,13 +116,49 @@ def step_carrier_acceptance(report, policy=None, *, all_surfaces_critical=True):
             and abs(max(rechecks)-report['maximumSourceReferenceError']) <= 1e-12)
 
 
-def audit_step_carrier(source_step, carrier_step, reference_file, output=None, progress=None, *, accuracy_policy=None):
+_BREP_FIELDS = {'carrierStepSHA256':'carrierBrepSHA256','stepBrepVolume':'carrierBrepVolume',
+    'relativeStepBrepVolumeError':'relativeCarrierVolumeError','strictStepCarrierVerified':'strictCarrierVerified',
+    'engineeringStepCarrierVerified':'engineeringCarrierVerified'}
+
+
+def carrier_acceptance(report,policy=None,*,all_surfaces_critical=True):
+    """Explicit format adapter; BRep evidence cannot masquerade as native STEP."""
+    if not isinstance(report,dict):return False
+    fmt=report.get('carrierFormat','step')
+    if fmt=='step':return step_carrier_acceptance(report,policy,all_surfaces_critical=all_surfaces_critical)
+    if fmt!='occt-brep' or report.get('candidateExactBrepCheck') is not True or any(k in report for k in _BREP_FIELDS):return False
+    adapted=dict(report)
+    for old,new in _BREP_FIELDS.items():
+        if new in adapted:adapted[old]=adapted.pop(new)
+    return step_carrier_acceptance(adapted,policy,all_surfaces_critical=all_surfaces_critical)
+
+
+def _format_carrier_report(report,carrier_format):
+    if carrier_format=='brep':
+        report['purpose']='independent-BRep-carrier-precision-audit'
+        report['carrierFormat']='occt-brep'
+        for old,new in _BREP_FIELDS.items():
+            if old in report:report[new]=report.pop(old)
+    else:report['carrierFormat']='step'
+    return report
+
+
+def audit_step_carrier(source_step,carrier_step,reference_file,output=None,progress=None,*,accuracy_policy=None):
+    return _audit_carrier(source_step,carrier_step,reference_file,output,progress,accuracy_policy=accuracy_policy,carrier_format='step')
+
+
+def audit_brep_carrier(source_step,carrier_brep,reference_file,output=None,progress=None,*,accuracy_policy=None):
+    return _audit_carrier(source_step,carrier_brep,reference_file,output,progress,accuracy_policy=accuracy_policy,carrier_format='brep')
+
+
+def _audit_carrier(source_step, carrier_step, reference_file, output=None, progress=None, *, accuracy_policy=None,carrier_format='step'):
     """Audit every physical face/edge plus calibrated/nodal controls, read-only.
 
     Missing strict-IN face witnesses are recorded and reject the carrier, but
     do not prevent collecting the remaining physical-edge negative evidence.
     """
     policy=validated_policy(accuracy_policy)
+    if carrier_format not in ('step','brep'):raise ValueError('Unknown explicit carrier format')
     source_step, carrier_step, reference_file = map(lambda p: Path(p).resolve(),
                                                    (source_step, carrier_step, reference_file))
     if output is not None:
@@ -140,11 +176,15 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
     near = [r for r in reference['points'] if r['role'] == 'control' and 4e-6 < r['sourceDistance'] < .001]
     if len(near) < 6 or not any(r['role'] == 'mesh-boundary-node' for r in reference['points']):
         raise ValueError('Require six calibrated near controls and actual boundary-node controls')
-    from build123d import Compound, import_step
+    from build123d import Compound, import_step, import_brep
     from OCP.BRep import BRep_Builder, BRep_Tool
     from OCP.BRepAdaptor import BRepAdaptor_Curve
     from OCP.TopoDS import TopoDS_Compound
-    source, candidate = import_step(source_step), import_step(carrier_step)
+    source, candidate = import_step(source_step), (import_step(carrier_step) if carrier_format=='step' else import_brep(carrier_step))
+    exact=None
+    if carrier_format=='brep':
+        from OCP.BRepCheck import BRepCheck_Analyzer
+        exact=bool(BRepCheck_Analyzer(candidate.wrapped,True,False,True).IsValid())
     source_faces, candidate_faces = list(source.faces()), list(candidate.faces())
     if not 1 <= len(source_faces) <= 1024 or not 1 <= len(candidate_faces) <= 1024:
         raise ValueError('STEP-carrier audit requires 1..1024 faces per representation')
@@ -155,7 +195,7 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
         return Compound(compound)
     # Auxiliary lines never enter physical bounds or physical-edge inventories.
     sp, cp = physical(source_faces), physical(candidate_faces)
-    if not source.is_valid or not candidate.is_valid or not sp.is_valid or not cp.is_valid:
+    if not source.is_valid or not candidate.is_valid or not sp.is_valid or not cp.is_valid or exact is False:
         rejected = dict(schemaVersion=1, purpose='independent-STEP-carrier-precision-audit',
             sourceStepSHA256=hashes[source_step], carrierStepSHA256=hashes[carrier_step], referenceSHA256=hashes[reference_file],
             sourceValid=bool(source.is_valid), candidateValid=bool(candidate.is_valid),
@@ -171,6 +211,8 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
             nativeApproxVolumeUsedForAcceptance=False, freeAuxiliaryCurvesExcluded=True,
             exactNativeCadCertified=False, nativeHmVerified=False, fullModelAcceptance=False,
             inputsUnchanged=all(sha(p) == h for p,h in hashes.items()), **{key: None for key in LIMITS})
+        if carrier_format=='brep':rejected['candidateExactBrepCheck']=exact
+        rejected=_format_carrier_report(rejected,carrier_format)
         if output is not None:
             with output.open('x', encoding='utf8') as stream:
                 json.dump(rejected, stream, indent=2, allow_nan=False)
@@ -191,6 +233,7 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
         referencePoints=len(reference['points']), nativeApproxVolumeUsedForAcceptance=False,
         freeAuxiliaryCurvesExcluded=True, exactNativeCadCertified=False, nativeHmVerified=False,
         fullModelAcceptance=False, sourceOriginCertified=False)
+    if carrier_format=='brep':report['candidateExactBrepCheck']=exact
     solids = list(candidate.solids())
     owned = list(solids[0].faces()) if len(solids) == 1 else []
     report['allCandidateFacesOwnedBySingleSolid'] = bool(owned) and all(
@@ -261,6 +304,7 @@ def audit_step_carrier(source_step, carrier_step, reference_file, output=None, p
     report['selectedGeometryPolicyVerified']=step_carrier_acceptance(report,policy)
     report['engineeringStepCarrierVerified']=(report['selectedGeometryPolicyVerified']
         if policy.profile=='engineering-cad-transfer' else None)
+    report=_format_carrier_report(report,carrier_format)
     if output is not None:
         with output.open('x', encoding='utf8') as stream:
             json.dump(report, stream, indent=2, allow_nan=False)
@@ -275,6 +319,7 @@ if __name__ == '__main__':
         parser.add_argument(name, type=Path)
     parser.add_argument('--accuracy-profile',choices=('strict','engineering'),default='strict',
         help='Legacy strict regression or explicit size-aware engineering CAD transfer')
+    parser.add_argument('--carrier-format',choices=('step','brep'),default='step')
     parser.add_argument('--target-size-mm',type=float,help='Declared local target seed size, not an incidental short edge')
     parser.add_argument('--critical-target-size-mm',type=float)
     parser.add_argument('--minimum-functional-gap-mm',type=float)
@@ -285,7 +330,8 @@ if __name__ == '__main__':
     policy=CadAccuracyPolicy('engineering-cad-transfer' if args.accuracy_profile=='engineering' else 'strict-cad-regression',**options)
     def progress(kind, done, total):
         print(json.dumps(dict(stage=kind, done=done, total=total)), file=sys.stderr, flush=True)
-    measured = audit_step_carrier(args.source, args.carrier, args.reference, args.output, progress,accuracy_policy=policy)
+    function=audit_step_carrier if args.carrier_format=='step' else audit_brep_carrier
+    measured = function(args.source, args.carrier, args.reference, args.output, progress,accuracy_policy=policy)
     print(json.dumps({k: v for k, v in measured.items() if k not in
                       ('forward', 'sourceFaceWitnesses', 'reverse', 'edgeReverse')}, allow_nan=False))
     raise SystemExit(0 if measured['selectedGeometryPolicyVerified'] else 2)
