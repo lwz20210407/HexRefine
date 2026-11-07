@@ -25,6 +25,8 @@
 > preserves source files and retained geometry; it is not a remeshed Screw.
 > Its [local BRep construction and cold-read checks](docs/SCREW_TIP_BREP.md)
 > are implemented separately from the still-unfinished complete core fill.
+> [Explicit coincident-face compensation](docs/EXACT_FACE_COMPENSATION.md)
+> joins scoped interfaces without moving coordinates or performing a tolerance weld.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.

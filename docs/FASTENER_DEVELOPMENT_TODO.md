@@ -9,6 +9,28 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
 
 ## Verified Bounded Closures, 2026-11-07
 
+### Approved Contact Compensation Continuation
+
+The user now permits only necessary local head-contact topology compensation:
+head exterior, distant mesh and thread stay unchanged; original files are
+read-only. Determine actual source-bound parents/node stars, not an entire
+332-face contact set or bounding-box expansion.
+
+- DONE, BOUNDED: [explicit boundary-budget audit](SCREW_BOUNDARY_BUDGET.md),
+  all76end groups/308annular Q4s against both raw and phase.22targeted tests
+  passed with0skips in the main rerun. Maximum sampled raw distance0.000312829mm
+  is within the unchanged0.0005mm budget. The existing exact planner/default
+  is untouched; finite samples do not certify continuous Hausdorff distance.
+- DONE, BOUNDED: [exact local face compensation](EXACT_FACE_COMPENSATION.md).
+  Four complete head interfaces joined by eight exact node-alias pairs:
+  16element rows/24slots changed, no coordinate movement, K/INP readback passed.
+  Seven targeted test methods passed with actual-case checks. Global axis repair,
+  remaining head seams and the neck footprint are NOT claimed complete.
+- IN PROGRESS: a complete2160-parent core CAD was built and checked, but a
+  BODY-only meshing attempt rejected overlapping lower facets. Actual source
+  E2889/F1 is a real neck interface, not a free end. Correct the joint material
+  domain rather than flatten the lower cap or raise tolerances.
+
 These increments close specific missing interfaces, not the entire workstream
 or all source-application options. The remaining-work table below still applies.
 
