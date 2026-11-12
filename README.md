@@ -33,6 +33,9 @@
 > verifies the complete ring geometry separately from unfinished volume meshing.
 > [Full-source patch assembly](docs/VOLUME_PATCH_ASSEMBLY.md) checks moved
 > neighbours and K/INP snapshots; it does not claim the unfinished Screw is accepted.
+> [Continuous H8 Jacobian certificates](docs/H8_JACOBIAN_CERTIFICATE.md) and
+> [directed T4/P5 face checks](docs/MIXED_CELL_FACE_AUDIT.md) separate element
+> positivity, material incidence and engineering acceptance.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.

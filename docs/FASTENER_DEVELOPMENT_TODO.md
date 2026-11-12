@@ -433,6 +433,19 @@ regression132 tests:121 passed/11 optional skips, plus22 targeted Node tests.
 
 ## Current concrete blockers
 
+- 2026-11-12 Screw continuation remains PARTIAL. Full 6,193-H8 head-stage
+  K/INP candidates preserve all literal identities and 5,900 protected source
+  cells under the explicitly bounded contact-compensation plan. All 293
+  mandatory new/moved-neighbour cells have closed-reference-cube positive-J
+  certificates. Shape improvement is ongoing; inherited head/neck/body axis
+  defects are not promoted to accepted whole-model status. The actual upper
+  core's first hybrid fill was rejected for directed internal-face conflicts
+  and volume error, not waived by type-only all-H8 conversion. The actual
+  334-Q contact field still needs fully filled irregular transition cavities;
+  a boundary-only solution is not a completed buffer. See
+  [mixed-cell gate](MIXED_CELL_FACE_AUDIT.md) and
+  [full-source installer](VOLUME_PATCH_ASSEMBLY.md).
+
 - 2026-11-05 accepted bounded milestone: the complete saved M6 hemisphere-cap
   nut now has verified94-face/one-solid native HM plus333824unchangedH8.
   Fresh independent CAD/FE evidence passes the explicit engineering policy;
