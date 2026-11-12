@@ -444,7 +444,12 @@ regression132 tests:121 passed/11 optional skips, plus22 targeted Node tests.
   334-Q contact field still needs fully filled irregular transition cavities;
   a boundary-only solution is not a completed buffer. See
   [mixed-cell gate](MIXED_CELL_FACE_AUDIT.md) and
-  [full-source installer](VOLUME_PATCH_ASSEMBLY.md).
+  [full-source installer](VOLUME_PATCH_ASSEMBLY.md). The later explicit
+  pyramid/tet fill and parent-triangle-center recovery eliminate the measured
+  face/volume defect, but its 370,528-H8 diagnostic still has two invalid
+  cells and poor shape outliers. It is rejected, not delivered as a passing
+  whole Screw. Work is paused after this round at the user's request; see the
+  [full checkpoint and resume order](SCREW_CONTINUATION_20261112.md).
 
 - 2026-11-05 accepted bounded milestone: the complete saved M6 hemisphere-cap
   nut now has verified94-face/one-solid native HM plus333824unchangedH8.
