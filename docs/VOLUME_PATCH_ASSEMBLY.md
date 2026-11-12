@@ -25,9 +25,11 @@ positive corner/centre/Gauss Jacobians throughout the new and moved region,
 and cell-volume sum against independent bilinear-boundary divergence flux
 (relative error<=1e-4). An optional explicit caller SJ floor adds a check;
 no arbitrary vendor-wide floor is invented. Positivity alone is not an
-engineering quality standard. Continuous Jacobian positivity, geometric
-overlap and globally coincident/different-NID source interfaces remain separate
-gates and are explicitly not certified by the installer.
+engineering quality standard. `require_continuous_jacobian=True` additionally
+requires an exact-rational Bernstein certificate for every new/moved-region
+cell. This is regional, not a certificate for inherited protected defects.
+Geometric overlap and globally coincident/different-NID source interfaces
+remain separate gates and are explicitly not certified by the installer.
 
 `write_candidate_pair` runs that whole-source assembly and exports a bounded
 K/INP pair to a fresh directory. The exact byte snapshots whose hashes will

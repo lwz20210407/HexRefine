@@ -36,7 +36,7 @@ def boundary_volume(faces, coordinates):
 
 def assemble_patch(source, removed_element_ids, replacement_nids, replacement_pids, *,
                    target_boundary_nids, new_nodes=(), moved_nodes=(),
-                   allowed_geometry_change_ids=(), minimum_sj=None):
+                   allowed_geometry_change_ids=(), minimum_sj=None, require_continuous_jacobian=False):
     """Install explicit connectivity into the complete input, preserving protected rows.
 
     All targets use literal NIDs, not coordinate welding. Geometry changes are
@@ -48,6 +48,7 @@ def assemble_patch(source, removed_element_ids, replacement_nids, replacement_pi
     """
     _require(source.node_ids.shape==(len(source.nodes),) and source.element_ids.shape==source.part_ids.shape==(len(source.elements),),
              'Invalid source identity dimensions')
+    _require(type(require_continuous_jacobian) is bool,'Continuous-certificate option must be boolean')
     _require(all(card=='*ELEMENT_SOLID' or count==0 for card,count in source.element_cards.items()),
              'This H8 assembly cannot preserve other element types')
     _require(source.element_cards.get('*ELEMENT_SOLID',len(source.elements))==len(source.elements),
@@ -140,6 +141,13 @@ def assemble_patch(source, removed_element_ids, replacement_nids, replacement_pi
     _require(quality['sampledPositiveJacobians'].all(), 'Nonpositive new-region or moved-neighbour Jacobian')
     sj=float(quality['cornerAndCenterScaledJacobian'].min())
     _require(minimum_sj is None or sj>=minimum_sj, 'Explicit caller SJ floor failed')
+    certificates=[]
+    if require_continuous_jacobian:
+        from .h8_jacobian_certificate import certify_cell
+        for eid,cell in zip(output.element_ids[new_mask],output.elements[new_mask]):
+            certificate=certify_cell(output.nodes[cell])
+            _require(certificate['certified'],'Continuous Jacobian not certified for EID '+str(eid)+': '+certificate['status'])
+            certificates.append(dict(eid=int(eid),certificate=certificate))
     coordinate_map={int(n):point for n,point in zip(ids,xyz)}
     expected=boundary_volume(list(target.values()),coordinate_map)
     actual=float(measure_h8(xyz,elements)['integratedVolume'].sum())
@@ -153,6 +161,8 @@ def assemble_patch(source, removed_element_ids, replacement_nids, replacement_pi
         newRegionMinimumCornerCenterSJ=sj,newRegionMinimumGaussDeterminant=float(quality['minimumGaussDeterminant'].min()),
         prescribedBoundaryFaces=len(target),attachmentPartitionsPreserved=True,protectedCoordinatesAndRowsUnchanged=True,
         patchVolume=actual,boundaryFluxVolume=expected,relativePatchVolumeError=abs(actual-expected)/expected,
+        newRegionContinuousJacobianCertified=require_continuous_jacobian,
+        newRegionCertificates=certificates,
         assemblyChecksPassed=True,globalOverlapCertified=False,globalGeometricConformityCertified=False,
         continuousJacobianCertified=False,wholeScrewAccepted=False,engineeringQualityAccepted=False)
 

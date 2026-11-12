@@ -49,11 +49,15 @@ class AssemblyTests(unittest.TestCase):
             cells.append(bottom+[n+8 for n in bottom])
         cells.append(list(range(9,17)))
         new=[(n,*p.tolist()) for n,p in zip(range(9,17),inner)]
-        output,r=assemble_patch(m,[101],cells,[3]*7,target_boundary_nids=faces,new_nodes=new,minimum_sj=.3)
+        output,r=assemble_patch(m,[101],cells,[3]*7,target_boundary_nids=faces,new_nodes=new,minimum_sj=.3,
+                               require_continuous_jacobian=True)
         self.assertEqual(len(output.elements),7)
         self.assertEqual(len(output.nodes),16)
         self.assertEqual(r['replacementElementIDs'],[101,102,103,104,105,106,107])
         self.assertEqual(r['prescribedBoundaryFaces'],6)
+        self.assertTrue(r['newRegionContinuousJacobianCertified'])
+        self.assertEqual(len(r['newRegionCertificates']),7)
+        self.assertFalse(r['continuousJacobianCertified'])
         self.assertEqual(output.element_cards['*ELEMENT_SOLID'],7)
         self.assertGreater(r['newRegionMinimumCornerCenterSJ'],.3)
         self.assertAlmostEqual(r['patchVolume'],1.)
