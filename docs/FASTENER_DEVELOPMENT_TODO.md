@@ -9,6 +9,14 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
 
 ## 2026-11-12 Interface Continuation
 
+- IMPLEMENTED, NOT WHOLE-MESH ACCEPTANCE: [full-source patch assembly and
+  K/INP candidate IO](VOLUME_PATCH_ASSEMBLY.md). New interior-node macro
+  connectivity can be installed into all source rows, with protected
+  attachments, moved-neighbour checks, stable identities and byte-bound IO.
+  Thirteen targeted tests pass, including the actual6128-row rejection case.
+  The actual head macro itself still has no accepted fill. A snapshot-bound
+  readback closes the real269-to700001 EID publication fault found in review.
+
 - DONE, BOUNDED: [bilinear interface mapping](BILINEAR_INTERFACE_MAP.md)
   uniquely accounts for all2160source corewall supports in the actual2318-face
   neck/core union.2145are direct four-corner planning candidates;15retain

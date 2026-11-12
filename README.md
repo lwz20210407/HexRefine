@@ -31,6 +31,8 @@
 > source supports from Boolean trims; mapping alone is not mesh installation.
 > The [reviewed source-ring BRep backend](docs/SOURCE_RING_BREP.md) builds and
 > verifies the complete ring geometry separately from unfinished volume meshing.
+> [Full-source patch assembly](docs/VOLUME_PATCH_ASSEMBLY.md) checks moved
+> neighbours and K/INP snapshots; it does not claim the unfinished Screw is accepted.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.
