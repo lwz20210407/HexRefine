@@ -7,6 +7,33 @@ Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
 component; TODO = not implemented; WITHDRAWN = earlier acceptance corrected.
 Reading a repository is not porting it. Writing a STEP is not independent CAD.
 
+## 2026-11-12 Interface Continuation
+
+- DONE, BOUNDED: [bilinear interface mapping](BILINEAR_INTERFACE_MAP.md)
+  uniquely accounts for all2160source corewall supports in the actual2318-face
+  neck/core union.2145are direct four-corner planning candidates;15retain
+  explicit trim/edge-chain obligations. All physical faces remain accounted
+  for; support identity does NOT certify trim identity or mesh installation.
+  Ten tests, zero skips, including actual full-source mapping and adversarial
+  input controls. No engineering distance tolerance replaces source binding.
+- REJECTED EXPERIMENTS: head-cycle harmonic morphing on the full6128-row
+  source produced new negative corner Jacobians (3cells in the224-cell scope;
+  9in the244-cell alternative). Volume and Gauss positivity did not override
+  these failures; neither candidate was exported as a successful K/INP.
+  Fixed-boundary prechecks show local topology changes are necessary for the
+  tested mappings, not further weight tuning. Head exterior/thread unchanged.
+- MATERIAL PARTITION OBLIGATION: E2924has27strict neck-interior samples,
+  including20in the open source face, confirmed by exact rational source-column
+  preimages. Restoring its entire old root square as an exterior face is wrong.
+  The other14blocked interfaces remain separately unresolved; sampled OUT is
+  not a whole-face exclusion proof. No whole-Screw acceptance is granted.
+
+Evidence and current figures:
+`F:/PythonWoking/temp/20261112-screw-interface-continuation/`.
+Next closures: source-consistent neck/collar partition, local head connectivity
+patches and full assembled H8/geometry/K/INP validation. These are not release
+cleanup tasks and must not be silently marked complete.
+
 ## Verified Bounded Closures, 2026-11-07
 
 ### Approved Contact Compensation Continuation
