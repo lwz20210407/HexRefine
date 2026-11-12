@@ -1,6 +1,6 @@
 # Fastener development TODO
 
-Updated: 2026-11-07, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
+Updated: 2026-11-12, Asia/Shanghai. Work branch: `codex/bolt-thread-native`.
 Destination: `lwz20210407/HexRefine`, development branch only; no main/PR merge.
 
 Status: DONE = scoped implementation and stated evidence; PARTIAL = only a
@@ -16,12 +16,29 @@ Reading a repository is not porting it. Writing a STEP is not independent CAD.
   for; support identity does NOT certify trim identity or mesh installation.
   Ten tests, zero skips, including actual full-source mapping and adversarial
   input controls. No engineering distance tolerance replaces source binding.
+  Combined with the earlier real6128-cell local face-compensation checks,
+  the selected17test methods passed with zero skips (20.076seconds); not a
+  full repository suite or whole-model acceptance.
+- DONE, NARROW GEOMETRY BACKEND: [source-defined ring BRep](SOURCE_RING_BREP.md)
+  generates the actual full2160-parent radial0.6..1ring in the repository,
+  without MATLAB/TG or an absolute-path scratch dependency. All4396physical
+  faces,4282internal source-side pairs and1080retained outer owners are
+  verified. One valid closed solid, volume14.089699692691264mm^3, matches the
+  actual source-slice integral; cold read preserves all4396control nets/trims.
+  The22-test suite passed with zero skips against a fixed-version real CLI
+  result (main14.099seconds). This is source-derived geometry, not independent
+  design CAD, a completed material partition, a volume mesh or accepted K.
 - REJECTED EXPERIMENTS: head-cycle harmonic morphing on the full6128-row
   source produced new negative corner Jacobians (3cells in the224-cell scope;
   9in the244-cell alternative). Volume and Gauss positivity did not override
   these failures; neither candidate was exported as a successful K/INP.
   Fixed-boundary prechecks show local topology changes are necessary for the
   tested mappings, not further weight tuning. Head exterior/thread unchanged.
+  Further actual top-pair flips, four-layer connectivity propagation and XY
+  propagation also failed3Dcorner/Gauss/neighbor gates. A small no-new-node
+  corner-star H8fill family was infeasible, not a general impossibility proof.
+  Next required capability: a local3Dmacro with interior nodes and unchanged
+  side/bottom interface obligations, rather than further unconstrained morphs.
 - MATERIAL PARTITION OBLIGATION: E2924has27strict neck-interior samples,
   including20in the open source face, confirmed by exact rational source-column
   preimages. Restoring its entire old root square as an exterior face is wrong.
