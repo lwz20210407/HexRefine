@@ -36,6 +36,8 @@
 > [Continuous H8 Jacobian certificates](docs/H8_JACOBIAN_CERTIFICATE.md) and
 > [directed T4/P5 face checks](docs/MIXED_CELL_FACE_AUDIT.md) separate element
 > positivity, material incidence and engineering acceptance.
+> The experimental [native boundary-pillow primitive](docs/H8_BOUNDARY_PILLOW.md)
+> constructs local macro topology and initial geometry, not an accepted mesh.
 > Mesh generation does not require a physical solver; see the separate
 > [mesh-release checklist](docs/FASTENER_RELEASE_CHECKLIST.md).
 > The upstream online workbench below does not deploy these fork-only features.
