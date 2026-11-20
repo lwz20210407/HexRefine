@@ -14,8 +14,17 @@ from .planner import (
     hybrid_split,
     angular_fit,
 )
+from .templates import (
+    TemplateError,
+    audit_tiled_strip,
+    build_transition_patch,
+    expected_transition_elements,
+    tile_strip_quads,
+)
 
 __all__ = [
     "ModePlanError", "capability", "plan_transition", "plan_counts",
     "plan_quad_counts", "allocate_widths", "hybrid_split", "angular_fit",
+    "TemplateError", "audit_tiled_strip", "build_transition_patch",
+    "expected_transition_elements", "tile_strip_quads",
 ]
