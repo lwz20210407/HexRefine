@@ -118,7 +118,7 @@ F:/PythonWoking/temp/20261120-transitionmesh-port/review/overview.png
 ```
 
 The current INP counts are 118/90 for PLANAR, 96/64 for PLANAR_ANNULAR,
-340/228 for PLANAR_QUAD_FOUR, 112/36 for ANNULAR_RADIAL, and 300/114 for
+340/228 for PLANAR_QUAD_FOUR, 112/36 for ANNULAR_RADIAL, and 1296/792 for
 AXIAL_SURFACE (nodes/elements). The HTML and PNG are generated from these
 actual INP files, not from the planning reports. Mesh-only LS-DYNA K files
 were also generated from the same INP connectivity: Q4 cases use
