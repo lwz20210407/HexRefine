@@ -125,6 +125,18 @@ were also generated from the same INP connectivity: Q4 cases use
 `*ELEMENT_SHELL`, and C3D8 cases use `*ELEMENT_SOLID`; they are mesh exchange
 files and intentionally do not claim material/section solver completeness.
 
+The five generated K files were also opened through the local
+`lwz20210407/LS-PrePost-MCP` CFILE route on LS-PrePost 4.13. The prepared and
+executed job receipts are retained at:
+
+```text
+F:/PythonWoking/temp/20261120-transitionmesh-port/lspp-open-receipts.json
+```
+
+All five jobs completed with declared node/element counts matching the
+corresponding INP-derived K files. The HTML review links this receipt. This is
+an LS-PrePost native open/count verification, not solver execution.
+
 ## CAE Compatibility Finding
 
 The full plug-in import was also attempted under the only installed CAE
