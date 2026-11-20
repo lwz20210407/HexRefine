@@ -22,6 +22,7 @@ from .templates import (
     tile_strip_quads,
 )
 from .cylindrical_axial import audit_axial_cylinder, build_axial_cylinder
+from .mesh_io import write_abaqus_inp, write_ls_dyna_solid
 
 __all__ = [
     "ModePlanError", "capability", "plan_transition", "plan_counts",
@@ -29,4 +30,5 @@ __all__ = [
     "TemplateError", "audit_tiled_strip", "build_transition_patch",
     "expected_transition_elements", "tile_strip_quads",
     "build_axial_cylinder", "audit_axial_cylinder",
+    "write_abaqus_inp", "write_ls_dyna_solid",
 ]

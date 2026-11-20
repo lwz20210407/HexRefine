@@ -27,6 +27,35 @@ def _hex_center_det(points):
     return sum(a[i] * cross[i] for i in range(3))
 
 
+def _hex_center_jacobian(points):
+    """Return the trilinear H8 Jacobian determinant at the element center."""
+    signs = ((-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
+             (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1))
+    columns = [[0.0, 0.0, 0.0] for _ in range(3)]
+    for point, sign in zip(points, signs):
+        for axis in range(3):
+            weight = sign[axis] / 8.0
+            for component in range(3):
+                columns[axis][component] += weight * point[component]
+    a, b, c = columns
+    cross = (b[1]*c[2] - b[2]*c[1],
+             b[2]*c[0] - b[0]*c[2],
+             b[0]*c[1] - b[1]*c[0])
+    return sum(a[i] * cross[i] for i in range(3))
+
+
+def _face_key_counts(mesh):
+    """Count H8 faces; a conforming mesh has no face with incidence > 2."""
+    faces = ((0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1),
+             (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0))
+    counts = {}
+    for conn in mesh['elements']:
+        for face in faces:
+            key = tuple(sorted(conn[index] for index in face))
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
                          transition_z=7.0, total_z=10.0,
                          inner_radius=2.0, outer_radius=5.0,
@@ -107,6 +136,23 @@ def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
 
 
 def audit_axial_cylinder(mesh):
+    node_count = len(mesh['nodes'])
+    if not mesh['elements']:
+        raise TemplateError('Axial mesh contains no H8 elements')
+    if any(len(conn) != 8 for conn in mesh['elements']):
+        raise TemplateError('Axial mesh contains a non-H8 connectivity')
+    if any(node < 1 or node > node_count
+           for conn in mesh['elements'] for node in conn):
+        raise TemplateError('Axial mesh contains an out-of-range node id')
+    if len(set(tuple(conn) for conn in mesh['elements'])) != len(mesh['elements']):
+        raise TemplateError('Axial mesh contains duplicate element connectivity')
+    jacobians = [_hex_center_jacobian([mesh['nodes'][node - 1] for node in conn])
+                 for conn in mesh['elements']]
+    if min(jacobians) <= 0.0:
+        raise TemplateError('Axial mesh contains a non-positive center Jacobian')
+    face_counts = _face_key_counts(mesh)
+    if max(face_counts.values()) > 2:
+        raise TemplateError('Axial mesh contains a non-manifold face')
     regions = mesh['regions']
     counts = {name: regions.count(name) for name in ('fine', 'transition', 'coarse')}
     if any(value <= 0 for value in counts.values()):
@@ -114,4 +160,8 @@ def audit_axial_cylinder(mesh):
     return dict(ok=True, nodes=len(mesh['nodes']), elements=len(mesh['elements']),
                 region_elements=counts, fine_segments=mesh['fine_segments'],
                 coarse_segments=mesh['coarse_segments'],
-                transition_z=(mesh['fine_z'], mesh['transition_z']))
+                transition_z=(mesh['fine_z'], mesh['transition_z']),
+                min_center_jacobian=min(jacobians),
+                internal_faces=sum(1 for value in face_counts.values() if value == 2),
+                boundary_faces=sum(1 for value in face_counts.values() if value == 1),
+                max_face_incidence=max(face_counts.values()))

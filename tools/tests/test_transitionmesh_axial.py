@@ -16,6 +16,21 @@ class TransitionMeshAxialTests(unittest.TestCase):
         self.assertGreater(report['region_elements']['transition'], 0)
         self.assertGreater(report['region_elements']['coarse'], 0)
         self.assertEqual(len(mesh['nodes']), len(set(mesh['nodes'])))
+        self.assertGreater(report['min_center_jacobian'], 0.0)
+        self.assertEqual(report['max_face_incidence'], 2)
+        self.assertGreater(report['internal_faces'], 0)
+
+    def test_axial_three_to_one_matches_author_mode_contract(self):
+        mesh = build_axial_cylinder(fine_segments=180, ratio=3,
+                                    fine_z=3.0, transition_z=7.0,
+                                    total_z=10.0, regular_layers=4,
+                                    radial_layers=2)
+        report = audit_axial_cylinder(mesh)
+        self.assertEqual(report['fine_segments'], 180)
+        self.assertEqual(report['coarse_segments'], 60)
+        self.assertEqual(report['region_elements']['transition'], 480)
+        self.assertGreater(report['min_center_jacobian'], 0.0)
+        self.assertEqual(report['max_face_incidence'], 2)
 
 
 if __name__ == '__main__':

@@ -47,8 +47,11 @@ pretending that Abaqus objects are available offline.
 - cylindrical angular seam-fit diagnostics;
 - single-period 2:1 and 3:1 Q4 transition templates, tiled-strip generation,
   positive-area and area-conservation audits;
-- an initial structured pure-Python cylindrical AXIAL_SURFACE H8 generator
-  with explicit fine/transition/coarse regions and radial extrusion;
+- a structured pure-Python cylindrical `AXIAL_SURFACE` H8 generator with
+  explicit fine/transition/coarse regions, 4-to-2 and 3-to-1 angular template
+  tiling, and radial extrusion;
+- mesh-only LS-DYNA `*NODE`/`*ELEMENT_SOLID` and Abaqus C3D8R writers in
+  `tools/transitionmesh_native/mesh_io.py`;
 - capability and precondition reporting for all five upstream modes:
   `PLANAR`, `PLANAR_ANNULAR`, `PLANAR_QUAD_FOUR`, `ANNULAR_RADIAL`, and
   `AXIAL_SURFACE`.
@@ -120,15 +123,39 @@ F:/PythonWoking/temp/20261120-transitionmesh-port/review/overview.png
 ```
 
 The current INP counts are 118/90 for PLANAR, 96/64 for PLANAR_ANNULAR,
-340/228 for PLANAR_QUAD_FOUR, 112/36 for ANNULAR_RADIAL, and 1296/792 for
-the rejected AXIAL_SURFACE diagnostic (nodes/elements). The HTML and PNG are
-generated from these actual INP files, not from the planning reports. The
-AXIAL candidate is rejected because its z-layer distribution and mapped
-transition shape do not match the intended fine/transition/coarse axial
-workflow, despite passing native count readback. Mesh-only LS-DYNA K files
-were also generated from the same INP connectivity: Q4 cases use
-`*ELEMENT_SHELL`, and C3D8 cases use `*ELEMENT_SOLID`; they are mesh exchange
-files and intentionally do not claim material/section solver completeness.
+340/228 for PLANAR_QUAD_FOUR, and 112/36 for ANNULAR_RADIAL (nodes/elements).
+The first Abaqus AXIAL fixture (1296/792) is retained as a rejected diagnostic:
+it was readable, but its z-layer distribution and mapped transition shape did
+not match the intended fine/transition/coarse axial workflow. It is not a
+passing result merely because the counters matched.
+
+The corrected pure-Python axial evidence is in:
+
+```text
+F:/PythonWoking/temp/20261120-transitionmesh-port/review/
+  AXIAL_SURFACE_native_2to1.k/.inp/.png
+  AXIAL_SURFACE_native_3to1_author_counts.k/.inp/.png
+  AXIAL_NATIVE_COMPARE.html
+  lspp-native-axial-receipts.json
+  lspp-native-axial-gui-receipts.json
+```
+
+The 2:1 case uses 48 fine circumferential segments and 24 coarse segments.
+The 3:1 case mirrors the author documentation parameters (`Seeds=180`,
+`Layers=1`, `Ratio=3:1`) with 60 coarse segments. Both cases use the same
+single-period axial strip templates, and both have fine/transition/coarse
+interfaces with no face incidence above two. Their nodes/elements are
+1620/1008 and 3960/2400 respectively. The LS-PrePost 4.13 MCP receipts show
+that both K files opened successfully with those counts.
+
+The author image `docs/images/axial-result.png` is explicitly labelled in the
+HTML as a V1.0 documentation asset retained by the V1.1 release; it is not
+claimed to be a V1.1 screenshot or a byte-identical reference mesh.
+
+Mesh-only LS-DYNA K files were also generated from the same native
+connectivity. The native axial files use `*ELEMENT_SOLID`; they are mesh
+exchange files and intentionally do not claim material/section solver
+completeness.
 
 The five generated K files were also opened through the local
 `lwz20210407/LS-PrePost-MCP` CFILE route on LS-PrePost 4.13. The prepared and
@@ -162,15 +189,15 @@ probe.
    interface node correspondence, hanging faces, and Jacobian/angle metrics.
 3. Port the full rectangular-ring and annular-sector topology constructors,
    including participating corner templates, into the offline HexRefine path.
-4. Extend the structured cylindrical H8 generator to full radial, corner and
+4. Extend the structured cylindrical H8 generator to full corner and
    multi-layer contracts, then compare its plans and connectivity against CAE.
 5. Only after those checks, connect the pure planner to the HexRefine GUI and
    existing LS-DYNA K writer.
 
-The V1.1 CAE probe now has five actual Apply+Mesh cases and five real INP/K
+The V1.1 CAE probe has five actual Apply+Mesh fixtures and five real INP/K
 outputs; the HTML/PNG review is generated from those files. This validates the
 author's Abaqus workflow on the local compatibility fixture, not byte-level
 identity with the author's private/reference models. The pure offline port is
-still partial: rules, one-period Q4 templates and a first structured axial H8
-generator are complete, while full corner-ring, annular radial and multi-layer
+still partial: rules, one-period Q4 templates, and a corrected one-stage
+structured axial H8 generator are complete; full corner-ring and multi-layer
 cylindrical geometry generation remain open.
