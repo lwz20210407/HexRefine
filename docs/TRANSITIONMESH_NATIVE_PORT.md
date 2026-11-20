@@ -45,6 +45,8 @@ pretending that Abaqus objects are available offline.
 - rectangular four-side count chains with corner contributions;
 - PLANAR-only hybrid 2:1-pair and 3:1 group splitting;
 - cylindrical angular seam-fit diagnostics;
+- single-period 2:1 and 3:1 Q4 transition templates, tiled-strip generation,
+  positive-area and area-conservation audits;
 - capability and precondition reporting for all five upstream modes:
   `PLANAR`, `PLANAR_ANNULAR`, `PLANAR_QUAD_FOUR`, `ANNULAR_RADIAL`, and
   `AXIAL_SURFACE`.
@@ -141,12 +143,17 @@ probe.
    public kernel entry points with real Part/Face/Edge/Cell objects.
 2. Export the resulting Abaqus INP files and audit element types, counts,
    interface node correspondence, hanging faces, and Jacobian/angle metrics.
-3. Port the pure rectangular-ring and annular-sector topology constructors,
-   including corner templates, into the offline HexRefine path.
-4. Add the cylindrical radial and axial frame planners without Abaqus
-   geometry dependencies, then compare their plans against the CAE runs.
+3. Port the full rectangular-ring and annular-sector topology constructors,
+   including participating corner templates, into the offline HexRefine path.
+4. Add a complete cylindrical radial/axial mapped H8 generator without Abaqus
+   geometry dependencies, then compare its plans and element connectivity
+   against the CAE runs.
 5. Only after those checks, connect the pure planner to the HexRefine GUI and
    existing LS-DYNA K writer.
 
-No claim is made yet that the five Abaqus modes have been fully reproduced or
-that the new pure planner can independently generate all five final meshes.
+The V1.1 CAE probe now has five actual Apply+Mesh cases and five real INP/K
+outputs; the HTML/PNG review is generated from those files. This validates the
+author's Abaqus workflow on the local compatibility fixture, not byte-level
+identity with the author's private/reference models. The pure offline port is
+still partial: rules and one-period Q4 templates are complete, while full
+corner-ring and cylindrical H8 geometry generation remain open.
