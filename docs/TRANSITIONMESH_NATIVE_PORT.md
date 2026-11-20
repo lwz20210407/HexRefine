@@ -100,10 +100,12 @@ saved CAE snapshots:
 - `PLANAR_QUAD_FOUR` 2:1;
 - `ANNULAR_RADIAL` 2:1 on a half-ring-prepartitioned hollow cylinder.
 
-The `AXIAL_SURFACE` check passes with a half-ring-prepartitioned cylinder, but
-its V1.1 Apply path still fails in the plug-in's axial column generation with
-`Generated 0 elements`. No CAE/INP is marked successful for that mode. The
-failure is retained rather than replaced by the earlier planning-only pass.
+The V1.1 `AXIAL_SURFACE` Apply path now passes on a half-ring-prepartitioned
+hollow cylinder after supplying the correct radial end-face sweep path. The
+verified case uses 2:1, `Seeds=48`, coarse-side 24 segments, and 12 axial
+slice sectors. The earlier `Generated 0 elements` result was caused by using
+longitudinal generator edges as the sweep path and is retained as a negative
+diagnostic, not as the final result.
 
 The four successful V1.1 INPs and the HTML/PNG overview are in:
 
@@ -112,6 +114,11 @@ F:/PythonWoking/temp/20261120-transitionmesh-port/Job_APPLY_*.inp
 F:/PythonWoking/temp/20261120-transitionmesh-port/review/REVIEW.html
 F:/PythonWoking/temp/20261120-transitionmesh-port/review/overview.png
 ```
+
+The current INP counts are 118/90 for PLANAR, 96/64 for PLANAR_ANNULAR,
+340/228 for PLANAR_QUAD_FOUR, 112/36 for ANNULAR_RADIAL, and 300/114 for
+AXIAL_SURFACE (nodes/elements). The HTML and PNG are generated from these
+actual INP files, not from the planning reports.
 
 ## CAE Compatibility Finding
 
