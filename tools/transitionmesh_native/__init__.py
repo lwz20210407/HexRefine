@@ -1,0 +1,21 @@
+"""Pure-Python planning core derived from the public TransitionMesh behavior.
+
+This package intentionally contains no Abaqus imports.  Abaqus adapters and
+HexRefine adapters can consume the same count and geometry-plan contracts.
+"""
+
+from .planner import (
+    ModePlanError,
+    capability,
+    plan_transition,
+    plan_counts,
+    plan_quad_counts,
+    allocate_widths,
+    hybrid_split,
+    angular_fit,
+)
+
+__all__ = [
+    "ModePlanError", "capability", "plan_transition", "plan_counts",
+    "plan_quad_counts", "allocate_widths", "hybrid_split", "angular_fit",
+]
