@@ -47,6 +47,8 @@ pretending that Abaqus objects are available offline.
 - cylindrical angular seam-fit diagnostics;
 - single-period 2:1 and 3:1 Q4 transition templates, tiled-strip generation,
   positive-area and area-conservation audits;
+- an initial structured pure-Python cylindrical AXIAL_SURFACE H8 generator
+  with explicit fine/transition/coarse regions and radial extrusion;
 - capability and precondition reporting for all five upstream modes:
   `PLANAR`, `PLANAR_ANNULAR`, `PLANAR_QUAD_FOUR`, `ANNULAR_RADIAL`, and
   `AXIAL_SURFACE`.
@@ -160,9 +162,8 @@ probe.
    interface node correspondence, hanging faces, and Jacobian/angle metrics.
 3. Port the full rectangular-ring and annular-sector topology constructors,
    including participating corner templates, into the offline HexRefine path.
-4. Add a complete cylindrical radial/axial mapped H8 generator without Abaqus
-   geometry dependencies, then compare its plans and element connectivity
-   against the CAE runs.
+4. Extend the structured cylindrical H8 generator to full radial, corner and
+   multi-layer contracts, then compare its plans and connectivity against CAE.
 5. Only after those checks, connect the pure planner to the HexRefine GUI and
    existing LS-DYNA K writer.
 
@@ -170,5 +171,6 @@ The V1.1 CAE probe now has five actual Apply+Mesh cases and five real INP/K
 outputs; the HTML/PNG review is generated from those files. This validates the
 author's Abaqus workflow on the local compatibility fixture, not byte-level
 identity with the author's private/reference models. The pure offline port is
-still partial: rules and one-period Q4 templates are complete, while full
-corner-ring and cylindrical H8 geometry generation remain open.
+still partial: rules, one-period Q4 templates and a first structured axial H8
+generator are complete, while full corner-ring, annular radial and multi-layer
+cylindrical geometry generation remain open.
