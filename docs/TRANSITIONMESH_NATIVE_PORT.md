@@ -42,6 +42,12 @@ The module uses only the Python standard library and is written to remain
 compatible with Abaqus 2020's Python 2.7 as well as normal Python 3. The
 focused test suite is in `tools/tests/test_transitionmesh_native.py`.
 
+The pure planner was differentially compared with the frozen upstream
+`transition_mesh_plan.py` and `transition_mesh_rules.py` for repeated 2:1 and
+3:1 chains, four-side chains, and valid/invalid hybrid cases. The normalized
+planning results were identical for all cases in
+`F:/PythonWoking/temp/20261120-transitionmesh-port/planner-differential.json`.
+
 ## Abaqus Runtime Probe
 
 The local machine currently exposes only:
@@ -64,6 +70,18 @@ F:/PythonWoking/temp/20261120-transitionmesh-port/abaqus2020-planning-probe.json
 All five mode planning cases passed. This is an interpreter-compatibility and
 rule-planning result only. It does not certify Abaqus partition, seed, sweep,
 or final element generation.
+
+## CAE Compatibility Finding
+
+The full plug-in import was also attempted under the only installed CAE
+runtime, Abaqus 2020. It fails before model creation because the current
+upstream cylindrical kernel contains Python 3-only syntax (`print = ...`),
+which Abaqus 2020's Python 2.7 parser rejects. The failure is retained in the
+CAE probe log; it is not converted into a mesh failure or hidden by a fallback.
+The repository README requires Abaqus/CAE 2024 or later and reports
+verification on Abaqus 2025. A real 2022/2025 CAE run therefore remains
+blocked by the missing local installations, not by an invented successful
+probe.
 
 ## Remaining Work
 
