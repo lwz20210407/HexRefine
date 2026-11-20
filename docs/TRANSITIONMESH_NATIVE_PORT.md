@@ -71,6 +71,29 @@ All five mode planning cases passed. This is an interpreter-compatibility and
 rule-planning result only. It does not certify Abaqus partition, seed, sweep,
 or final element generation.
 
+## Abaqus 2020 CAE Apply Probe
+
+After a local Python-2.7 compatibility shim in the research copy (without
+changing the upstream download), fresh Abaqus Part objects were used for
+`CHECK_ONLY` and `PARTITION_SEED_MESH` attempts. The current apply receipt is:
+
+```text
+F:/PythonWoking/temp/20261120-transitionmesh-port/applied/abaqus2020-apply-probe.json
+```
+
+The following modes completed real Abaqus partition/seed/mesh operations and
+saved CAE snapshots:
+
+- `PLANAR` 2:1, two layers;
+- `PLANAR_ANNULAR` 3:1;
+- `PLANAR_QUAD_FOUR` 2:1;
+- `ANNULAR_RADIAL` 2:1 on a half-ring-prepartitioned hollow cylinder.
+
+The `AXIAL_SURFACE` check passes with a half-ring-prepartitioned cylinder, but
+its Apply path still fails in the plug-in's axial column generation with a
+`NoneType` result. No CAE/INP is marked successful for that mode. The failure
+is retained rather than replaced by the earlier planning-only pass.
+
 ## CAE Compatibility Finding
 
 The full plug-in import was also attempted under the only installed CAE
