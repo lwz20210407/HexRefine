@@ -4,8 +4,8 @@ Date: 2026-11-20
 
 ## Source Provenance
 
-The public `IY724/TransitionMesh` repository was downloaded into the dated
-research directory:
+The public `IY724/TransitionMesh` repository and its V1.1 release package
+were downloaded into the dated research directory:
 
 ```text
 F:/PythonWoking/temp/20261120-transitionmesh-port/TransitionMesh
@@ -16,6 +16,17 @@ Frozen source commit:
 ```text
 38850881db802e6d49e34905e81430cdbbc78107
 ```
+
+V1.1 release asset checked during this task:
+
+```text
+TransitionMesh-v1.1.zip
+SHA256 A7B80554BF5A4EF1E1388D796FDD2706BE6367D91604E8AE3CDB706E3542A221
+```
+
+The repository tag still points to the same commit, while the V1.1 release
+package carries the newly published behavior. The latest CAE probes below
+use the extracted V1.1 package.
 
 The upstream plug-in is an Abaqus/CAE Python plug-in. Its planning modules
 are pure Python, while its geometry and mesh application modules depend on
@@ -90,9 +101,17 @@ saved CAE snapshots:
 - `ANNULAR_RADIAL` 2:1 on a half-ring-prepartitioned hollow cylinder.
 
 The `AXIAL_SURFACE` check passes with a half-ring-prepartitioned cylinder, but
-its Apply path still fails in the plug-in's axial column generation with a
-`NoneType` result. No CAE/INP is marked successful for that mode. The failure
-is retained rather than replaced by the earlier planning-only pass.
+its V1.1 Apply path still fails in the plug-in's axial column generation with
+`Generated 0 elements`. No CAE/INP is marked successful for that mode. The
+failure is retained rather than replaced by the earlier planning-only pass.
+
+The four successful V1.1 INPs and the HTML/PNG overview are in:
+
+```text
+F:/PythonWoking/temp/20261120-transitionmesh-port/Job_APPLY_*.inp
+F:/PythonWoking/temp/20261120-transitionmesh-port/review/REVIEW.html
+F:/PythonWoking/temp/20261120-transitionmesh-port/review/overview.png
+```
 
 ## CAE Compatibility Finding
 
