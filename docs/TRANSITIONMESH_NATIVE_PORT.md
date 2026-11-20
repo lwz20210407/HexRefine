@@ -119,8 +119,11 @@ F:/PythonWoking/temp/20261120-transitionmesh-port/review/overview.png
 
 The current INP counts are 118/90 for PLANAR, 96/64 for PLANAR_ANNULAR,
 340/228 for PLANAR_QUAD_FOUR, 112/36 for ANNULAR_RADIAL, and 1296/792 for
-AXIAL_SURFACE (nodes/elements). The HTML and PNG are generated from these
-actual INP files, not from the planning reports. Mesh-only LS-DYNA K files
+the rejected AXIAL_SURFACE diagnostic (nodes/elements). The HTML and PNG are
+generated from these actual INP files, not from the planning reports. The
+AXIAL candidate is rejected because its z-layer distribution and mapped
+transition shape do not match the intended fine/transition/coarse axial
+workflow, despite passing native count readback. Mesh-only LS-DYNA K files
 were also generated from the same INP connectivity: Q4 cases use
 `*ELEMENT_SHELL`, and C3D8 cases use `*ELEMENT_SOLID`; they are mesh exchange
 files and intentionally do not claim material/section solver completeness.
