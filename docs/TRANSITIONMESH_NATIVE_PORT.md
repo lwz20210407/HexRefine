@@ -1,5 +1,49 @@
 # TransitionMesh Native Port Checkpoint
 
+## V1.1 Multistage Geometry
+
+The native constructors now generate multiple conforming stages:
+
+- `build_axial_cylinder(..., stages=2, stage_widths=[...])` retains regular
+  end regions and sweeps through the wall. Its cascade 2:1 motif has six
+  Q4 per sector (one axial seam interval), unlike the standalone 2:1 motif
+  with eight Q4. The audit reports the measured shared-face count at
+  every level plus center, corner and Gauss minima by region.
+- `build_planar_band` and `build_annular_band` accept stages, stage widths
+  and ratio sequences. Within-stage hybrid remains single-stage only.
+- `build_radial_band` takes explicit stage radii and an independent
+  through-length layer count, with identical port node IDs across stages.
+- `build_rectangular_ring` supports repeated 2:1 with parity collars and
+  repeated 3:1 with inherited corner segments. The 3:1 construction is
+  a conforming alternative to the upstream Abaqus free-quad interior.
+
+| Two-stage fixture | Level counts | Abaqus 2020 / Python cells |
+| --- | --- | --- |
+| AXIAL 2:1 twice | 48 / 24 / 12 | 432 / 432 H8 |
+| AXIAL 3:1 twice | 54 / 18 / 6 | 420 / 420 H8 |
+| PLANAR | 24 / 12 / 6 | 54 / 54 Q4 |
+| PLANAR_ANNULAR | 48 / 24 / 12 | 108 / 108 Q4 |
+| PLANAR_QUAD_FOUR 2:1 twice | 16x12 / 10x8 / 8x6 | 184 / 184 Q4 |
+| PLANAR_QUAD_FOUR 3:1 twice | 18x18 / 8x8 / 4x4 | 201 / 140 Q4 |
+| ANNULAR_RADIAL | 64 / 32 / 16 | 288 / 288 H8 |
+
+All seven comparisons check facet incidence at each stage, reject
+unmatched interior facets, and sample Jacobians in each band. Both
+axial cases have two wall layers, with shared face counts 96/48/24 and
+108/36/12. The older single-stage radial side-wall screenshot differed
+because the preview sorted by global Z instead of camera depth: the
+two decks have identical reindexed boundary and H8 connectivity and
+maximum node displacement below 6.9e-7 model units.
+
+The CAE, K, INP, depth-buffer renders and measured checks are retained in
+`F:/PythonWoking/temp/20261121-transitionmesh-multistage/review/REVIEW.html`.
+The 2:1 radial fixture uses four 90-degree sectors and 64 initial segments
+so each quadrant contains whole 4-to-2 periods at *both* stages. A
+48-segment attempt is preserved as a negative CAE test, not a pass.
+Regression tests also build three-stage native geometry; arbitrary CAD
+selection, prior-mesh preservation, and the full CAE option matrix are
+outside this validation.
+
 ## V1.1 Rebuild And Differential Check
 
 2026-11-21. This section supersedes the AXIAL results and the native
@@ -45,9 +89,9 @@ F:/PythonWoking/temp/20261121-transitionmesh-v11-rebuild/review/REVIEW.html
 F:/PythonWoking/temp/20261121-transitionmesh-v11-rebuild/review/comparison.json
 ```
 
-CAD picks and edge Sets, arbitrary CAD partitioning, preservation of
-existing Abaqus controls, and native multilayer geometry are not claimed.
-The fixtures exercise a structured one-stage subset, not every V1.1 option.
+CAD picks and edge Sets, arbitrary CAD partitioning and preservation of
+existing Abaqus controls are not claimed. This historical section covers
+the one-stage fixtures; see the multistage section for later validation.
 
 ## Historical Checkpoint
 

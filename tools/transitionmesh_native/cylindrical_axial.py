@@ -11,7 +11,7 @@ from collections import Counter
 from itertools import product
 
 from .templates import tile_strip_quads, TemplateError
-from .planner import _isfinite
+from .planner import ModePlanError, _isfinite, plan_counts, stage_boundaries
 
 
 H8_FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
@@ -76,7 +76,8 @@ def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
                          transition_z=7.0, total_z=10.0,
                          inner_radius=2.0, outer_radius=5.0,
                          regular_layers=6, radial_layers=2,
-                         coarse_layers=None):
+                         coarse_layers=None, stages=1, stage_widths=None):
+    """Create a full hollow cylinder with regular ends and a ratio cascade."""
     fine_segments = _positive_integer(fine_segments)
     ratio = _positive_integer(ratio)
     if not all(_isfinite(v) for v in (fine_z, transition_z, total_z,
@@ -84,11 +85,12 @@ def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
         raise TemplateError('Cylinder dimensions must be finite')
     if not 0 < fine_z < transition_z < total_z:
         raise TemplateError('Invalid axial dimensions')
-    coarse_segments = fine_segments // ratio
+    stages = _positive_integer(stages)
+    counts, zlevels = axial_stage_plan(fine_segments, ratio, stages, fine_z,
+                                       transition_z, stage_widths)
+    coarse_segments = counts[-1]
     if coarse_segments < 3:
         raise TemplateError('A closed coarse ring needs at least three segments')
-    if ratio not in (2, 3) or fine_segments % (4 if ratio == 2 else 3):
-        raise TemplateError('Fine segment count is incompatible with ratio')
     if inner_radius <= 0 or outer_radius <= inner_radius:
         raise TemplateError('Invalid cylinder radii')
     regular_layers = _positive_integer(regular_layers)
@@ -135,16 +137,21 @@ def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
                 add_surface_quad([(u0, za), (u1, za), (u1, zb), (u0, zb)], label)
 
     regular_band(0.0, fine_z, fine_segments, 'fine', regular_layers)
-    if ratio == 2:
-        transition = [tuple((u + offset, v) for u, v in q)
-                      for offset in range(0, fine_segments, 4) for q in _axial_pair()]
-    else:
-        transition = tile_strip_quads(3, fine_segments, float(fine_segments), 1.0)
-    depth = transition_z - fine_z
-    for quad in transition:
-        add_surface_quad([(u / float(fine_segments),
-                           transition_z if v == 1.0 else fine_z + v * depth)
-                          for u, v in quad], 'transition')
+    stage_names = ['transition'] if stages == 1 else [
+        'transition_%d' % (i + 1) for i in range(stages)]
+    for n, z0, z1, label in zip(counts, zlevels, zlevels[1:], stage_names):
+        if ratio == 2 and stages == 1:
+            motif = _axial_pair()
+            transition = [tuple((u + offset, v) for u, v in q)
+                          for offset in range(0, n, 4) for q in motif]
+        else:
+            # V1.1 cascades seed one axial seam interval, unlike the
+            # standalone 2:1 sweep with its extra seam midpoint.
+            transition = tile_strip_quads(ratio, n, float(n), 1.0)
+        for quad in transition:
+            add_surface_quad([(u / float(n),
+                               z1 if v == 1.0 else z0 + v * (z1 - z0))
+                              for u, v in quad], label)
     regular_band(transition_z, total_z, coarse_segments, 'coarse', coarse_layers)
 
     if not elements or any(_corner_determinant([nodes[n - 1] for n in e]) <= 0 for e in elements):
@@ -156,7 +163,17 @@ def build_axial_cylinder(fine_segments=48, ratio=2, fine_z=3.0,
         'inner_radius': inner_radius, 'outer_radius': outer_radius,
         'radial_layers': radial_layers, 'regular_layers': regular_layers,
         'coarse_layers': coarse_layers,
+        'stage_counts': counts, 'stage_z': zlevels, 'stage_names': stage_names,
     }
+
+
+def axial_stage_plan(fine_segments, ratio, stages, start, finish, widths, ratio_sequence=None):
+    try:
+        counts = plan_counts(fine_segments, stages, ratio, ratio_sequence)['counts']
+        offsets = stage_boundaries(finish - start, counts, widths)
+    except ModePlanError as exc:
+        raise TemplateError(str(exc))
+    return counts, [start + val for val in offsets[:-1]] + [finish]
 
 
 def audit_axial_cylinder(mesh):
@@ -180,6 +197,7 @@ def audit_axial_cylinder(mesh):
     face_owners = {}
     min_center, min_corner, min_gauss = float('inf'), float('inf'), float('inf')
     min_sj = {}
+    stage_quality = {}
     volume = 0.0
     for conn, region in zip(mesh['elements'], regions):
         points = [nodes[i - 1] for i in conn]
@@ -190,6 +208,12 @@ def audit_axial_cylinder(mesh):
         min_corner = min(min_corner, min(j for j, sj in corners))
         min_gauss = min(min_gauss, min(gauss))
         min_sj[region] = min(min_sj.get(region, 1.0), min(sj for j, sj in corners))
+        quality = stage_quality.setdefault(region, dict(center=float('inf'),
+                                                        corner=float('inf'),
+                                                        gauss=float('inf')))
+        quality['center'] = min(quality['center'], center)
+        quality['corner'] = min(quality['corner'], min(j for j, sj in corners))
+        quality['gauss'] = min(quality['gauss'], min(gauss))
         volume += sum(gauss)
         for face in H8_FACES:
             key = tuple(sorted(conn[i] for i in face))
@@ -199,7 +223,10 @@ def audit_axial_cylinder(mesh):
         raise TemplateError('Non-positive H8 Jacobian at a corner, center or Gauss point')
     if max(face_counts.values()) > 2:
         raise TemplateError('Axial mesh contains a non-manifold face')
-    zi = mesh['fine_z'], mesh['transition_z']
+    zi = mesh.get('stage_z', [mesh['fine_z'], mesh['transition_z']])
+    counts_expected = mesh.get('stage_counts', [mesh['fine_segments'], mesh['coarse_segments']])
+    order = ['fine'] + mesh.get('stage_names', ['transition']) + ['coarse']
+    pairs = {frozenset(pair): z for pair, z in zip(zip(order, order[1:]), zi)}
     radii = mesh['inner_radius'], mesh['outer_radius']
     radial = mesh['radial_layers']
     rvals = [math.hypot(p[0], p[1]) for p in nodes]
@@ -212,23 +239,23 @@ def audit_axial_cylinder(mesh):
                            for z in (0, mesh['total_z']))):
                 raise TemplateError('Unmatched internal face (through-wall, interface or seam)')
         elif owners[0] != owners[1]:
-            side = tuple(sorted(owners))
-            level = {('fine', 'transition'): zi[0], ('coarse', 'transition'): zi[1]}.get(side)
+            level = pairs.get(frozenset(owners))
             if level is None or not all(abs(nodes[i-1][2] - level) <= tol for i in face):
                 raise TemplateError('Shared transition face is outside its axial interface')
             interfaces[level] += 1
-    if (interfaces[zi[0]], interfaces[zi[1]]) != (mesh['fine_segments'] * radial,
-                                                  mesh['coarse_segments'] * radial):
+    if [interfaces[z] for z in zi] != [n * radial for n in counts_expected]:
         raise TemplateError('Incorrect number of conforming interface faces')
-    counts = {name: regions.count(name) for name in ('fine', 'transition', 'coarse')}
+    counts = {name: regions.count(name) for name in order}
     if any(value <= 0 for value in counts.values()):
         raise TemplateError('Each axial region must contain H8 cells')
     return dict(ok=True, nodes=len(mesh['nodes']), elements=len(mesh['elements']),
                 region_elements=counts, fine_segments=mesh['fine_segments'],
                 coarse_segments=mesh['coarse_segments'],
                 transition_z=(mesh['fine_z'], mesh['transition_z']),
+                stage_z=zi, stage_counts=counts_expected,
                 min_center_jacobian=min_center, min_corner_jacobian=min_corner,
                 min_gauss_jacobian=min_gauss, min_scaled_jacobian=min_sj,
+                region_min_jacobians=stage_quality,
                 volume=volume, interface_faces=[interfaces[z] for z in zi],
                 internal_faces=sum(1 for value in face_counts.values() if value == 2),
                 boundary_faces=sum(1 for value in face_counts.values() if value == 1),
