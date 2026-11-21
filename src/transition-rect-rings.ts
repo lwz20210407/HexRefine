@@ -13,6 +13,7 @@ export interface RectangularTransitionRingsSpec {
   origin?:readonly [number,number];
   includeCore?:boolean;
   optimizeCorners?:boolean;
+  cornerTopology?:"collar"|"carry";
 }
 function pair(value:readonly number[],name:string,integer=false) {
   if(!Array.isArray(value)||value.length!==2||value.some(v=>!Number.isFinite(v)||v<=0||(integer&&!Number.isSafeInteger(v))))
@@ -26,18 +27,24 @@ export function planRectangularTransitionRings(spec:RectangularTransitionRingsSp
   if(!Number.isSafeInteger(spec.stages)||spec.stages<1||spec.stages>8)throw new RangeError("stages must be an integer from 1 to 8");
   if(spec.includeCore!==undefined&&typeof spec.includeCore!=="boolean")throw new RangeError("includeCore must be boolean");
   if(spec.optimizeCorners!==undefined&&typeof spec.optimizeCorners!=="boolean")throw new RangeError("optimizeCorners must be boolean");
+  if(spec.cornerTopology!==undefined&&spec.cornerTopology!=="collar"&&spec.cornerTopology!=="carry")
+    throw new RangeError("unsupported rectangular corner topology");
+  const carry=spec.cornerTopology==="carry";
+  if(carry&&ratio!==3)throw new RangeError("carry corners require a 3:1 rectangular ring");
   const counts:[number,number][]=[[...spec.fineSegments]],frames=[];
   let half=[spec.fineSegments[0]/2,spec.fineSegments[1]/2],spacing=1,estimated=spec.includeCore?spec.fineSegments[0]*spec.fineSegments[1]:0;
   for(let stage=0;stage<spec.stages;stage++){
-    const previous=counts[stage]!,padding=previous.map(n=>{
+    const previous=counts[stage]!,padding=carry?[0,0]:previous.map(n=>{
       for(let p=0;p<period;p++)if((n+2*p)%period===0)return p;
       throw new Error("no legal regular collar count");
     });
-    const input=previous.map((n,a)=>n+2*padding[a]!) as [number,number];
+    const input=previous.map((n,a)=>carry&&stage>0?n-2:n+2*padding[a]!) as [number,number];
+    if(input.some(n=>n<period||n%period))
+      throw new RangeError(`rectangular ring stage ${stage+1} requires complete ${period}-segment strip periods`);
     const collar=half.map((h,a)=>h+padding[a]!*spacing);
     const outer=collar.map(h=>h+ratio*spacing),coarse=input.map(n=>n/ratio+2) as [number,number];
     const collarElements=2*padding[0]!*previous[1]+2*padding[1]!*input[0];
-    const transitionElements=ratio===2?3*(input[0]+input[1])+12:8*(input[0]+input[1])/3+4;
+    const transitionElements=ratio===2?3*(input[0]+input[1])+12:8*(input[0]+input[1])/3+(carry&&stage>0?8:4);
     estimated+=collarElements+transitionElements;
     frames.push({stage:stage+1,innerHalf:half,transitionHalf:collar,outerHalf:outer,spacing,padding,
       inputCounts:input,outputCounts:coarse,collarElements,transitionElements});
@@ -48,6 +55,7 @@ export function planRectangularTransitionRings(spec:RectangularTransitionRingsSp
   const outerSize=half.map((h,a)=>2*h*fineSpacing[a]!) as [number,number];
   if(outerSize.some(v=>!Number.isFinite(v)))throw new RangeError("rectangle ring dimensions overflow");
   return {mode:"rectangular-rings" as const,ratio,stageCount:spec.stages,counts,frames,fineSpacing,outerSize,
+    cornerTopology:carry?"carry":"collar",
     innerSize:[...spec.innerSize],estimatedElements:estimated,includeCore:spec.includeCore??false,geometryChecked:false as const};
 }
 
@@ -89,7 +97,7 @@ function wedge(dx:number,dy:number,optimize:boolean) {
 }
 
 export function generateRectangularTransitionRings(spec:RectangularTransitionRingsSpec) {
-  if(Object.keys(spec).some(k=>!["innerSize","fineSegments","stages","ratio","rotationDegrees","origin","includeCore","optimizeCorners"].includes(k)))
+  if(Object.keys(spec).some(k=>!["innerSize","fineSegments","stages","ratio","rotationDegrees","origin","includeCore","optimizeCorners","cornerTopology"].includes(k)))
     throw new RangeError("unsupported rectangular ring option");
   const plan=planRectangularTransitionRings(spec),origin=spec.origin??[0,0];
   if(!Array.isArray(origin)||origin.length!==2||origin.some(v=>!Number.isFinite(v))||!Number.isFinite(spec.rotationDegrees??0))
@@ -116,13 +124,17 @@ export function generateRectangularTransitionRings(spec:RectangularTransitionRin
       addNode(xs[i]!,ys[j]!),addNode(xs[i+1]!,ys[j]!),addNode(xs[i+1]!,ys[j+1]!),addNode(xs[i]!,ys[j+1]!)],stage,role);
   };
   const line=(min:number,max:number,count:number)=>Array.from({length:count+1},(_,i)=>min+(max-min)*i/count);
-  const frame=(half:readonly number[],counts:readonly number[])=>{
+  const half0=[spec.fineSegments[0]/2,spec.fineSegments[1]/2] as const;
+  const carry=spec.cornerTopology==="carry";
+  const frame=(half:readonly number[],counts:readonly number[],includeCornerPorts=false)=>{
     const result=new Set<number>();
-    for(const x of line(-half[0]!,half[0]!,counts[0]!))for(const y of [-half[1]!,half[1]!])result.add(addNode(x,y));
-    for(const y of line(-half[1]!,half[1]!,counts[1]!))for(const x of [-half[0]!,half[0]!])result.add(addNode(x,y));
+    const ports=(i:0|1)=>includeCornerPorts
+      ?[-half[i]!,...line(-half0[i],half0[i],counts[i]!-2),half[i]!]
+      :line(-half[i]!,half[i]!,counts[i]!);
+    for(const x of ports(0))for(const y of [-half[1]!,half[1]!])result.add(addNode(x,y));
+    for(const y of ports(1))for(const x of [-half[0]!,half[0]!])result.add(addNode(x,y));
     return [...result];
   };
-  const half0=[spec.fineSegments[0]/2,spec.fineSegments[1]/2];
   nodeSets.fine=frame(half0,spec.fineSegments);nodeSets.interface_0=[...nodeSets.fine];
   if(spec.includeCore)regular(line(-half0[0]!,half0[0]!,spec.fineSegments[0]),line(-half0[1]!,half0[1]!,spec.fineSegments[1]),0,"core");
   const third=patchFor(3),strip3={points:third.nodes,quads:third.elements};
@@ -144,15 +156,23 @@ export function generateRectangularTransitionRings(spec:RectangularTransitionRin
     if(f.padding[1])regular(line(-a,a,f.inputCounts[0]),line(oldY,b,f.padding[1]),f.stage,"collar");
     if(f.padding.some(Boolean))nodeSets[`collar_${f.stage}`]=frame(f.transitionHalf,f.inputCounts);
     const r=plan.ratio;
+    const stripA=carry?half0[0]:a,stripB=carry?half0[1]:b;
     for(const sign of [-1,1]){
-      for(let k=0;k<f.inputCounts[0]/r;k++)tile(xy,(u,v)=>[-a+r*s*(k+(r===2&&k%2?1-u:u)),sign*(b+r*s*v)],f.stage,"strip",`s${f.stage}:h${sign}:${k}`);
-      for(let k=0;k<f.inputCounts[1]/r;k++)tile(yx,(u,v)=>[sign*(a+r*s*v),-b+r*s*(k+(r===2&&k%2?1-u:u))],f.stage,"strip",`s${f.stage}:v${sign}:${k}`);
+      for(let k=0;k<f.inputCounts[0]/r;k++)tile(xy,(u,v)=>[-stripA+r*s*(k+(r===2&&k%2?1-u:u)),sign*(b+r*s*v)],f.stage,"strip",`s${f.stage}:h${sign}:${k}`);
+      for(let k=0;k<f.inputCounts[1]/r;k++)tile(yx,(u,v)=>[sign*(a+r*s*v),-stripB+r*s*(k+(r===2&&k%2?1-u:u))],f.stage,"strip",`s${f.stage}:v${sign}:${k}`);
     }
     for(const x of [-1,1])for(const y of [-1,1]){
       if(r===2)tile(xy,(u,v)=>[x*(a+2*s*u),y*(b+2*s*v)],f.stage,"corner",`s${f.stage}:c${x}:${y}`);
+      else if(carry&&f.stage>1){
+        // Preserve the previous stage's two corner ports. A diagonal splits
+        // the L-shaped footprint; neither segment participates in the 3:1 strip.
+        const H=a+3*s,V=b+3*s;
+        addQuad([addNode(x*stripA,y*b),addNode(x*a,y*b),addNode(x*H,y*V),addNode(x*stripA,y*V)],f.stage,"corner");
+        addQuad([addNode(x*a,y*stripB),addNode(x*H,y*stripB),addNode(x*H,y*V),addNode(x*a,y*b)],f.stage,"corner");
+      }
       else addQuad([addNode(x*a,y*b),addNode(x*(a+3*s),y*b),addNode(x*(a+3*s),y*(b+3*s)),addNode(x*a,y*(b+3*s))],f.stage,"corner");
     }
-    nodeSets[`interface_${f.stage}`]=frame(f.outerHalf,f.outputCounts);
+    nodeSets[`interface_${f.stage}`]=frame(f.outerHalf,f.outputCounts,carry);
   }
   nodeSets.coarse=[...nodeSets[`interface_${spec.stages}`]!];
   const mesh:Mesh={kind:"Q1",nodes,elements},fine=new Set(nodeSets.fine),coarse=new Set(nodeSets.coarse);

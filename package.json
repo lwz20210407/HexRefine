@@ -16,6 +16,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./transitionmesh-v11": {
+      "types": "./dist/transitionmesh-v11-request.d.ts",
+      "import": "./dist/transitionmesh-v11-request.js"
     }
   },
   "files": [
@@ -64,6 +68,9 @@
     "prepack": "npm run build",
     "release": "npm test && npm run examples:vtk && npm run standalone:build && node scripts/prepare-release.mjs && npm pack --pack-destination release --cache .npm-cache",
     "standalone:build": "node scripts/build-standalone-lite.mjs",
+    "transitionmesh:generate": "node scripts/generate-transition-band.mjs",
+    "transitionmesh:infer-axial": "node scripts/infer-transitionmesh-axial.mjs",
+    "transitionmesh:patch": "node scripts/patch-transitionmesh.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p test/types/tsconfig.json",
     "pretest": "npm run typecheck",
     "test": "npm run build && node --test test/*.test.mjs"

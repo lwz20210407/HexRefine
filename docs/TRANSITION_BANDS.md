@@ -125,6 +125,51 @@ Python source or literal template table is included in this implementation.
 ```
 
 Run `node scripts/generate-transition-band.mjs request.json NEW_OUTPUT_DIRECTORY`.
+
+### TransitionMesh V1.1 mode names
+
+The CLI also accepts a versioned request with `"kind": "transitionmesh-v11"`.
+This is a native TypeScript route. It needs no Python, Abaqus or TrueGrid.
+From the repository root:
+
+```sh
+npm run build
+node scripts/generate-transition-band.mjs --example-v11 PLANAR_QUAD_FOUR > request.json
+npm run transitionmesh:generate -- request.json NEW_OUTPUT_DIRECTORY
+```
+
+`--example-v11` emits a ready-to-run three-stage request for any of the five
+modes. `parameters` use the existing HexRefine names:
+
+| V1.1 mode | Mesh | Main parameters |
+| --- | --- | --- |
+| `PLANAR` | Q4, optionally swept to H8 | `length`, `depth`, `fineSegments`, `ratios`. A request with `coarseSegments` or `blocks` uses the single-stage hybrid route. |
+| `PLANAR_ANNULAR` | Q4 | `innerRadius`, `outerRadius`, `fineSegments`, `ratios` |
+| `PLANAR_QUAD_FOUR` | Q4, optionally swept to H8 | `innerSize` is full X/Y size; `fineSegments` is the X/Y pair. Set `stages` and `ratio`. For 3:1 the two inherited corner ports do not enter the straight-strip merge. |
+| `ANNULAR_RADIAL` | H8 | Annular parameters plus required top-level `extrusion: {height, layers}`. `height` is the axial span. |
+| `AXIAL_SURFACE` | H8 | `length` is the axial transition span, `radialLayers` divides the wall. Use `innerRadius`, `outerRadius`, `fineSegments`, and `ratios`. Optional `regularRegions` adds the fine and coarse ends. |
+
+For straight, annular and axial bands, `ratios: [2,2,2]` means three 2:1
+stages. Optional `stageDepths` specifies widths in fine-to-coarse order,
+one positive width per stage summing to the band's total depth or length.
+For rectangular rings the stage widths follow the chosen corner topology
+and fine pitch; `stageDepths` is not a rectangle option.
+
+The CLI writes `mesh.k`, `mesh.inp`, `request.json`, `report.json`,
+`sets.json` and `lineage.json`. The original request is archived so it
+can be replayed, while the report records its normalized TS request.
+The output directory must be new. Invalid requests leave no output
+directory and existing files will not be overwritten. A Node caller can
+use `generateTransitionMeshV11Request` from `hexrefine/transitionmesh-v11`.
+The contract is for independent mesh generation, not CAD picks or replacing
+cells in an existing model, and does not promise the same free mesh as Abaqus.
+
+The older lowercase request modes and their corner defaults remain unchanged.
+For the bounded STEP/BREP tube reader and mesh-only K cavity replacement,
+see [TransitionMesh P1](TRANSITIONMESH_P1.md).
+
+### Existing lowercase requests
+
 Omit `extrusion` for Q1. Use mode `planar` with the first API's parameters for
 a straight band. Unknown top-level/geometry options are refused.
 
