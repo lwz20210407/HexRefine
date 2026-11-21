@@ -1,5 +1,40 @@
 # TransitionMesh Native Port Checkpoint
 
+## V1.1 Three-Stage CAE Validation
+
+All five modes were generated in Abaqus/CAE 2020 with the V1.1 Python 2
+compatibility adapter and independently in the native Python backend.
+Both reference and native K geometry were read back. Abaqus INP
+coordinates and connectivity were also checked against the CAE part.
+
+| Validated fixture | Fine to coarse ports | Abaqus 2020 / Python cells |
+| --- | --- | --- |
+| AXIAL 2:1 x3 | 64 / 32 / 16 / 8 | 688 / 736 H8 |
+| AXIAL 3:1 x3 | 108 / 36 / 12 / 4 | 1504 / 1504 H8 |
+| PLANAR 2:1 x3 | 48 / 24 / 12 / 6 | 126 / 126 Q4 |
+| PLANAR_ANNULAR 2:1 x3 | 128 / 64 / 32 / 16 | 336 / 336 Q4 |
+| PLANAR_QUAD_FOUR 2:1 x3 | 16x12 / 10x8 / 8x6 / 6x6 | 260 / 260 Q4 |
+| ANNULAR_RADIAL 2:1 x3 | 128 / 64 / 32 / 16 | 672 / 672 H8 |
+
+The two axial references use four azimuthal quadrants, radii 4 and 7,
+two wall layers, length 12, and transition planes at z = 2, 3, 5, 8.
+The shared H8 face counts at the four planes are 128/64/32/16 and
+216/72/24/8. Each shared face has one cell on each side. The minimum
+corner scaled Jacobians are 0.30619/0.44474 (Abaqus/Python) for 2:1
+and 0.26852/0.27046 for 3:1. All sampled determinants are positive.
+The 2:1 Abaqus free sweep uses a different internal cell layout; its
+faceted volume differs by 0.36422% from the native mesh.
+
+The first half-ring axial attempts exported inverted corner samples
+(10 and 20 H8 respectively) even though the interface counts matched.
+They were rejected and kept as diagnostics, not accepted by relaxing a
+threshold. A supplemental three-stage rectangular 3:1 CAE free-quad
+fixture also has a zero corner Jacobian and is not a passing reference;
+its native counterpart has positive samples and matching interface counts.
+
+Local CAE, INP/K, rendered mesh views and measurements:
+`F:/PythonWoking/temp/20261121-transitionmesh-three-stage/review/REVIEW.html`.
+
 ## V1.1 Multistage Geometry
 
 The native constructors now generate multiple conforming stages:

@@ -64,3 +64,23 @@ class TransitionMeshMultistageTests(unittest.TestCase):
         self.assertEqual(annular['stage_counts'], [216,72,24,8])
         self.assertEqual(radial['stage_counts'], [216,72,24,8])
         self.assertEqual(rectangle['stage_counts'], [(54,54),(20,20),(8,8),(4,4)])
+
+    def test_three_stage_axial_cae_fixture_contract(self):
+        # The reference tubes were meshed in Abaqus 2020 after prepartitioning
+        # four azimuthal quadrants. Compare ports, not free-sweep cell counts.
+        for ratio, seeds, fine_layers, counts, facets, native_cells in (
+                (2, 64, 3, [64, 32, 16, 8], [128, 64, 32, 16], 736),
+                (3, 108, 5, [108, 36, 12, 4], [216, 72, 24, 8], 1504)):
+            with self.subTest(ratio=ratio):
+                mesh = build_axial_cylinder(seeds, ratio, 2, 8, 12, 4, 7,
+                                            fine_layers, 2, 1, stages=3,
+                                            stage_widths=[1, 2, 3])
+                audit = audit_axial_cylinder(mesh)
+                self.assertEqual(audit['stage_counts'], counts)
+                self.assertEqual(audit['stage_z'], [2, 3, 5, 8])
+                self.assertEqual(audit['interface_faces'], facets)
+                self.assertEqual(audit['elements'], native_cells)
+                for stage in range(1, 4):
+                    label = 'transition_%d' % stage
+                    self.assertGreater(audit['region_elements'][label], 0)
+                    self.assertGreater(min(audit['region_min_jacobians'][label].values()), 0)
