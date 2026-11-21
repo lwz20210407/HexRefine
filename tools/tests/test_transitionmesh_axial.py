@@ -1,6 +1,7 @@
 import unittest
 
 from tools.transitionmesh_native import audit_axial_cylinder, build_axial_cylinder
+from tools.transitionmesh_native import TemplateError
 
 
 class TransitionMeshAxialTests(unittest.TestCase):
@@ -12,6 +13,9 @@ class TransitionMeshAxialTests(unittest.TestCase):
         self.assertTrue(report['ok'])
         self.assertEqual(report['fine_segments'], 48)
         self.assertEqual(report['coarse_segments'], 24)
+        self.assertEqual(report['region_elements']['transition'], 192)
+        self.assertEqual(report['interface_faces'], [96, 48])
+        self.assertGreater(report['min_gauss_jacobian'], 0)
         self.assertGreater(report['region_elements']['fine'], 0)
         self.assertGreater(report['region_elements']['transition'], 0)
         self.assertGreater(report['region_elements']['coarse'], 0)
@@ -31,6 +35,13 @@ class TransitionMeshAxialTests(unittest.TestCase):
         self.assertEqual(report['region_elements']['transition'], 480)
         self.assertGreater(report['min_center_jacobian'], 0.0)
         self.assertEqual(report['max_face_incidence'], 2)
+
+    def test_deleted_cell_is_not_mistaken_for_conforming_boundary(self):
+        mesh = build_axial_cylinder(16, regular_layers=2)
+        del mesh['elements'][6]
+        del mesh['regions'][6]
+        with self.assertRaisesRegex(TemplateError, 'Unmatched internal face'):
+            audit_axial_cylinder(mesh)
 
 
 if __name__ == '__main__':

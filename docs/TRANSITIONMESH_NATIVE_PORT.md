@@ -1,5 +1,56 @@
 # TransitionMesh Native Port Checkpoint
 
+## V1.1 Rebuild And Differential Check
+
+2026-11-21. This section supersedes the AXIAL results and the native
+coverage claims in the historical checkpoint below. The [V1.1 release
+asset](https://github.com/IY724/TransitionMesh/releases/tag/v1.1), not its
+source tag or the V1.0 README image, was unpacked afresh. Its SHA-256 is
+`a7b80554bf5a4ef1e1388d796fdd2706be6367d91604e8ae3cdb706e3542a221`.
+The author package and the temporary Python 2 compatibility adapters are
+not vendored. HexRefine's implementation requires neither Abaqus nor the
+author package.
+
+| Mode | V1.1 application path | Native single-stage equivalent | Abaqus / native elements |
+| --- | --- | --- | --- |
+| PLANAR | GUI dispatcher and planar sketch partition | `build_planar_band` | 24 Q4 |
+| PLANAR hybrid, both orders | V1.1 block splitter and one-sketch partition | `hybrid_split` and `build_planar_band` | 20 Q4 each |
+| PLANAR_ANNULAR | `apply_planar_annular_transition` | `build_annular_band` | 48 Q4 |
+| PLANAR_QUAD_FOUR | `transition_mesh_quad2_cae.apply`, corner wedges | `build_rectangular_ring` | 96 Q4 |
+| ANNULAR_RADIAL | `apply_annular_radial_transition` | `build_annular_band` then `extrude_band` | 72 H8 |
+| AXIAL_SURFACE | `apply_cylindrical_axial_transition`, radial sweep | `build_axial_cylinder` | 672 / 252 / 19,440 H8 for the three count pairs below |
+
+The 48-to-24 axial case uses eight Q4 per four-fine/two-coarse sector, not
+the six Q4 from the planar template. The 36-to-12 and 180-to-60 cases use
+four Q4 per three-fine/one-coarse sector. The first-sector boundary-anchored
+graphs match the Abaqus reference. Both shared axial interfaces are counted
+from H8 connectivity, and missing interior faces are rejected. Center,
+eight corner and eight Gauss point Jacobians are sampled, not inferred from
+a count or an application success flag.
+
+The unmodified geometry audit in Abaqus 2020 rejects 180-to-60 because it
+reads one exactly seeded three-segment arc as 3.00000170623. The experiment
+retained that failure and then used a separate 0.0001-degree arc-angle
+roundoff allowance, retaining exact integer seed and mesh node checks.
+That exported Abaqus mesh has 24 H8 with non-positive corner Jacobians,
+so it is **not** an accepted reference mesh. The native fixture has
+positive sampled Jacobians with minimum corner scaled Jacobian 0.269.
+This finding is scoped to the locally constructed Abaqus 2020 fixture.
+
+Side-by-side renders, input files, CAE snapshots, implementation route
+mapping, and machine-readable verdicts are in the dated local evidence:
+
+```text
+F:/PythonWoking/temp/20261121-transitionmesh-v11-rebuild/review/REVIEW.html
+F:/PythonWoking/temp/20261121-transitionmesh-v11-rebuild/review/comparison.json
+```
+
+CAD picks and edge Sets, arbitrary CAD partitioning, preservation of
+existing Abaqus controls, and native multilayer geometry are not claimed.
+The fixtures exercise a structured one-stage subset, not every V1.1 option.
+
+## Historical Checkpoint
+
 Date: 2026-11-20
 
 ## Source Provenance

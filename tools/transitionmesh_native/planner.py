@@ -222,6 +222,9 @@ def hybrid_split(fine_count, coarse_count, sequence=None, order=""):
                 after = (index + 1) * result["pairs"] // total
                 blocks.append("22" if after > before else "3")
             result["order"] = "interleave"
+        elif order == "2-then-3":
+            blocks = ["22"] * result["pairs"] + ["3"] * a
+            result["order"] = order
         else:
             blocks = ["3"] * a + ["22"] * result["pairs"]
             result["order"] = "grouped"
@@ -282,7 +285,7 @@ def plan_transition(mode, seeds, ratio=2, layers=1, width=None,
                     seam_angles_deg=None, hybrid=False):
     mode = str(mode or "").upper()
     verdict = capability(mode, ratio, layers, hybrid=hybrid)
-    if verdict.get("status") == "no":
+    if verdict.get("status") in ("no", "unknown"):
         raise ModePlanError(verdict["reason"])
     if hybrid:
         if coarse_seeds is None:
@@ -292,8 +295,11 @@ def plan_transition(mode, seeds, ratio=2, layers=1, width=None,
             raise ModePlanError(split["error"])
         chain = {"kind": "hybrid", "split": split}
     else:
-        chain = plan_quad_counts(seeds, layers, ratio, ratio_sequence) if quad else plan_counts(seeds, layers, ratio, ratio_sequence)
-    widths = allocate_widths(width, chain["counts"], None) if width is not None else None
+        chain = (plan_quad_counts(seeds, layers, ratio, ratio_sequence)
+                 if quad or mode == "PLANAR_QUAD_FOUR"
+                 else plan_counts(seeds, layers, ratio, ratio_sequence))
+    counts = [seeds, coarse_seeds] if hybrid else chain["counts"]
+    widths = allocate_widths(width, counts) if width is not None else None
     result = {"mode": mode, "ratio": ratio if not hybrid else "hybrid",
               "layers": int(layers), "chain": chain, "widths": widths,
               "capability": verdict, "geometry_checked": False}
