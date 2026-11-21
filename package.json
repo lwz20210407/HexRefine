@@ -71,6 +71,7 @@
     "transitionmesh:generate": "node scripts/generate-transition-band.mjs",
     "transitionmesh:infer-axial": "node scripts/infer-transitionmesh-axial.mjs",
     "transitionmesh:patch": "node scripts/patch-transitionmesh.mjs",
+    "transitionmesh:solid-ogrid": "node scripts/refine-solid-ogrid-keyword.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p test/types/tsconfig.json",
     "pretest": "npm run typecheck",
     "test": "npm run build && node --test test/*.test.mjs"

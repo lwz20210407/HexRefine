@@ -103,12 +103,51 @@ The 736-H8 verification fixture had three steps (64/32/16/8) and an
 intentionally perturbed interior point. The band was generated anew,
 retaining 384 fine-core and 16 coarse-end cells by original ID and
 connectivity. Its four stations shared 128/64/32/16 faces.
-The complete TC4 compression source has 4,860 H8, of which all 2,970 in
-the annotated middle 60% were accounted for by original external IDs.
-Its solid O-grid cap has one loop, not two; the axial rebuild refused it
-and published no replacement. This is a coverage limit, not a completed
-TC4 remesh. Local visual and numerical evidence is in
+The hollow-tube command does not handle solid O-grids. Its rejection of
+the TC4 solid compression fixture remains a negative test; the dedicated
+solid command below handles that case. Local hollow-tube evidence is in
 `F:/PythonWoking/temp/20261121-transitionmesh-infer-axial/REVIEW.html`.
+
+## Rebuild A Solid Extruded O-grid In An Original Keyword Deck
+
+```text
+npm run transitionmesh:solid-ogrid -- HOST.k NEW_DIRECTORY|--preview [fraction=0.6] [PID]
+```
+
+This is a single-stage **2:1** path for an existing solid extruded H8
+section and an explicit centered axial focus fraction. It finds the
+specimen (single PID or exact `specimen` part title, unless overridden),
+recovers the unique axial direction and selects all full layers by
+centroid. The outermost layer at each end of the ROI is used for the
+seven-hex transition. The inner layers use exact eight-child tensor
+refinement. If the original deck has normal-only global SPC node sets on
+complete lateral cuts, their geometry and membership are verified before
+using them as symmetry phase exemptions. Conformance is still checked
+on all interfaces after K export. No section completion, source geometry
+movement or promotion outside the ROI is permitted.
+
+The exporter accepts inline H8 specimen solids and preserves other parts'
+original element records, including legacy two-line elements with zero
+padding in the extra slots. Original node records and supported node/solid
+list sets are preserved; a solid set referencing a replaced parent fails
+rather than silently remapping it. The generated K is **mesh and original
+sets only**. Controls, contacts, SPC cards and histories are not migrated,
+nor are new nodes inserted into original sets. A solver workflow must
+reapply BCs to new symmetry nodes and explicitly remap element histories.
+No original file is overwritten.
+
+On the original TC4 quarter-cylinder compression deck, the 36-layer,
+135-column specimen had 4,860 H8. The recovered middle-60% ROI matched all
+2,970 original IDs, with a 2,700-parent uniform core and 270 transition
+parents. The output has 25,380 specimen H8 and 2,376 unchanged platen
+elements. The 1,890 untouched specimen records, 9,089 original node
+records, and three node sets were preserved, with 270 exact coarse-port
+faces. Independent K readback measured minimum new SJ 0.20974565, positive
+eight-point Gauss determinants and ROI relative volume error below
+4e-16. It passed the existing SJ floor of 0.15; a negative fixture with
+SJ 0.14656 remains rejected. LS-PrePost 4.13 reopened all 27,756 elements.
+Local K and screenshots:
+`F:/PythonWoking/temp/20261121-transitionmesh-solid-ogrid/REVIEW.html`.
 
 ## Verified Fixture
 
@@ -135,4 +174,5 @@ npm run build
 python -B -m unittest discover -s tools/tests -p test_transitionmesh_cad_tube.py
 node --test test/transitionmesh-keyword-patch.test.mjs
 node --test test/transitionmesh-infer-axial.test.mjs
+node --test test/ogrid-solid-keyword.test.mjs
 ```
