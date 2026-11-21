@@ -242,3 +242,17 @@ def build_rectangular_ring(hx, hy, nx, ny, stages=1, ratio=2):
     return dict(nodes=[p + (0.,) for p in nodes], elements=elements,
                 stage_frames=frames, stage_counts=list(zip(px['counts'],py['counts'])),
                 collars=collars)
+
+
+def rectangular_ring_partition_segments(mesh):
+    """CAD sketch segments for a ring returned by build_rectangular_ring.
+
+    Draw these inside a face whose inner and outer loops already exist.
+    All stages, corner diagonals and collar splits are included. Boundary
+    edges are omitted so the sketch does not retrace existing CAD edges.
+    """
+    owners = Counter(tuple(sorted((q[i - 1], q[i])))
+                     for q in mesh['elements'] for i in range(4))
+    nodes = mesh['nodes']
+    return [(nodes[a - 1][:2], nodes[b - 1][:2])
+            for (a, b), count in sorted(owners.items()) if count == 2]

@@ -1,5 +1,36 @@
 # TransitionMesh Native Port Checkpoint
 
+## Three-Stage Rectangular 3:1 Corner Fix
+
+For the 54-by-54 inner loop, the V1.1 Abaqus 2020 compatibility run used
+`QUAD+FREE` across the transition frames. It reported 669 Q4 and
+`jacobian_bad=0`, but elements 155 and 190 adjacent to opposite inner
+corners in the first band each have three collinear boundary nodes and
+a zero reference-corner Jacobian. Positive area and positive 2x2 Gauss
+samples do not catch this case. This observation was reported in
+[TransitionMesh issue #2](https://github.com/IY724/TransitionMesh/issues/2).
+
+The native corner construction isolates the first-stage corner boxes
+and splits subsequent L-shaped corners between the inner and outer corner
+vertices. Use `rectangular_ring_partition_segments(mesh)` to extract its
+internal CAD sketch lines. The optional Abaqus adapter
+`abaqus_rectangular_ring.mesh_partitioned_ring` imprints those lines onto
+an unmeshed CAD ring, fixes each edge to one segment and generates one Q4
+per four-sided face. It does not import an orphan mesh. The adapter
+rejects missing faces, non-Q4 output, and non-positive corner determinants.
+
+Both meshes have 552 nodes and 436 Q4. The two internal frames share
+80 and 32 edges, each with one element on either side; the end boundaries
+have 216 and 16 edges. Reindexed Q4 edge topology is identical and the
+largest coordinate difference is 2.32e-7 model units. Minimum corner SJ
+is 0.44721 on both meshes. Independent corner, center and Gauss checks
+all pass in each stage. The Abaqus Analysis Checks report 0 failed
+elements and 40 warnings; warnings are not hidden or treated as failures.
+The old free-mesh reference remains rejected.
+
+Local CAE/K/INP files, corner closeups and per-stage checks:
+`F:/PythonWoking/temp/20261121-transitionmesh-rect-corners/review/REVIEW.html`.
+
 ## V1.1 Three-Stage CAE Validation
 
 All five modes were generated in Abaqus/CAE 2020 with the V1.1 Python 2

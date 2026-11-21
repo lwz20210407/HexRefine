@@ -25,7 +25,7 @@ from .cylindrical_axial import audit_axial_cylinder, build_axial_cylinder
 from .mesh_io import write_abaqus_inp, write_ls_dyna_solid, write_ls_dyna_mesh
 from .bands import (
     build_planar_band, build_annular_band, build_rectangular_ring,
-    build_radial_band, extrude_band,
+    build_radial_band, extrude_band, rectangular_ring_partition_segments,
 )
 
 __all__ = [
@@ -36,5 +36,5 @@ __all__ = [
     "build_axial_cylinder", "audit_axial_cylinder",
     "write_abaqus_inp", "write_ls_dyna_solid", "write_ls_dyna_mesh",
     "build_planar_band", "build_annular_band", "build_rectangular_ring",
-    "build_radial_band", "extrude_band",
+    "build_radial_band", "extrude_band", "rectangular_ring_partition_segments",
 ]

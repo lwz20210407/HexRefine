@@ -4,6 +4,7 @@ from collections import Counter
 from tools.transitionmesh_native import (
     TemplateError, audit_axial_cylinder, build_annular_band, build_axial_cylinder,
     build_planar_band, build_radial_band, build_rectangular_ring,
+    rectangular_ring_partition_segments,
 )
 
 
@@ -84,3 +85,15 @@ class TransitionMeshMultistageTests(unittest.TestCase):
                     label = 'transition_%d' % stage
                     self.assertGreater(audit['region_elements'][label], 0)
                     self.assertGreater(min(audit['region_min_jacobians'][label].values()), 0)
+
+    def test_rectangular_cad_plan_has_internal_edges_only(self):
+        mesh = build_rectangular_ring(4, 3, 54, 54, stages=3, ratio=3)
+        segments = rectangular_ring_partition_segments(mesh)
+        self.assertEqual(mesh['stage_counts'], [(54, 54), (20, 20), (8, 8), (4, 4)])
+        self.assertEqual(len(mesh['elements']), 436)
+        edges = Counter(tuple(sorted((c[i-1],c[i])))
+                        for c in mesh['elements'] for i in range(4))
+        self.assertEqual(len(segments), 756)
+        lookup = {v[:2]: i for i, v in enumerate(mesh['nodes'], 1)}
+        self.assertEqual({tuple(sorted((lookup[a], lookup[b]))) for a,b in segments},
+                         {edge for edge, n in edges.items() if n == 2})
